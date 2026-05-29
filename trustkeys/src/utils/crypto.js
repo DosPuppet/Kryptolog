@@ -1,46 +1,39 @@
-import KyberPkg from 'crystals-kyber';
-import { createDilithium } from 'dilithium-crystals-js';
+// NIST FIPS post-quantum primitives (audited, pure-TS, no WASM):
+//   ML-KEM-768  (FIPS 203) — key encapsulation, replaces Kyber768
+//   ML-DSA-44   (FIPS 204) — signatures,        replaces Dilithium2
+// ML-DSA byte encoding is interop-verified against the server's liboqs.
+import { ml_kem768 } from '@noble/post-quantum/ml-kem.js';
+import { ml_dsa44 } from '@noble/post-quantum/ml-dsa.js';
 import { Buffer } from 'buffer';
-
-const { KeyGen768, Encrypt768, Decrypt768 } = KyberPkg;
-
-// Ensure initialization
-let dilithium = null;
-const initDilithium = async () => {
-    if (!dilithium) {
-        dilithium = await createDilithium();
-    }
-    return dilithium;
-};
 
 // Helper: Uint8Array/Array <-> Hex
 const toHex = (arr) => Buffer.from(arr).toString('hex');
 const fromHex = (hex) => new Uint8Array(Buffer.from(hex, 'hex'));
 
+// ML-KEM-768 keypair (encryption). Name kept as "Kyber" for storage stability.
 export const generateKyberKeyPair = async () => {
     try {
-        const [pk, sk] = KeyGen768();
+        const { publicKey, secretKey } = ml_kem768.keygen();
         return {
-            publicKey: toHex(pk), // Array of numbers
-            privateKey: toHex(sk), // Array of numbers
+            publicKey: toHex(publicKey),
+            privateKey: toHex(secretKey),
         };
     } catch (e) {
-        console.error("Kyber keygen failed", e);
+        console.error("ML-KEM keygen failed", e);
         throw e;
     }
 };
 
+// ML-DSA-44 keypair (signing). Name kept as "Dilithium" for storage stability.
 export const generateDilithiumKeyPair = async () => {
     try {
-        const mod = await initDilithium();
-        // Use level 2 (matches standard expectation in library apparently)
-        const { publicKey, privateKey } = mod.generateKeys(2);
+        const { publicKey, secretKey } = ml_dsa44.keygen();
         return {
             publicKey: toHex(publicKey),
-            privateKey: toHex(privateKey),
+            privateKey: toHex(secretKey),
         };
     } catch (e) {
-        console.error("Dilithium keygen failed", e);
+        console.error("ML-DSA keygen failed", e);
         throw e;
     }
 };
@@ -59,32 +52,23 @@ export const generateAccount = async (name) => {
 };
 
 export const signMessage = async (message, privateKeyHex) => {
-    const mod = await initDilithium();
-    const privateKey = fromHex(privateKeyHex);
+    const secretKey = fromHex(privateKeyHex);
     const msgBytes = new TextEncoder().encode(message);
-
-    // Correct signature: sign(message, privateKey, kind)
-    // Returns object { result, signature, ... }
-    const sigResult = mod.sign(msgBytes, privateKey, 2);
-
-    if (!sigResult || !sigResult.signature) {
-        throw new Error("Signing failed: invalid response from library");
-    }
-
-    return toHex(sigResult.signature);
+    // noble API: sign(message, secretKey) -> detached ML-DSA-44 signature
+    return toHex(ml_dsa44.sign(msgBytes, secretKey));
 };
 
 export const verifySignature = async (message, signatureHex, publicKeyHex) => {
-    const mod = await initDilithium();
-    const signature = fromHex(signatureHex);
-    const publicKey = fromHex(publicKeyHex);
-    const msgBytes = new TextEncoder().encode(message);
-
-    // Correct signature: verify(signature, message, publicKey, kind)
-    // Returns object { result, ... } where result 0 is success
-    const resultObj = mod.verify(signature, msgBytes, publicKey, 2);
-
-    return resultObj && resultObj.result === 0;
+    try {
+        const signature = fromHex(signatureHex);
+        const publicKey = fromHex(publicKeyHex);
+        const msgBytes = new TextEncoder().encode(message);
+        // noble API: verify(signature, message, publicKey) -> boolean (exact match)
+        return ml_dsa44.verify(signature, msgBytes, publicKey);
+    } catch (e) {
+        console.error("verifySignature failed", e);
+        return false;
+    }
 };
 
 export const encryptMessage = async (message, publicKeyHex) => {
@@ -95,12 +79,8 @@ export const encryptMessage = async (message, publicKeyHex) => {
 
     const publicKey = fromHex(publicKeyHex);
 
-    // Encrypt768(pk) returns [ct, ss]
-    // ct: Ciphertext (1088 bytes)
-    // ss: Shared Secret (32 bytes)
-    const kemResult = Encrypt768(publicKey);
-    const ct = kemResult[0];
-    const ss = kemResult[1];
+    // ML-KEM-768 encapsulate -> { cipherText (1088B), sharedSecret (32B) }
+    const { cipherText: ct, sharedSecret: ss } = ml_kem768.encapsulate(publicKey);
 
     // Use ss as AES key
     const seed = new Uint8Array(ss); // Shared secret is 32 bytes
@@ -138,8 +118,8 @@ export const decryptMessage = async (encryptedData, privateKeyHex) => {
     // Parse KEM ciphertext
     const ct = fromHex(encryptedData.kem);
 
-    // Decrypt768(ct, sk) -> returns shared secret (ss)
-    const ss = Decrypt768(ct, privateKey);
+    // ML-KEM-768 decapsulate -> shared secret (ss, 32B)
+    const ss = ml_kem768.decapsulate(ct, privateKey);
     const seed = new Uint8Array(ss);
 
     const iv = fromHex(encryptedData.iv);
@@ -171,55 +151,11 @@ export const generateSessionKey = () => {
     return toHex(key);
 };
 
-export const encryptSessionKey = (sessionKeyHex, publicKeyHex) => {
-    // Wrap the session key using Kyber
-    // Input: 32-byte key (hex). Output: Kyber Ciphertext (hex) + AES-encrypted key (hex)?
-    // Problem: Kyber Decapsulation produces a SHARED SECRET, not an arbitrary buffer decryption.
-    // Kyber is a KEM.
-    // Standard KEM:
-    // Sender: (ss, ct) = Encaps(pk)
-    // Receiver: ss = Decaps(ct, sk)
-    // We want to transmit 'SessionKey'.
-    // So we use 'ss' to AES-encrypt 'SessionKey'.
-    // Packet: { kem: ct, iv: ..., encKey: AES(SessionKey, ss) }
-
-    // BUT! We can just use the 'ss' AS the Session Key?
-    // If we do that, we can't control it. Sender needs to send the SAME key to multiple recipients (Self + Other).
-    // So Sender generates Random SessionKey.
-    // Sender -> Recipient: 
-    //    1. (ss_r, ct_r) = Encaps(pk_r)
-    //    2. enc_k_r = AES(SessionKey, key=ss_r)
-    //    3. Header: { kem: ct_r, iv: ..., key: enc_k_r }
-
-    try {
-        const pk = fromHex(publicKeyHex);
-        const [ct, ss] = Encrypt768(pk); // ct=1088 bytes, ss=32 bytes
-
-        // Use SS to encrypt the actual SessionKey
-        const sessionKey = fromHex(sessionKeyHex);
-        const iv = crypto.getRandomValues(new Uint8Array(12));
-
-        // Import SS as Key
-        // Note: ss is from Kyber, usually raw bytes.
-        // We can import directly.
-        // Sync import? importKey is async.
-        // We need to implement this async inside.
-        // But Kyber is sync (in this lib).
-
-        // Wait, Encrypt768 output format?
-        // crystal-kyber-js returns Uint8Array usually.
-
-        return { ct: toHex(ct), ss: toHex(ss) };
-    } catch (e) {
-        throw new Error("Session Key Encapsulation failed");
-    }
-};
-
-// Helper to encrypt the SessionKey blob using the KEM-derived secret
-// This needs to be async because of subtle crypto
+// Wrap a session key for a recipient: ML-KEM encapsulate, then AES-GCM the
+// session key under the shared secret. Returns { kem, iv, encKey }.
 export const wrapSessionKey = async (sessionKeyHex, recipientPubKeyHex) => {
     const pk = fromHex(recipientPubKeyHex);
-    const [ct, ss] = Encrypt768(pk); // KEM
+    const { cipherText: ct, sharedSecret: ss } = ml_kem768.encapsulate(pk);
 
     // Encrypt SessionKey with SS
     const startKey = await crypto.subtle.importKey(
@@ -247,8 +183,8 @@ export const unwrapSessionKey = async (wrappedKey, privateKeyHex) => {
     const sk = fromHex(privateKeyHex);
     const ct = fromHex(wrappedKey.kem);
 
-    // Decapsulate to get SS
-    const ss = Decrypt768(ct, sk);
+    // Decapsulate to get SS (ML-KEM-768)
+    const ss = ml_kem768.decapsulate(ct, sk);
 
     // Decrypt SessionKey
     const unwrappingKey = await crypto.subtle.importKey(

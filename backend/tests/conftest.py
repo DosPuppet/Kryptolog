@@ -1,13 +1,15 @@
 """
 Shared test fixtures for Safelog backend tests.
 
-Uses an in-memory SQLite database and mocks out the PQC sidecar service
-entirely so tests run without any external processes.
+Uses an in-memory SQLite database. PQC signing now runs in-process via liboqs
+(ML-DSA-44) — there is no sidecar to mock. We only stub the login-challenge
+check `auth.verify_signature` (tests post a placeholder client signature);
+JWT issuance and verification run for real against an ephemeral server key.
 """
 
 import sys, os
 import pytest
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch
 
 # Ensure backend root is importable
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
@@ -48,32 +50,6 @@ def override_get_db():
 
 
 app.dependency_overrides[get_db] = override_get_db
-
-
-# ---------- Fake PQC responses ----------
-
-FAKE_SERVER_PUBLIC_KEY = "aabbccdd" * 100
-FAKE_SIGNATURE_HEX = "deadbeef" * 64
-
-
-def _mock_requests_post(url, **kwargs):
-    resp = MagicMock()
-    resp.status_code = 200
-    if "/verify" in url:
-        resp.json.return_value = {"valid": True}
-    elif "/sign" in url:
-        resp.json.return_value = {"signature": FAKE_SIGNATURE_HEX}
-    else:
-        resp.status_code = 404
-        resp.json.return_value = {"error": "not found"}
-    return resp
-
-
-def _mock_requests_get(url, **kwargs):
-    resp = MagicMock()
-    resp.status_code = 200
-    resp.json.return_value = {"publicKey": FAKE_SERVER_PUBLIC_KEY}
-    return resp
 
 
 # ---------- Constants ----------
@@ -135,10 +111,9 @@ def _reset_rate_limiter():
 
 @pytest.fixture(autouse=True)
 def _mock_pqc():
-    """Globally mock out the PQC HTTP calls."""
-    with patch("httpx.post", side_effect=_mock_requests_post), \
-         patch("httpx.get", side_effect=_mock_requests_get), \
-         patch("auth._SERVER_PUBLIC_KEY", FAKE_SERVER_PUBLIC_KEY):
+    """Accept the placeholder client login signature used by `do_login`.
+    Real ML-DSA-44 JWT issue/verify (in-process liboqs) is left untouched."""
+    with patch("auth.verify_signature", return_value=True):
         yield
 
 

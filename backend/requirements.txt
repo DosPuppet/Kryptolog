@@ -5,6 +5,7 @@ pyjwt==2.10.1
 pydantic>=2.12
 eth-account==0.11.0
 web3==6.15.1
+liboqs-python>=0.12   # ML-DSA-44 (FIPS 204) in-process; compiles liboqs C — needs cmake + a C compiler
 python-multipart>=0.0.22
 httpx>=0.27
 slowapi==0.1.9

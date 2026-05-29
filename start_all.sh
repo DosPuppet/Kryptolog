@@ -22,9 +22,14 @@ if [ -f backend/.env ]; then
 fi
 
 # Apply Development Defaults if not set
-export SAFELOG_SECRET_KEY="${SAFELOG_SECRET_KEY:-dev_secret_key_change_me}"
-export PQC_SHARED_SECRET="${PQC_SHARED_SECRET:-dev_pqc_secret_change_me}"
 export ALLOWED_ORIGINS="${ALLOWED_ORIGINS:-http://localhost:5173,http://127.0.0.1:5173}"
+
+# ML-DSA-44 signing runs in-process via liboqs. For a persistent server key,
+# run `python backend/generate_server_keys.py` and set SAFELOG_ML_DSA_* (in
+# backend/.env or the environment); otherwise an ephemeral key is used.
+if [ -z "$SAFELOG_ML_DSA_SECRET_KEY" ]; then
+    echo "WARNING: SAFELOG_ML_DSA_SECRET_KEY not set — backend will use an ephemeral server key."
+fi
 
 echo "Environment initialized."
 
@@ -41,16 +46,7 @@ if [ ! -d "dist" ]; then
 fi
 cd ..
 
-# 4. Ensure backend/PQC dependencies exist
-echo "Checking PQC service..."
-cd backend
-if [ ! -d "node_modules" ]; then
-    echo "Installing backend Node.js dependencies..."
-    npm install
-fi
-cd ..
-
-# 5. Start / Restart PM2 Ecosystem
+# 4. Start / Restart PM2 Ecosystem
 echo "Starting ecosystem..."
 # By passing `--update-env`, PM2 absorbs the newly exported bash variables into the processes
 pm2 start ecosystem.config.cjs --update-env

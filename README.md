@@ -1,6 +1,8 @@
 # SafeLog
 
-A secure secret management and document signing platform featuring **Post-Quantum Cryptography** via the TrustKeys browser extension.
+A secure secret management and document signing platform built on **NIST FIPS post-quantum cryptography** — ML-KEM-768 (FIPS 203) and ML-DSA-44 (FIPS 204).
+
+Crypto runs on audited, standards-based libraries: [`@noble/post-quantum`](https://github.com/paulmillr/noble-post-quantum) in the browser and extension (pure TS, no WASM), and [`liboqs`](https://github.com/open-quantum-safe/liboqs-python) in the backend (in-process, no sidecar).
 
 ---
 
@@ -8,25 +10,28 @@ A secure secret management and document signing platform featuring **Post-Quantu
 
 ```
 safelog/
-├── backend/          Python FastAPI API + Node.js PQC sidecar
+├── backend/          Python FastAPI API (in-process ML-DSA via liboqs)
 ├── frontend/         React 19 SPA (Vite + TailwindCSS 4)
 └── trustkeys/        Chrome/Brave extension (MV3, React 18)
 ```
 
-The application runs **3 processes locally**: a FastAPI REST API, a Node.js PQC cryptography microservice, and a Vite dev server for the frontend.
+The application runs **2 processes locally**: a FastAPI REST API and a Vite dev server for the frontend. ML-DSA signing/verification happens in-process inside the backend — there is no separate crypto service.
 
 ```
 ┌─────────────────────────────┐
 │         Frontend            │
 │   React 19 + Vite + Router  │
+│   ML-KEM-768 + ML-DSA-44    │
 │   localhost:5173             │
 └──────────┬──────────────────┘
            │ REST + WebSocket
-┌──────────▼──────────────────┐     ┌──────────────────────┐
-│       Backend API           │     │   PQC Microservice   │
-│   FastAPI + SQLAlchemy      ├────►│   Node.js            │
-│   localhost:8000            │HTTP │   localhost:3002      │
-└──────────┬──────────────────┘     └──────────────────────┘
+┌──────────▼──────────────────┐
+│       Backend API           │
+│   FastAPI + SQLAlchemy      │
+│   liboqs ML-DSA-44 (JWTs +  │
+│   login-challenge verify)   │
+│   localhost:8000            │
+└──────────┬──────────────────┘
            │
     ┌──────▼──────┐
     │   SQLite    │
@@ -40,15 +45,15 @@ The application runs **3 processes locally**: a FastAPI REST API, a Node.js PQC 
 
 | Feature | Description |
 |---------|-------------|
-| **Dual Authentication** | MetaMask (Ethereum ECDSA) or TrustKeys (Dilithium-signed JWTs) |
-| **Post-Quantum Cryptography** | Crystals-Kyber (ML-KEM 768/1024) + Crystals-Dilithium (ML-DSA) |
-| **Secret Vault** | E2EE secrets with hybrid encryption (Kyber KEM + AES-GCM) |
+| **Dual Authentication** | MetaMask (Ethereum ECDSA) or TrustKeys (ML-DSA-44-signed JWTs) |
+| **Post-Quantum Cryptography** | ML-KEM-768 (FIPS 203) + ML-DSA-44 (FIPS 204), via `@noble/post-quantum` (clients) and `liboqs` (server) |
+| **Secret Vault** | E2EE secrets with hybrid encryption (ML-KEM-768 KEM + AES-GCM) |
 | **File Vault** | Chunked encrypted file upload/download (up to 50 MB) |
 | **Secure Sharing** | Re-wrap session keys for any recipient (Eth ↔ PQC cross-compatible) |
 | **Timebomb Access** | Share secrets with self-destruct timers (ephemeral grants) |
 | **Signed Documents** | Create, share, and verify digitally signed documents (sign-then-encrypt) |
 | **Multisig Workflows** | N-of-N signature collection with key release on completion |
-| **E2EE Messenger** | Signal-lite protocol: AES-256-GCM session keys, Kyber-1024 KEM, Dilithium-512 signatures (PQC auth only) |
+| **E2EE Messenger** | Signal-lite protocol: AES-256-GCM session keys, ML-KEM-768 KEM, ML-DSA-44 signatures (PQC auth only) |
 | **Group Channels** | Multi-user encrypted group chat with owner/admin/member roles |
 | **Push Notifications** | Web Push API (VAPID) for real-time alerts |
 | **Hardened Local Vault** | AES-256-GCM + PBKDF2-SHA-512 (600k iterations) for browser-stored keys |
@@ -62,7 +67,8 @@ The application runs **3 processes locally**: a FastAPI REST API, a Node.js PQC 
 | Tool | Version | Notes |
 |------|---------|-------|
 | **Python** | 3.10+ | Backend API |
-| **Node.js** | 22.x | PQC microservice + frontend build |
+| **CMake + C compiler** | Latest | Required to build `liboqs` (the backend's PQC library). `pip install cmake` works; any system `gcc`/`clang` is fine. |
+| **Node.js** | 22.x | Frontend + extension build |
 | **npm** | 10.x | Comes with Node.js |
 | **Chrome / Brave** | Latest | Required for TrustKeys extension |
 | **MetaMask** | Optional | For standard Ethereum authentication |
@@ -82,12 +88,7 @@ cd safelog
 
 ```bash
 cd backend
-
-# Create and configure environment variables
 cp .env.example .env
-# IMPORTANT: Edit .env and set these values:
-#   SAFELOG_SECRET_KEY=<random-string>     ← Used to derive server PQC keys
-#   PQC_SHARED_SECRET=<random-string>     ← API key for PQC microservice auth
 ```
 
 #### Python dependencies
@@ -96,17 +97,30 @@ cp .env.example .env
 # Option A: Using the project's virtualenv (recommended)
 python3 -m venv ../.venv
 source ../.venv/bin/activate
-pip install -r requirements.txt
+pip install -r requirements.txt   # builds liboqs C library — needs cmake + a compiler
 
 # Option B: Global install
 pip3 install -r requirements.txt
 ```
 
-#### Node.js dependencies (for PQC microservice)
+> `liboqs-python` compiles the `liboqs` C library on first install/import. If it
+> fails, ensure `cmake` is on your PATH (`pip install cmake`) and a C compiler is
+> available.
+
+#### Generate the server signing keypair
+
+The backend signs JWTs with ML-DSA-44. liboqs has no seeded keygen and can't
+re-derive a public key from a secret key, so the server stores **both** halves.
+Generate them once and paste both lines into `backend/.env`:
 
 ```bash
-npm install
+python generate_server_keys.py
+# -> SAFELOG_ML_DSA_PUBLIC_KEY=...
+# -> SAFELOG_ML_DSA_SECRET_KEY=...   (treat like any production secret)
 ```
+
+If these are unset the backend falls back to an **ephemeral** key — fine for a
+quick local run, but every JWT becomes invalid on restart.
 
 #### Database initialization
 
@@ -151,7 +165,7 @@ Then load in Chrome/Brave:
 
 ## Running the Application
 
-The recommended way to run the entire Safelog ecosystem (FastAPI Backend, Node.js PQC Sidecar, and Vite Frontend) is using the unified PM2 script.
+The recommended way to run the entire Safelog ecosystem (FastAPI Backend and Vite Frontend) is using the unified PM2 script.
 
 ### Unified Startup (Recommended)
 
@@ -164,9 +178,9 @@ The recommended way to run the entire Safelog ecosystem (FastAPI Backend, Node.j
 
 This script will automatically:
 - Install PM2 globally if missing.
-- Install any missing `npm` dependencies for both the frontend and backend sidecar.
+- Install any missing `npm` dependencies for the frontend.
 - Build the frontend for production preview (`npm run build`).
-- Launch all three services in the background using PM2.
+- Launch both services in the background using PM2.
 
 **Managing the Ecosystem:**
 - **View status:** `pm2 status`
@@ -180,12 +194,12 @@ The frontend will be available at: `http://localhost:5173/`
 
 If you prefer to run the services in isolated terminals for active development:
 
-**Terminal 1 — Backend & PQC Microservice**
+**Terminal 1 — Backend**
 ```bash
 cd backend
 ./run_dev.sh
 ```
-*(This script automatically launches both `uvicorn` and `pqc_service.js`, checking for PM2 port conflicts first).*
+*(Runs `uvicorn` with hot-reload. ML-DSA signing is in-process — no sidecar to start.)*
 
 **Terminal 2 — Frontend**
 ```bash
@@ -216,16 +230,23 @@ source ../.venv/bin/activate
 python3 -m pytest tests/ -v
 ```
 
-Currently: **87 tests** covering auth, secrets, file chunks, messenger, multisig, groups, users, and notifications.
+Currently: **95 tests** covering auth, secrets, file chunks, messenger, multisig, groups, users, notifications, and the PQC gate (`tests/test_pqc.py`).
+
+The PQC gate (`backend/tests/test_pqc.py`) proves ML-DSA-44 interop between `liboqs`
+(server) and `@noble/post-quantum` (clients) using the shared fixture
+`tests/fixtures/pqc_interop.json`, plus FIPS size conformance and the JWT
+issue/verify/tamper paths.
 
 ### Frontend (vitest)
 
 ```bash
 cd frontend
-npx vitest run
+npx vitest run src/test/pqc.test.js   # the PQC interop gate (9 tests)
 ```
 
-Currently: **7 tests** covering App wiring and AuthContext behavior.
+`src/test/pqc.test.js` covers ML-KEM-768 wrap/unwrap round-trips, ML-DSA-44
+sign/verify + tamper rejection, the liboqs→noble interop fixture, and a
+deterministic seeded-keygen byte-pin.
 
 ---
 
@@ -270,9 +291,8 @@ alembic downgrade -1
 
 | Variable | Required | Default | Description |
 |----------|----------|---------|-------------|
-| `SAFELOG_SECRET_KEY` | **Yes** | – | Seed for deterministic server PQC key generation |
-| `PQC_SHARED_SECRET` | **Yes** | – | API key for authenticating PQC microservice requests |
-| `PQC_SERVICE_URL` | No | `http://127.0.0.1:3002` | URL of the PQC sidecar |
+| `SAFELOG_ML_DSA_PUBLIC_KEY` | Recommended | – | Server ML-DSA-44 public key (hex). From `generate_server_keys.py`. |
+| `SAFELOG_ML_DSA_SECRET_KEY` | Recommended | – | Server ML-DSA-44 secret key (hex). Forges JWTs if leaked — treat as a production secret. Unset ⇒ ephemeral key, JWTs reset on restart. |
 | `ALLOWED_ORIGINS` | No | `http://localhost:5173` | Comma-separated CORS origins |
 | `VAPID_PUBLIC_KEY` | No | – | Web Push VAPID public key (required for push notifications) |
 | `VAPID_PRIVATE_KEY` | No | – | Web Push VAPID private key |
@@ -303,8 +323,8 @@ alembic downgrade -1
 | Validation | Pydantic ≥2.12 |
 | ASGI server | uvicorn ≥0.40 |
 | Rate limiting | slowapi 0.1.9 |
-| JWT | PyJWT 2.10.1 |
-| PQC sidecar | Node.js + dilithium-crystals-js |
+| Post-quantum crypto | liboqs-python (ML-DSA-44, FIPS 204) — in-process |
+| JWT | Custom ML-DSA-44-signed JWTs (header `alg: ML-DSA-44`) |
 
 ### Frontend
 
@@ -315,7 +335,7 @@ alembic downgrade -1
 | Routing | react-router-dom 7 |
 | Styling | TailwindCSS 4 |
 | Icons | lucide-react |
-| PQC crypto | crystals-kyber, dilithium-crystals-js |
+| PQC crypto | @noble/post-quantum (ML-KEM-768 + ML-DSA-44) |
 | Ethereum | ethers 6, @metamask/eth-sig-util |
 
 ### TrustKeys Extension
@@ -324,7 +344,7 @@ alembic downgrade -1
 |-----------|------------|
 | UI | React 18, Manifest V3 |
 | Build | Vite + @crxjs/vite-plugin |
-| PQC | crystals-kyber, dilithium-crystals-js |
+| PQC | @noble/post-quantum (ML-KEM-768 + ML-DSA-44) |
 | Vault | AES-256-GCM encrypted storage |
 
 ---
@@ -333,7 +353,7 @@ alembic downgrade -1
 
 ### Nginx configuration
 
-PQC signatures (Dilithium) are significantly larger than standard signatures (~2-3 KB). You **must** increase Nginx buffer sizes:
+PQC signatures (ML-DSA-44) are significantly larger than standard signatures (~2.4 KB). You **must** increase Nginx buffer sizes:
 
 ```nginx
 http {

@@ -1,29 +1,11 @@
-import KyberPkg from 'crystals-kyber';
-import { createDilithium } from 'dilithium-crystals-js';
+// NIST FIPS post-quantum primitives (audited, pure-TS, no WASM):
+//   ML-KEM-768  (FIPS 203) — key encapsulation, replaces Kyber768
+//   ML-DSA-44   (FIPS 204) — signatures,        replaces Dilithium2
+import { ml_kem768 } from '@noble/post-quantum/ml-kem.js';
+import { ml_dsa44 } from '@noble/post-quantum/ml-dsa.js';
 import { Buffer } from 'buffer';
 import { encrypt } from '@metamask/eth-sig-util';
 import { verifyMessage, BrowserProvider } from 'ethers';
-
-const { KeyGen768, Encrypt768, Decrypt768 } = KyberPkg;
-
-// Polyfill for dilithium-crystals-js WASM loading
-if (!window.chrome) window.chrome = {};
-if (!window.chrome.runtime) window.chrome.runtime = {};
-if (!window.chrome.runtime.getURL) {
-    window.chrome.runtime.getURL = (path) => {
-        // Remove leading ./ and return path relative to root
-        return '/' + path.replace(/^\.\//, '');
-    };
-}
-
-// Ensure initialization
-let dilithium = null;
-const initDilithium = async () => {
-    if (!dilithium) {
-        dilithium = await createDilithium();
-    }
-    return dilithium;
-};
 
 // Helper: Uint8Array/Array <-> Hex
 export const toHex = (arr) => Buffer.from(arr).toString('hex');
@@ -86,36 +68,31 @@ export const decryptData = async (encryptedDataStr, address) => {
 
 // --- PQC Implementations ---
 
+// ML-KEM-768 keypair (encryption / key encapsulation).
+// Name kept as "Kyber" for storage-schema and call-site stability.
 export const generateKyberKeyPair = async () => {
     try {
-        const [pk, sk] = KeyGen768();
+        const { publicKey, secretKey } = ml_kem768.keygen();
         return {
-            publicKey: toHex(pk), // Array of numbers
-            privateKey: toHex(sk), // Array of numbers
+            publicKey: toHex(publicKey),
+            privateKey: toHex(secretKey),
         };
     } catch (e) {
-        console.error("Kyber keygen failed", e);
+        console.error("ML-KEM keygen failed", e);
         throw e;
     }
 };
 
+// ML-DSA-44 keypair (signing). Name kept as "Dilithium" for stability.
 export const generateDilithiumKeyPair = async () => {
     try {
-        const mod = await initDilithium();
-
-        // Generate valid random seed to ensure uniqueness
-        const seed = new Uint8Array(32);
-        crypto.getRandomValues(seed);
-
-        // Pass seed to generateKeys (level, seed)
-        const { publicKey, privateKey } = mod.generateKeys(2, seed);
-
+        const { publicKey, secretKey } = ml_dsa44.keygen();
         return {
             publicKey: toHex(publicKey),
-            privateKey: toHex(privateKey),
+            privateKey: toHex(secretKey),
         };
     } catch (e) {
-        console.error("Dilithium keygen failed", e);
+        console.error("ML-DSA keygen failed", e);
         throw e;
     }
 };
@@ -133,105 +110,28 @@ export const generateAccount = async (name) => {
     };
 };
 
+// ML-DSA-44 detached signature over the UTF-8 message bytes.
 export const signMessagePQC = async (message, privateKeyHex) => {
-    const mod = await initDilithium();
-    const privateKey = fromHex(privateKeyHex);
+    const secretKey = fromHex(privateKeyHex);
     const msgBytes = new TextEncoder().encode(message);
-
-    // Correct signature: sign(message, privateKey, kind)
-    // Returns object { result, signature, ... }
-    const sigResult = mod.sign(msgBytes, privateKey, 2);
-
-    if (!sigResult || !sigResult.signature) {
-        throw new Error("Signing failed: invalid response from library");
-    }
-
-    return toHex(sigResult.signature);
+    // noble API: sign(message, secretKey) -> detached signature
+    const signature = ml_dsa44.sign(msgBytes, secretKey);
+    return toHex(signature);
 };
 
+// Exact-match verification (audit H4): a signature is valid iff ML-DSA verifies
+// the detached signature against exactly the given message + public key.
 export const verifySignaturePQC = async (message, signatureHex, publicKeyHex) => {
-    const mod = await initDilithium();
-    const signature = fromHex(signatureHex);
-    const publicKey = fromHex(publicKeyHex);
-    const msgBytes = new TextEncoder().encode(message);
-
-    // Mod.verify expects the FULL Signed Message (SM = Signature + Message).
-    // If we have a detached signature, we must reconstruct SM.
-    const sigLen = signature.length;
-    const msgLen = msgBytes.length;
-    const SIG_SIZE = 2420; // Dilithium2
-
-    const tryVerify = (smBytes, mBytes) => {
-        try {
-            const resultObj = mod.verify(smBytes, mBytes, publicKey, 2);
-            return resultObj && resultObj.result === 0;
-        } catch (e) {
-            return e; // Return error to analyze
-        }
-    };
-
-    // Strategy 1: Detached (Explicit Construction)
-    if (sigLen === SIG_SIZE) {
-        let sm = new Uint8Array(SIG_SIZE + msgLen);
-        sm.set(signature, 0);
-        sm.set(msgBytes, SIG_SIZE);
-
-        const res = tryVerify(sm, msgBytes);
-        if (res === true) return true;
-        // Detached failed, maybe because metadata was signed but we only have signature?
-        // Impossible to verify detached signature if we don't know the metadata/extra bytes.
-        // We can only hope Strategy 2 (Attached) works if the user passed the full blob.
+    try {
+        const signature = fromHex(signatureHex);
+        const publicKey = fromHex(publicKeyHex);
+        const msgBytes = new TextEncoder().encode(message);
+        // noble API: verify(signature, message, publicKey) -> boolean
+        return ml_dsa44.verify(signature, msgBytes, publicKey);
+    } catch (e) {
+        console.error("verifySignaturePQC failed", e);
+        return false;
     }
-
-    // Strategy 2: Attached (Try Original First)
-    // If 'signature' is the full SM (Attached), it contains Sig + Msg.
-    const resAtt = tryVerify(signature, msgBytes);
-    if (resAtt === true) return true;
-
-    // Strategy 3: Extraction Fallback (Handle Metadata/Padding)
-    // If the signature blob is larger than Expected (Sig + Msg), it might contain extra data.
-    // We trust the Signature Blob as the source of truth for "What was signed".
-    if (sigLen > SIG_SIZE) {
-        try {
-            // 1. Extract the full signed message from the blob
-            const extractedMsg = signature.slice(SIG_SIZE);
-
-            // 2. Verify the blob against its OWN content (Self-Consistency)
-            // This proves the signer signed 'extractedMsg'.
-            const selfCheck = mod.verify(signature, extractedMsg, publicKey, 2);
-
-            if (selfCheck && selfCheck.result === 0) {
-                // 3. Compare Extracted Content with Expected Content
-                // We check if 'extractedMsg' contains 'msgBytes' (ignoring extra metadata like timestamps)
-                // Note: verification matches bytes.
-
-                // Simple Check: Does extracted start with expected?
-                // Or is expected inside extracted?
-                // Convert to string for safer substring check if text? Or Byte check.
-                // Let's use Byte Check: Check if msgBytes is a prefix of extractedMsg.
-                let match = true;
-                if (extractedMsg.length < msgLen) match = false;
-                else {
-                    for (let i = 0; i < msgLen; i++) {
-                        if (extractedMsg[i] !== msgBytes[i]) {
-                            match = false;
-                            break;
-                        }
-                    }
-                }
-
-                if (match) {
-                    return true;
-                } else {
-                    console.warn("verifySignaturePQC: Signature valid but content mismatch.");
-                }
-            }
-        } catch (e) {
-            console.warn("verifySignaturePQC: Extraction strategy failed", e);
-        }
-    }
-
-    return false;
 };
 
 export const encryptMessagePQC = async (message, publicKeyHex) => {
@@ -242,12 +142,8 @@ export const encryptMessagePQC = async (message, publicKeyHex) => {
 
     const publicKey = fromHex(publicKeyHex);
 
-    // Encrypt768(pk) returns [ct, ss]
-    // ct: Ciphertext (1088 bytes)
-    // ss: Shared Secret (32 bytes)
-    const kemResult = Encrypt768(publicKey);
-    const ct = kemResult[0];
-    const ss = kemResult[1];
+    // ML-KEM-768 encapsulate -> { cipherText (1088B), sharedSecret (32B) }
+    const { cipherText: ct, sharedSecret: ss } = ml_kem768.encapsulate(publicKey);
 
     // Use ss as AES key
     const seed = new Uint8Array(ss); // Shared secret is 32 bytes
@@ -285,8 +181,8 @@ export const decryptMessagePQC = async (encryptedData, privateKeyHex) => {
     // Parse KEM ciphertext
     const ct = fromHex(encryptedData.kem);
 
-    // Decrypt768(ct, sk) -> returns shared secret (ss)
-    const ss = Decrypt768(ct, privateKey);
+    // ML-KEM-768 decapsulate -> shared secret (ss, 32B)
+    const ss = ml_kem768.decapsulate(ct, privateKey);
     const seed = new Uint8Array(ss);
 
     const iv = fromHex(encryptedData.iv);
@@ -319,12 +215,9 @@ export const generateSessionKey = async () => {
 };
 
 export const wrapSessionKey = async (sessionKeyHex, publicKeyHex) => {
-    // 1. Encapsulate a shared secret for the receiver (Kyber)
+    // 1. Encapsulate a shared secret for the receiver (ML-KEM-768)
     const publicKey = fromHex(publicKeyHex);
-    // Encrypt768(pk) -> [ct, ss]
-    const kemResult = Encrypt768(publicKey);
-    const ct = kemResult[0];
-    const ss = kemResult[1];
+    const { cipherText: ct, sharedSecret: ss } = ml_kem768.encapsulate(publicKey);
 
     // 2. Use Shared Secret to encrypt the Session Key
     const kekSeed = new Uint8Array(ss);
@@ -352,8 +245,8 @@ export const unwrapSessionKey = async (wrappedKey, privateKeyHex) => {
     const privateKey = fromHex(privateKeyHex);
     const ct = fromHex(wrappedKey.kem);
 
-    // 1. Decapsulate Shared Secret
-    const ss = Decrypt768(ct, privateKey);
+    // 1. Decapsulate Shared Secret (ML-KEM-768)
+    const ss = ml_kem768.decapsulate(ct, privateKey);
     const kekSeed = new Uint8Array(ss);
 
     // 2. Decrypt Session Key

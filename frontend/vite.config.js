@@ -22,6 +22,17 @@ export default defineConfig(({ mode }) => {
       globals: true,
       environment: 'jsdom',
       setupFiles: './src/test/setup.js',
+      // ethers -> node-stdlib-browser does a bare `import 'punycode'` directory
+      // import that Node's native ESM loader rejects when the dep is externalized.
+      // Inline it so Vite transforms it, and alias punycode to its concrete file.
+      alias: {
+        punycode: 'punycode/punycode.js',
+      },
+      server: {
+        deps: {
+          inline: ['node-stdlib-browser'],
+        },
+      },
     }
   }
 })
