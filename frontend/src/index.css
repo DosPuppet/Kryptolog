@@ -1,0 +1,96 @@
+@import "tailwindcss";
+@custom-variant dark (&:where(.dark, .dark *));
+
+@theme {
+    --color-slate-850: #152033;
+    --color-slate-750: #1e3048;
+}
+
+@theme {
+    --color-slate-850: #152033;
+    --color-slate-750: #1e3048;
+}
+
+@layer utilities {
+    .font-pixel {
+        font-family: 'Press Start 2P', cursive;
+    }
+}
+
+/* Retro Mode Overrides */
+:root.retro {
+    --font-sans: 'Press Start 2P', cursive;
+}
+
+.retro * {
+    border-radius: 0 !important;
+    font-family: 'Press Start 2P', cursive !important;
+    letter-spacing: 0px !important;
+}
+
+.retro body {
+    background-color: #000;
+    color: #0f0;
+    /* Matrix green tint potentially */
+}
+
+/* CRT Crash Animation */
+@keyframes turn-off {
+    0% {
+        transform: scale(1, 1.3) translate3d(0, 0, 0);
+        filter: brightness(1);
+        opacity: 1;
+    }
+
+    60% {
+        transform: scale(1, 0.001) translate3d(0, 0, 0);
+        filter: brightness(10);
+    }
+
+    100% {
+        animation-timing-function: cubic-bezier(0.755, 0.05, 0.855, 0.06);
+        transform: scale(0, 0.001) translate3d(0, 0, 0);
+        opacity: 0;
+    }
+}
+
+.crt-crash {
+    animation: turn-off 0.55s cubic-bezier(0.23, 1, 0.32, 1);
+    animation-fill-mode: forwards;
+}
+
+/* CRT Overlay Effect */
+.crt-overlay {
+    background: linear-gradient(rgba(18, 16, 16, 0) 50%, rgba(0, 0, 0, 0.25) 50%), linear-gradient(90deg, rgba(255, 0, 0, 0.06), rgba(0, 255, 0, 0.02), rgba(0, 0, 255, 0.06));
+    background-size: 100% 2px, 3px 100%;
+    pointer-events: none;
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100vw;
+    height: 100vh;
+    z-index: 9999;
+    animation: flicker 0.15s infinite;
+}
+
+@keyframes flicker {
+    0% {
+        opacity: 0.95;
+    }
+
+    5% {
+        opacity: 0.85;
+    }
+
+    10% {
+        opacity: 0.95;
+    }
+
+    15% {
+        opacity: 0.85;
+    }
+
+    100% {
+        opacity: 0.95;
+    }
+}

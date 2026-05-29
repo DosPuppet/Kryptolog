@@ -1,0 +1,670 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>TrustKeys API Demo</title>
+    <style>
+        * {
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            max-width: 1100px;
+            margin: 0 auto;
+            padding: 20px;
+            background-color: #0f172a;
+            color: #e2e8f0;
+        }
+
+        h1 {
+            color: #38bdf8;
+            border-bottom: 2px solid #1e40af;
+            padding-bottom: 10px;
+            font-size: 1.8em;
+        }
+
+        h1 small {
+            font-size: 0.5em;
+            color: #64748b;
+            font-weight: normal;
+        }
+
+        h2 {
+            color: #94a3b8;
+            font-size: 1.1em;
+            margin-top: 0;
+        }
+
+        .card {
+            background: #1e293b;
+            border-radius: 8px;
+            padding: 20px;
+            margin-bottom: 20px;
+            border: 1px solid #334155;
+        }
+
+        .card h2 .tag {
+            font-size: 0.7em;
+            padding: 2px 6px;
+            border-radius: 3px;
+            margin-left: 8px;
+            font-weight: normal;
+            vertical-align: middle;
+        }
+
+        .tag-read {
+            background: #164e63;
+            color: #67e8f9;
+        }
+
+        .tag-sign {
+            background: #4c1d95;
+            color: #c4b5fd;
+        }
+
+        .tag-encrypt {
+            background: #065f46;
+            color: #6ee7b7;
+        }
+
+        .tag-session {
+            background: #78350f;
+            color: #fcd34d;
+        }
+
+        .status-connected {
+            color: #4ade80;
+            font-weight: bold;
+        }
+
+        .status-disconnected {
+            color: #f87171;
+            font-weight: bold;
+        }
+
+        .status-pending {
+            color: #fbbf24;
+            font-weight: bold;
+        }
+
+        button {
+            background-color: #2563eb;
+            color: white;
+            border: none;
+            padding: 8px 16px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 13px;
+            transition: background 0.2s;
+            margin: 4px 4px 4px 0;
+        }
+
+        button:hover {
+            background-color: #3b82f6;
+        }
+
+        button:disabled {
+            background-color: #475569;
+            cursor: not-allowed;
+            color: #94a3b8;
+        }
+
+        button.danger {
+            background-color: #dc2626;
+        }
+
+        button.danger:hover {
+            background-color: #ef4444;
+        }
+
+        button.success {
+            background-color: #16a34a;
+        }
+
+        button.success:hover {
+            background-color: #22c55e;
+        }
+
+        input,
+        textarea {
+            width: 100%;
+            padding: 8px;
+            margin: 6px 0;
+            border: 1px solid #475569;
+            border-radius: 4px;
+            font-family: 'SF Mono', 'Fira Code', monospace;
+            font-size: 12px;
+            background: #0f172a;
+            color: #e2e8f0;
+        }
+
+        input:focus,
+        textarea:focus {
+            outline: none;
+            border-color: #3b82f6;
+        }
+
+        label {
+            font-weight: 600;
+            display: block;
+            margin-top: 10px;
+            font-size: 0.85em;
+            color: #94a3b8;
+        }
+
+        .output {
+            background: #020617;
+            color: #a5f3fc;
+            padding: 10px;
+            border-radius: 4px;
+            margin-top: 8px;
+            white-space: pre-wrap;
+            word-break: break-all;
+            font-family: 'SF Mono', 'Fira Code', monospace;
+            font-size: 12px;
+            min-height: 36px;
+            border: 1px solid #1e293b;
+            max-height: 200px;
+            overflow-y: auto;
+        }
+
+        .output.error {
+            color: #fca5a5;
+            border-color: #7f1d1d;
+        }
+
+        .output.success {
+            color: #86efac;
+            border-color: #14532d;
+        }
+
+        .grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 20px;
+        }
+
+        @media (max-width: 768px) {
+            .grid {
+                grid-template-columns: 1fr;
+            }
+        }
+
+        .inline-buttons {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 6px;
+            margin-top: 8px;
+        }
+
+        hr {
+            border: 0;
+            border-top: 1px solid #334155;
+            margin: 16px 0;
+        }
+
+        .note {
+            font-size: 0.8em;
+            color: #64748b;
+            margin-top: 4px;
+        }
+
+        .api-method {
+            font-family: 'SF Mono', 'Fira Code', monospace;
+            font-size: 0.85em;
+            color: #fbbf24;
+            background: #1a1a2e;
+            padding: 1px 5px;
+            border-radius: 3px;
+        }
+
+        #eventLog {
+            max-height: 300px;
+            overflow-y: auto;
+        }
+    </style>
+</head>
+
+<body>
+    <h1>TrustKeys API Demo <small>v1.0.0 &mdash; Post-Quantum Cryptography</small></h1>
+
+    <!-- ─── Detection & Connection ──────────────────────────────── -->
+    <div class="card">
+        <h2>Extension Detection & Connection <span class="tag tag-read">read</span></h2>
+        <div id="statusLine" class="status-disconnected">Extension not detected</div>
+
+        <div class="inline-buttons">
+            <button onclick="doHandshake()">handshake()</button>
+            <button onclick="doConnect()" class="success">connect()</button>
+            <button onclick="doIsConnected()">isConnected()</button>
+            <button onclick="doGetAccount()">getAccount()</button>
+        </div>
+
+        <div id="detectionOutput" class="output" style="margin-top:12px;">Waiting...</div>
+
+        <div id="accountInfo" style="margin-top:15px; display:none;">
+            <label>Account Name</label>
+            <div id="accountName" class="output"></div>
+
+            <div class="grid" style="margin-top:8px;">
+                <div>
+                    <label>Dilithium Public Key (signing)</label>
+                    <div id="dilithiumKey" class="output"></div>
+                </div>
+                <div>
+                    <label>Kyber Public Key (encryption)</label>
+                    <div id="kyberKey" class="output"></div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="grid">
+        <!-- ─── Signing & Verification ──────────────────────────── -->
+        <div class="card">
+            <h2>Sign & Verify <span class="tag tag-sign">dilithium</span></h2>
+            <p class="note">
+                <span class="api-method">sign(message)</span> &rarr; Dilithium signature (hex)<br>
+                <span class="api-method">verify(message, signature, publicKey)</span> &rarr; boolean
+            </p>
+
+            <label>Message to Sign</label>
+            <textarea id="signInput" rows="2">Hello, Quantum World!</textarea>
+
+            <div class="inline-buttons">
+                <button onclick="doSign()">Sign Message</button>
+                <button onclick="doVerify()" class="success">Verify Signature</button>
+            </div>
+
+            <label>Signature (hex)</label>
+            <textarea id="signatureOutput" rows="3" readonly></textarea>
+
+            <div id="verifyOutput" class="output"></div>
+        </div>
+
+        <!-- ─── Encrypt & Decrypt ───────────────────────────────── -->
+        <div class="card">
+            <h2>Encrypt & Decrypt <span class="tag tag-encrypt">kyber + AES</span></h2>
+            <p class="note">
+                <span class="api-method">encrypt(message, [publicKey])</span> &rarr; ciphertext<br>
+                <span class="api-method">decrypt(ciphertext)</span> &rarr; plaintext
+            </p>
+
+            <label>Message to Encrypt</label>
+            <textarea id="encryptInput" rows="2">Top Secret Data</textarea>
+
+            <label>Recipient Kyber Public Key <span style="color:#64748b;">(blank = self)</span></label>
+            <input type="text" id="encryptRecipientKey" placeholder="Leave empty to encrypt for yourself">
+
+            <div class="inline-buttons">
+                <button onclick="doEncrypt()">Encrypt</button>
+                <button onclick="doEncryptForSelf()">Encrypt (self)</button>
+                <button onclick="doDecrypt()" class="success">Decrypt</button>
+            </div>
+
+            <label>Ciphertext (JSON)</label>
+            <textarea id="ciphertextOutput" rows="4"></textarea>
+
+            <div id="decryptOutput" class="output"></div>
+        </div>
+
+        <!-- ─── Session Key Management ──────────────────────────── -->
+        <div class="card">
+            <h2>Session Key Management <span class="tag tag-session">symmetric</span></h2>
+            <p class="note">
+                Generate symmetric keys and wrap/unwrap them with Kyber.<br>
+                Used for E2EE where the session key encrypts data and is itself encrypted per-recipient.
+            </p>
+
+            <div class="inline-buttons">
+                <button onclick="doGenerateSessionKey()">generateSessionKey()</button>
+            </div>
+
+            <label>Session Key (hex)</label>
+            <input type="text" id="sessionKeyOutput" readonly>
+
+            <hr>
+
+            <label>Public Key to Wrap For <span style="color:#64748b;">(blank = own key)</span></label>
+            <input type="text" id="wrapPublicKey" placeholder="Kyber public key hex...">
+
+            <div class="inline-buttons">
+                <button onclick="doWrapSessionKey()">wrapSessionKey()</button>
+                <button onclick="doUnwrapSessionKey()" class="success">unwrapSessionKey()</button>
+            </div>
+
+            <label>Wrapped Key</label>
+            <textarea id="wrappedKeyOutput" rows="3"></textarea>
+
+            <div id="sessionKeyResult" class="output"></div>
+        </div>
+
+        <!-- ─── Batch Unwrap ────────────────────────────────────── -->
+        <div class="card">
+            <h2>Batch Unwrap <span class="tag tag-session">symmetric</span></h2>
+            <p class="note">
+                <span class="api-method">unwrapManySessionKeys(wrappedKeys[])</span><br>
+                Decrypt multiple wrapped session keys in a single user-approval step.
+            </p>
+
+            <label>Wrapped Keys (one per line)</label>
+            <textarea id="batchWrappedKeys" rows="4" placeholder="Paste wrapped keys, one per line..."></textarea>
+
+            <div class="inline-buttons">
+                <button onclick="doBatchUnwrap()">Unwrap All</button>
+                <button onclick="populateBatchFromSingle()">Copy from Wrap output</button>
+            </div>
+
+            <div id="batchUnwrapResult" class="output"></div>
+        </div>
+    </div>
+
+    <!-- ─── Event Log ───────────────────────────────────────────── -->
+    <div class="card">
+        <h2>Event Log</h2>
+        <div class="inline-buttons">
+            <button onclick="clearLog()" class="danger">Clear Log</button>
+        </div>
+        <div id="eventLog" class="output" style="margin-top:10px;">Ready.\n</div>
+    </div>
+
+    <script>
+        // ─── Logging ────────────────────────────────────────────
+        function log(msg, type = 'info') {
+            const el = document.getElementById('eventLog');
+            const ts = new Date().toLocaleTimeString();
+            const prefix = { info: 'INF', error: 'ERR', success: 'OK ' }[type] || 'INF';
+            el.textContent += `[${ts}] ${prefix}  ${msg}\n`;
+            el.scrollTop = el.scrollHeight;
+        }
+
+        function clearLog() {
+            document.getElementById('eventLog').textContent = '';
+        }
+
+        function showResult(elId, text, isError = false) {
+            const el = document.getElementById(elId);
+            el.textContent = text;
+            el.className = 'output' + (isError ? ' error' : ' success');
+        }
+
+        function checkAPI() {
+            if (!window.trustkeys) {
+                throw new Error('TrustKeys extension not detected. Install it and refresh.');
+            }
+        }
+
+        // ─── Detection & Connection ─────────────────────────────
+        async function doHandshake() {
+            try {
+                checkAPI();
+                log('Calling handshake()...');
+                const extensionId = await window.trustkeys.handshake();
+                log(`handshake() returned extension ID: ${extensionId}`, 'success');
+                showResult('detectionOutput', `Extension ID: ${extensionId}`);
+            } catch (e) {
+                log(`handshake() failed: ${e.message}`, 'error');
+                showResult('detectionOutput', e.message, true);
+            }
+        }
+
+        async function doConnect() {
+            try {
+                checkAPI();
+                log('Calling connect() — waiting for user approval...');
+                document.getElementById('statusLine').className = 'status-pending';
+                document.getElementById('statusLine').textContent = 'Waiting for approval...';
+                const ok = await window.trustkeys.connect();
+                if (ok) {
+                    document.getElementById('statusLine').className = 'status-connected';
+                    document.getElementById('statusLine').textContent = 'Connected';
+                    log('connect() succeeded — site is now authorized', 'success');
+                    showResult('detectionOutput', 'Connected successfully.');
+                } else {
+                    document.getElementById('statusLine').className = 'status-disconnected';
+                    document.getElementById('statusLine').textContent = 'Connection rejected';
+                    log('connect() returned false — user rejected', 'error');
+                    showResult('detectionOutput', 'Connection rejected by user.', true);
+                }
+            } catch (e) {
+                document.getElementById('statusLine').className = 'status-disconnected';
+                document.getElementById('statusLine').textContent = 'Connection failed';
+                log(`connect() error: ${e.message}`, 'error');
+                showResult('detectionOutput', e.message, true);
+            }
+        }
+
+        async function doIsConnected() {
+            try {
+                checkAPI();
+                log('Calling isConnected()...');
+                const connected = await window.trustkeys.isConnected();
+                const label = connected ? 'Connected' : 'Not connected';
+                document.getElementById('statusLine').className = connected ? 'status-connected' : 'status-disconnected';
+                document.getElementById('statusLine').textContent = label;
+                log(`isConnected() = ${connected}`, connected ? 'success' : 'info');
+                showResult('detectionOutput', label);
+            } catch (e) {
+                log(`isConnected() error: ${e.message}`, 'error');
+                showResult('detectionOutput', e.message, true);
+            }
+        }
+
+        async function doGetAccount() {
+            try {
+                checkAPI();
+                log('Calling getAccount()...');
+                const account = await window.trustkeys.getAccount();
+                if (!account) {
+                    log('getAccount() returned null — no active account', 'error');
+                    showResult('detectionOutput', 'No active account. Create one in the extension popup.', true);
+                    return;
+                }
+                document.getElementById('accountInfo').style.display = 'block';
+                document.getElementById('accountName').textContent = account.name;
+                document.getElementById('kyberKey').textContent = account.kyberPublicKey;
+                document.getElementById('dilithiumKey').textContent = account.dilithiumPublicKey;
+                log(`getAccount() OK — name: "${account.name}", dilithium key: ${account.dilithiumPublicKey.slice(0, 32)}...`, 'success');
+                showResult('detectionOutput', `Active account: ${account.name}`);
+            } catch (e) {
+                log(`getAccount() error: ${e.message}`, 'error');
+                showResult('detectionOutput', e.message, true);
+            }
+        }
+
+        // ─── Signing & Verification ─────────────────────────────
+        async function doSign() {
+            try {
+                checkAPI();
+                const message = document.getElementById('signInput').value;
+                if (!message) { alert('Enter a message to sign'); return; }
+                log(`Calling sign("${message.slice(0, 40)}${message.length > 40 ? '...' : ''}")...`);
+                const signature = await window.trustkeys.sign(message);
+                document.getElementById('signatureOutput').value = signature;
+                log(`sign() OK — ${signature.length} hex chars`, 'success');
+                showResult('verifyOutput', `Signature produced (${signature.length / 2} bytes)`);
+            } catch (e) {
+                log(`sign() error: ${e.message}`, 'error');
+                showResult('verifyOutput', e.message, true);
+            }
+        }
+
+        async function doVerify() {
+            try {
+                checkAPI();
+                const message = document.getElementById('signInput').value;
+                const signature = document.getElementById('signatureOutput').value;
+                const publicKey = document.getElementById('dilithiumKey').textContent;
+                if (!message || !signature || !publicKey) {
+                    alert('Need message, signature, and public key. Sign a message first, then get your account.');
+                    return;
+                }
+                log('Calling verify(message, signature, publicKey)...');
+                const valid = await window.trustkeys.verify(message, signature, publicKey);
+                log(`verify() = ${valid}`, valid ? 'success' : 'error');
+                showResult('verifyOutput', valid ? 'VALID signature' : 'INVALID signature', !valid);
+            } catch (e) {
+                log(`verify() error: ${e.message}`, 'error');
+                showResult('verifyOutput', e.message, true);
+            }
+        }
+
+        // ─── Encryption & Decryption ────────────────────────────
+        async function doEncrypt() {
+            try {
+                checkAPI();
+                const message = document.getElementById('encryptInput').value;
+                const recipientKey = document.getElementById('encryptRecipientKey').value.trim();
+                if (!message) { alert('Enter a message to encrypt'); return; }
+
+                if (recipientKey) {
+                    log(`Calling encrypt(message, recipientPublicKey)...`);
+                    const result = await window.trustkeys.encrypt(message, recipientKey);
+                    document.getElementById('ciphertextOutput').value = JSON.stringify(result, null, 2);
+                    log('encrypt() OK — encrypted for specified recipient', 'success');
+                    showResult('decryptOutput', 'Encrypted for recipient. Only they can decrypt.');
+                } else {
+                    log('Calling encrypt(message) — encrypting for self...');
+                    const result = await window.trustkeys.encrypt(message);
+                    document.getElementById('ciphertextOutput').value = JSON.stringify(result, null, 2);
+                    log('encrypt() OK — encrypted for self', 'success');
+                    showResult('decryptOutput', 'Encrypted for self. Click Decrypt to reverse.');
+                }
+            } catch (e) {
+                log(`encrypt() error: ${e.message}`, 'error');
+                showResult('decryptOutput', e.message, true);
+            }
+        }
+
+        async function doEncryptForSelf() {
+            document.getElementById('encryptRecipientKey').value = '';
+            await doEncrypt();
+        }
+
+        async function doDecrypt() {
+            try {
+                checkAPI();
+                const raw = document.getElementById('ciphertextOutput').value;
+                if (!raw) { alert('No ciphertext to decrypt'); return; }
+                const ciphertext = JSON.parse(raw);
+                log('Calling decrypt(ciphertext)...');
+                const plaintext = await window.trustkeys.decrypt(ciphertext);
+                log(`decrypt() OK — "${plaintext.slice(0, 60)}${plaintext.length > 60 ? '...' : ''}"`, 'success');
+                showResult('decryptOutput', `Plaintext: ${plaintext}`);
+            } catch (e) {
+                log(`decrypt() error: ${e.message}`, 'error');
+                showResult('decryptOutput', e.message, true);
+            }
+        }
+
+        // ─── Session Key Management ─────────────────────────────
+        async function doGenerateSessionKey() {
+            try {
+                checkAPI();
+                log('Calling generateSessionKey()...');
+                const key = await window.trustkeys.generateSessionKey();
+                document.getElementById('sessionKeyOutput').value = key;
+                log(`generateSessionKey() OK — ${key.length / 2} bytes`, 'success');
+                showResult('sessionKeyResult', `Session key generated (${key.length / 2} bytes)`);
+            } catch (e) {
+                log(`generateSessionKey() error: ${e.message}`, 'error');
+                showResult('sessionKeyResult', e.message, true);
+            }
+        }
+
+        async function doWrapSessionKey() {
+            try {
+                checkAPI();
+                const sessionKey = document.getElementById('sessionKeyOutput').value;
+                if (!sessionKey) { alert('Generate a session key first'); return; }
+
+                let publicKey = document.getElementById('wrapPublicKey').value.trim();
+                if (!publicKey) {
+                    publicKey = document.getElementById('kyberKey').textContent;
+                    if (!publicKey) { alert('Get your account first, or enter a public key'); return; }
+                    log('No wrap key specified — using own Kyber public key');
+                }
+
+                log('Calling wrapSessionKey(sessionKey, publicKey)...');
+                const wrapped = await window.trustkeys.wrapSessionKey(sessionKey, publicKey);
+                document.getElementById('wrappedKeyOutput').value = typeof wrapped === 'object' ? JSON.stringify(wrapped) : wrapped;
+                log('wrapSessionKey() OK', 'success');
+                showResult('sessionKeyResult', 'Session key wrapped successfully.');
+            } catch (e) {
+                log(`wrapSessionKey() error: ${e.message}`, 'error');
+                showResult('sessionKeyResult', e.message, true);
+            }
+        }
+
+        async function doUnwrapSessionKey() {
+            try {
+                checkAPI();
+                const raw = document.getElementById('wrappedKeyOutput').value;
+                if (!raw) { alert('Wrap a session key first'); return; }
+
+                let wrappedKey;
+                try { wrappedKey = JSON.parse(raw); } catch { wrappedKey = raw; }
+
+                log('Calling unwrapSessionKey(wrappedKey)...');
+                const unwrapped = await window.trustkeys.unwrapSessionKey(wrappedKey);
+                log(`unwrapSessionKey() OK — ${unwrapped}`, 'success');
+
+                const original = document.getElementById('sessionKeyOutput').value;
+                if (original && unwrapped === original) {
+                    showResult('sessionKeyResult', `Unwrapped key matches original!\n${unwrapped}`);
+                } else {
+                    showResult('sessionKeyResult', `Unwrapped: ${unwrapped}`);
+                }
+            } catch (e) {
+                log(`unwrapSessionKey() error: ${e.message}`, 'error');
+                showResult('sessionKeyResult', e.message, true);
+            }
+        }
+
+        // ─── Batch Unwrap ───────────────────────────────────────
+        function populateBatchFromSingle() {
+            const wrapped = document.getElementById('wrappedKeyOutput').value;
+            if (!wrapped) { alert('No wrapped key to copy'); return; }
+            document.getElementById('batchWrappedKeys').value = wrapped;
+            log('Copied wrapped key to batch input');
+        }
+
+        async function doBatchUnwrap() {
+            try {
+                checkAPI();
+                const raw = document.getElementById('batchWrappedKeys').value.trim();
+                if (!raw) { alert('Enter wrapped keys (one per line)'); return; }
+
+                const lines = raw.split('\n').map(l => l.trim()).filter(Boolean);
+                const keys = lines.map(l => { try { return JSON.parse(l); } catch { return l; } });
+
+                log(`Calling unwrapManySessionKeys(${keys.length} keys)...`);
+                const results = await window.trustkeys.unwrapManySessionKeys(keys);
+                const summary = results.map((r, i) => `[${i}] ${r === null ? 'FAILED' : r}`).join('\n');
+                log(`unwrapManySessionKeys() OK — ${results.filter(Boolean).length}/${keys.length} succeeded`, 'success');
+                showResult('batchUnwrapResult', summary);
+            } catch (e) {
+                log(`unwrapManySessionKeys() error: ${e.message}`, 'error');
+                showResult('batchUnwrapResult', e.message, true);
+            }
+        }
+
+        // ─── Auto-detect on load ────────────────────────────────
+        window.addEventListener('load', () => {
+            setTimeout(() => {
+                if (window.trustkeys) {
+                    document.getElementById('statusLine').className = 'status-pending';
+                    document.getElementById('statusLine').textContent = 'Extension detected — click Connect to authorize';
+                    log('window.trustkeys detected', 'success');
+                } else {
+                    log('window.trustkeys not found — is the extension installed?', 'error');
+                }
+            }, 500);
+        });
+    </script>
+</body>
+
+</html>
