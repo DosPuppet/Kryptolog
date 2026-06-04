@@ -102,17 +102,6 @@ class LoginRequest(BaseModel):
     encryption_public_key: Optional[str] = Field(None, max_length=20000)
     username: Optional[str] = Field(None, max_length=200)
 
-class RecoveryShareStore(BaseModel):
-    token: str = Field(..., max_length=50000) # Google Tokens can be long-ish
-    share_data: str = Field(..., max_length=50000) # MPC share checks
-
-class RecoveryShareFetch(BaseModel):
-    token: str = Field(..., max_length=50000)
-
-class RecoveryShareResponse(BaseModel):
-    share_data: str
-
-
 class MultisigWorkflowBase(BaseModel):
     name: str = Field(..., max_length=200)
 

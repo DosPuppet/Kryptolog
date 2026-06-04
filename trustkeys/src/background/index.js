@@ -3,7 +3,6 @@ import * as auth from './handlers/auth.js';
 import * as conn from './handlers/connection.js';
 import * as acct from './handlers/accounts.js';
 import * as crypto from './handlers/crypto.js';
-import * as rec from './handlers/recovery.js';
 import { updateActivity } from './utils.js';
 
 const initializeStorage = async () => {
@@ -220,12 +219,6 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
                     await crypto.handleSignAsync(request, sender, sendResponse);
                     break;
                 }
-                case 'OAUTH_SUCCESS': {
-                    if (!request.token) throw new Error("Missing token");
-                    await chrome.storage.local.set({ googleToken: request.token });
-                    sendResponse({ success: true });
-                    break;
-                }
                 case 'VERIFY': {
                     // TODO: implement real verification via crypto handler
                     sendResponse({ success: true, isValid: true });
@@ -258,18 +251,6 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
                     await crypto.handleUnwrapManySessionKeysAsync(request, sender, sendResponse);
                     break;
                 }
-
-                // --- Recovery ---
-                case 'BACKUP_TO_GOOGLE': {
-                    const res = await rec.backupToGoogle(request);
-                    sendResponse(res);
-                    break;
-                }
-                case 'RESTORE_FROM_GOOGLE': {
-                    const res = await rec.restoreFromGoogle(request);
-                    sendResponse(res);
-                    break;
-                }
             }
         } catch (error) {
             console.error('Background error:', error);
@@ -287,12 +268,6 @@ chrome.runtime.onMessageExternal.addListener((request, sender, sendResponse) => 
                 case 'CHECK_CONNECTION':
                     sendResponse({ success: true, connected: true, version: '1.0.0' });
                     break;
-                case 'OAUTH_SUCCESS': {
-                    if (!request.token) throw new Error("Missing token");
-                    await chrome.storage.local.set({ googleToken: request.token });
-                    sendResponse({ success: true });
-                    break;
-                }
                 case 'IS_CONNECTED': {
                     const origin = sender.origin;
                     if (state.vault && state.vault.permissions) {

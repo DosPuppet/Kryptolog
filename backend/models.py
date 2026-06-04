@@ -135,14 +135,6 @@ class FileChunk(Base):
 
     secret = relationship("Secret", back_populates="chunks")
 
-class RecoveryShare(Base):
-    __tablename__ = "recovery_shares"
-
-    id = Column(Integer, primary_key=True, index=True)
-    google_id = Column(String, index=True, unique=True) # The 'sub' from Google ID Token
-    share_data = Column(Text) # Encrypted share blob (Share B)
-    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
-
 
 # ── Group Channels ──────────────────────────────────────────────
 

@@ -57,7 +57,6 @@ The application runs **2 processes locally**: a FastAPI REST API and a Vite dev 
 | **Group Channels** | Multi-user encrypted group chat with owner/admin/member roles |
 | **Push Notifications** | Web Push API (VAPID) for real-time alerts |
 | **Hardened Local Vault** | AES-256-GCM + PBKDF2-SHA-512 (600k iterations) for browser-stored keys |
-| **MPC Recovery** | Backup PQC identity via Google ID (multi-party computation) |
 | **User Profiles** | Manage usernames and PQC identities |
 
 ### A note on the messenger's security properties
@@ -227,7 +226,6 @@ npm run dev
 | `/multisig` | Multisig workflows |
 | `/messenger` | E2EE messenger (PQC auth only — not available with MetaMask) |
 | `/proof-audit` | Proof audit log — view and download signed document history |
-| `/auth-bridge` | TrustKeys extension auth bridge |
 
 ---
 
@@ -308,7 +306,6 @@ alembic downgrade -1
 | `VAPID_PUBLIC_KEY` | No | – | Web Push VAPID public key (required for push notifications) |
 | `VAPID_PRIVATE_KEY` | No | – | Web Push VAPID private key |
 | `VAPID_SUBJECT` | No | `mailto:admin@kryptolog.io` | Web Push VAPID subject (contact email/URL) |
-| `GOOGLE_CLIENT_ID` | No | – | Google OAuth client ID (for MPC recovery, currently disabled) |
 
 ### Frontend (`frontend/.env`)
 
@@ -316,7 +313,6 @@ alembic downgrade -1
 |----------|----------|---------|-------------|
 | `VITE_API_BASE_URL` | No | `http://localhost:8000` | Backend API URL |
 | `ALLOWED_HOSTS` | No | – | Comma-separated Vite dev server allowed hosts |
-| `VITE_GOOGLE_CLIENT_ID` | No | – | Google OAuth client ID |
 
 ---
 

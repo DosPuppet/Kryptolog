@@ -58,11 +58,11 @@ server {
     # Replace "your-domain.com" in connect-src with your actual domain.
     add_header Content-Security-Policy
         "default-src 'self';
-         script-src 'self' 'wasm-unsafe-eval' https://accounts.google.com https://ssl.gstatic.com;
+         script-src 'self' 'wasm-unsafe-eval';
          style-src 'self' 'unsafe-inline' https://fonts.googleapis.com;
          font-src 'self' https://fonts.gstatic.com;
-         img-src 'self' data: https://*.googleusercontent.com;
-         connect-src 'self' wss://your-domain.com https://accounts.google.com https://*.googleapis.com;
+         img-src 'self' data:;
+         connect-src 'self' wss://your-domain.com;
          worker-src 'self';
          form-action 'self';
          base-uri 'self';

@@ -69,10 +69,6 @@ window.addEventListener('message', async (event) => {
                 const shakeRes = await callBackground('HANDSHAKE');
                 result = shakeRes.extensionId;
                 break;
-            case 'TRUSTKEYS_OAUTH_SUCCESS':
-                const oauthRes = await callBackground('OAUTH_SUCCESS', { token: payload.token });
-                result = oauthRes.success;
-                break;
             case 'TRUSTKEYS_GENERATE_SESSION_KEY':
                 const genRes = await callBackground('GENERATE_SESSION_KEY');
                 result = genRes.key;

@@ -10,7 +10,6 @@ import { NotificationProvider } from './context/NotificationContext';
 // Lazy-loaded components
 const Login = React.lazy(() => import('./components/Login'));
 const Dashboard = React.lazy(() => import('./components/Dashboard'));
-const AuthBridge = React.lazy(() => import('./components/AuthBridge'));
 
 function AppContent() {
   const { isAuthenticated, authType } = useAuth();
@@ -25,7 +24,6 @@ function AppContent() {
         </div>
       }>
         <Routes>
-          <Route path="/auth-bridge" element={<AuthBridge />} />
           {isAuthenticated ? (
             <>
               <Route path="/secrets" element={<Dashboard view="secrets" />} />

@@ -25,14 +25,7 @@ TrustKeys utilizes the NIST multi-round selected algorithms for post-quantum sec
 - **Memory-Only Decryption**: Private keys are decrypted into memory *only* when the vault is unlocked.
 - **Session Persistence**: The vault remains unlocked for **1 Hour** of inactivity. The encryption key is stored in `chrome.storage.session` (in-memory), which is **automatically wiped** when the browser is closed.
 
-### 3. MPC Recovery (Google Backup) -- WIP
-TrustKeys supports **Multi-Party Computation (MPC)** based recovery.
-- **How it works**: Your Vault Key is split into shares.
-- **Google Share**: One share is encrypted and stored associated with your Google ID.
-- **Data Privacy**: Google *never* sees your private keys. They only authenticate your identity to retrieve an encrypted shard.
-- **Restoration**: You can restore your PQC identity on a new device by authenticating with Google.
-
-### 4. Authorization Model
+### 3. Authorization Model
 TrustKeys enforces a strict "User Consent" model similar to Ethereum wallets:
 - **Dynamic Site Authorization**: No site has access by default. Users authorize sites explicitly via the extension popup or Settings.
 - **Connection**: Websites cannot access your account or public keys until you explicitly approve a `connect()` request.
@@ -77,11 +70,10 @@ TrustKeys enforces a strict "User Consent" model similar to Ethereum wallets:
 Alternatively, add sites manually from **Settings > Manage Trusted Sites**.
 
 ### Configuration
-You can configure the backend API and Frontend Bridge URL in the Settings menu:
+You can configure the backend API URL in the Settings menu:
 1. Open Extension > Settings.
-2. Click **Config (API & Bridge)**.
+2. Click **Config (API)**.
 3. **API URL**: The backend server URL (Default: `http://localhost:8000`).
-4. **Bridge URL**: The frontend URL hosting the Google OAuth Bridge (Default: `http://localhost:5173`).
 
 ---
 
@@ -195,7 +187,6 @@ const keys = await window.trustkeys.unwrapManySessionKeys([blob1, blob2, blob3])
 - **Export Keys**: Settings > Export Keys (JSON). Requires vault password. Generates a JSON backup of all accounts (private + public keys). **The backup file is unencrypted — store securely!**
 - **Import Keys**: Settings > Import Keys. Restores accounts from a JSON backup. Merges new accounts into the existing vault.
 - **Manage Trusted Sites**: Settings > Manage Trusted Sites. View, add, or remove authorized origins. Dev defaults (localhost, 127.0.0.1) cannot be removed.
-- **MPC Backup**: Settings > Backup/Restore via Google ID.
 
 ---
 

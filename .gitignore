@@ -27,3 +27,6 @@ Thumbs.db
 # Env files
 .env
 .env.local
+
+# Local audit / scratch docs (not tracked)
+.tempdoc/
