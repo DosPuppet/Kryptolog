@@ -1,7 +1,7 @@
 module.exports = {
   apps: [
     {
-      name: 'safelog-backend',
+      name: 'kryptolog-backend',
       script: 'uvicorn',
       args: 'main:app --host 0.0.0.0 --port 8000 --h11-max-incomplete-event-size 65536',
       cwd: './backend',
@@ -12,7 +12,7 @@ module.exports = {
       max_memory_restart: '500M'
     },
     {
-      name: 'safelog-frontend',
+      name: 'kryptolog-frontend',
       script: 'npm',
       args: 'run preview -- --host 0.0.0.0 --port 5173',
       cwd: './frontend',

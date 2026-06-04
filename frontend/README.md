@@ -1,6 +1,6 @@
-# SafeLog Frontend
+# Kryptolog Frontend
 
-The React-based frontend for SafeLog, featuring dual authentication (MetaMask + TrustKeys) and a context-driven secure architecture.
+The React-based frontend for Kryptolog, featuring dual authentication (MetaMask + TrustKeys) and a context-driven secure architecture.
 
 ## Architecture
 
@@ -55,7 +55,7 @@ Edit `.env`:
 ```ini
 VITE_API_BASE_URL=http://localhost:8000
 VITE_GOOGLE_CLIENT_ID=your_google_client_id  # For TrustKeys MPC Backup
-ALLOWED_HOSTS=localhost,safelog.hashpar.com
+ALLOWED_HOSTS=localhost,kryptolog.hashpar.com
 ```
 
 ### Run

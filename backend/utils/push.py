@@ -9,7 +9,7 @@ def _get_vapid_config():
     """Read VAPID keys at call time, stripping any accidental quotes."""
     private_key = (os.getenv("VAPID_PRIVATE_KEY") or "").strip().strip('"').strip("'")
     public_key = (os.getenv("VAPID_PUBLIC_KEY") or "").strip().strip('"').strip("'")
-    subject = (os.getenv("VAPID_SUBJECT") or "mailto:admin@safelog.io").strip().strip('"').strip("'")
+    subject = (os.getenv("VAPID_SUBJECT") or "mailto:admin@kryptolog.io").strip().strip('"').strip("'")
     return private_key, public_key, subject
 
 def send_push_notification(subscription_info, data):

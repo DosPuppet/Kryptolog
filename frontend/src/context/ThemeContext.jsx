@@ -9,7 +9,7 @@ export const useTheme = () => {
 };
 
 export const ThemeProvider = ({ children }) => {
-    // Default to dark if no match found (safelog default)
+    // Default to dark if no match found (kryptolog default)
     const [theme, setTheme] = useState(() => {
         if (localStorage.getItem('theme')) {
             return localStorage.getItem('theme');

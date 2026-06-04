@@ -1,6 +1,6 @@
 """Alembic environment configuration.
 
-Imports the SQLAlchemy models and database engine from the Safelog backend
+Imports the SQLAlchemy models and database engine from the Kryptolog backend
 so that autogenerate can detect schema changes.
 """
 import sys

@@ -12,7 +12,7 @@ export const backupToGoogle = async (request) => {
     if (!account) throw new Error("No account to backup");
 
     const privKeyBytes = fromHex(account.dilithium.privateKey);
-    const salt = "safelog_mpc_v1";
+    const salt = "kryptolog_mpc_v1";
     const shareA = await deriveShareA(password, salt, privKeyBytes.length);
     const shareB = createShareB(privKeyBytes, shareA);
     const shareBHex = toHex(shareB);
@@ -57,7 +57,7 @@ export const restoreFromGoogle = async (request) => {
     const { share_data } = await apiRes.json();
     const backupData = JSON.parse(share_data);
 
-    const salt = "safelog_mpc_v1";
+    const salt = "kryptolog_mpc_v1";
     const dimShareB = fromHex(backupData.shareB);
     const dimShareA = await deriveShareA(password, salt, dimShareB.length);
     const dimPrivKey = recoverSecret(dimShareA, dimShareB);

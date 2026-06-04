@@ -28,15 +28,15 @@ def _load_server_keys():
     if _SERVER_SECRET_KEY is not None and _SERVER_PUBLIC_KEY is not None:
         return _SERVER_SECRET_KEY, _SERVER_PUBLIC_KEY
 
-    sk_hex = os.getenv("SAFELOG_ML_DSA_SECRET_KEY")
-    pk_hex = os.getenv("SAFELOG_ML_DSA_PUBLIC_KEY")
+    sk_hex = os.getenv("KRYPTOLOG_ML_DSA_SECRET_KEY")
+    pk_hex = os.getenv("KRYPTOLOG_ML_DSA_PUBLIC_KEY")
 
     if sk_hex and pk_hex:
         _SERVER_SECRET_KEY = bytes.fromhex(sk_hex)
         _SERVER_PUBLIC_KEY = bytes.fromhex(pk_hex)
     else:
         print(
-            "WARNING: SAFELOG_ML_DSA_SECRET_KEY / SAFELOG_ML_DSA_PUBLIC_KEY not set. "
+            "WARNING: KRYPTOLOG_ML_DSA_SECRET_KEY / KRYPTOLOG_ML_DSA_PUBLIC_KEY not set. "
             "Generating an EPHEMERAL server signing key — all JWTs become invalid on "
             "restart. Run `python generate_server_keys.py` and set the env vars for "
             "any persistent deployment."
@@ -73,7 +73,7 @@ def verify_pqc_signature(public_key: str, nonce: str, signature: str) -> bool:
     """Verify a client login challenge: ML-DSA-44 over the login message.
     `public_key` and `signature` are hex; the client signs with @noble/post-quantum."""
     try:
-        message = f"Sign in to Secure Log App with nonce: {nonce}".encode("utf-8")
+        message = f"Sign in to Kryptolog with nonce: {nonce}".encode("utf-8")
         sig_bytes = bytes.fromhex(signature)
         pk_bytes = bytes.fromhex(public_key)
         with oqs.Signature(SIG_ALG) as verifier:
@@ -90,7 +90,7 @@ def verify_signature(address: str, nonce: str, signature: str) -> bool:
         return verify_pqc_signature(address, nonce, signature)
 
     try:
-        message_text = f"Sign in to Secure Log App with nonce: {nonce}"
+        message_text = f"Sign in to Kryptolog with nonce: {nonce}"
         encoded_message = encode_defunct(text=message_text)
         recovered_address = Account.recover_message(encoded_message, signature=signature)
         return recovered_address.lower() == address.lower()

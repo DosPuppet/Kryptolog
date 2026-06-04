@@ -133,7 +133,7 @@ export default function MultisigWorkflow({ workflow, onClose, onUpdate, setUploa
         }
 
         const proof = {
-            type: 'safelog_multisig_proof',
+            type: 'kryptolog_multisig_proof',
             version: '1.0',
             exported_at: new Date().toISOString(),
             workflow: {
@@ -152,7 +152,7 @@ export default function MultisigWorkflow({ workflow, onClose, onUpdate, setUploa
         const url = URL.createObjectURL(blob);
         const a = document.createElement('a');
         a.href = url;
-        a.download = `${workflow.name.replace(/[^a-zA-Z0-9_-]/g, '_')}.safelog-proof.json`;
+        a.download = `${workflow.name.replace(/[^a-zA-Z0-9_-]/g, '_')}.kryptolog-proof.json`;
         a.click();
         URL.revokeObjectURL(url);
     };

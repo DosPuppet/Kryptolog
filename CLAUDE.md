@@ -1,4 +1,4 @@
-# SafeLog (PQC fork) — Project Context
+# Kryptolog (PQC fork) — Project Context
 
 > This file is auto-loaded into context each session. It exists to let a fresh Claude
 > pick up the post-quantum crypto migration without re-deriving the analysis. The full
@@ -6,12 +6,12 @@
 
 ## What this is
 
-A **clean-state fork** of `dozpupp/safelog` (original local copy at `/home/bakaneko/safelog`),
+A **clean-state fork** of `dozpupp/kryptolog` (original local copy at `/home/bakaneko/kryptolog`),
 created 2026-05-29 to migrate the post-quantum cryptography off unaudited JavaScript
 libraries onto NIST FIPS algorithms. Fresh git history (single initial commit); existing
 data/identities are intentionally **not** carried over.
 
-SafeLog is an **end-to-end-encrypted** secret-management + document-signing platform:
+Kryptolog is an **end-to-end-encrypted** secret-management + document-signing platform:
 secrets/files vault, secure sharing (per-recipient key wrapping), signed documents,
 N-of-N multisig workflows, E2EE messenger + group chat, web-push notifications.
 
@@ -30,7 +30,7 @@ The lib swap is **done and tested**, not pending. Clients use `@noble/post-quant
 Node sidecar is deleted. noble↔liboqs ML-DSA-44 interop is proven **both directions**.
 Test gate green: `backend/tests/test_pqc.py` (8) + `frontend/src/test/pqc.test.js` (9)
 + the existing backend suite (87). Server signing key is now
-`SAFELOG_ML_DSA_PUBLIC_KEY` / `SAFELOG_ML_DSA_SECRET_KEY` (generate via
+`KRYPTOLOG_ML_DSA_PUBLIC_KEY` / `KRYPTOLOG_ML_DSA_SECRET_KEY` (generate via
 `backend/generate_server_keys.py`; unset ⇒ ephemeral key + warning). The sections
 below are retained as the rationale of record.
 
@@ -79,7 +79,7 @@ Crypto runs in two places, but only **ML-DSA crosses the wire**:
   between releases — pin the version and follow the installed README, don't trust memory.
 - **`liboqs-python` is not a pure wheel** — it compiles liboqs C (needs cmake + a compiler). Document in README install steps.
 - **No seeded keygen in liboqs:** today the server key is derived deterministically from
-  `SAFELOG_SECRET_KEY` (in `pqc_service.js`). liboqs has no public seeded-keygen → instead
+  `KRYPTOLOG_SECRET_KEY` (in `pqc_service.js`). liboqs has no public seeded-keygen → instead
   **generate the server signing keypair once and store the secret key** in env / a secret manager
   (better practice anyway). Revisit whether the JWT even needs PQC signing vs. PyJWT (HS256/EdDSA);
   liboqs is still required server-side to verify client login challenges regardless.

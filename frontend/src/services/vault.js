@@ -10,7 +10,7 @@ class VaultService {
         this._cachedKey = null;      // CryptoKey (non-extractable AES-GCM 256)
         this._cachedSalt = null;     // Uint8Array(16) — salt used to derive _cachedKey
         this._cacheTimer = null;     // setTimeout reference for auto-expiry
-        const savedTTL = parseInt(localStorage.getItem('safelog_key_cache_ttl') || '0', 10);
+        const savedTTL = parseInt(localStorage.getItem('kryptolog_key_cache_ttl') || '0', 10);
         this._cacheTTL = isNaN(savedTTL) ? 0 : savedTTL; // 0 = "always ask" (default)
     }
 
@@ -18,7 +18,7 @@ class VaultService {
 
     setCacheTTL(ms) {
         this._cacheTTL = ms;
-        localStorage.setItem('safelog_key_cache_ttl', String(ms));
+        localStorage.setItem('kryptolog_key_cache_ttl', String(ms));
         if (ms === 0) this.clearKeyCache();
     }
 
@@ -56,7 +56,7 @@ class VaultService {
     // --- Core Helpers ---
 
     hasVault() {
-        return !!localStorage.getItem('safelog_vault');
+        return !!localStorage.getItem('kryptolog_vault');
     }
 
     // Helper to sanitize an account (remove private keys)
@@ -78,7 +78,7 @@ class VaultService {
     // ONLY used within this class for specific operations
     // password can be null when a cached key is available
     async _getFullVault(password) {
-        const encryptedJson = localStorage.getItem('safelog_vault');
+        const encryptedJson = localStorage.getItem('kryptolog_vault');
         if (!encryptedJson) throw new Error("No vault found");
         const encrypted = JSON.parse(encryptedJson);
 
@@ -119,7 +119,7 @@ class VaultService {
             this._cacheKey(key, salt);
         }
 
-        localStorage.setItem('safelog_vault', JSON.stringify(encrypted));
+        localStorage.setItem('kryptolog_vault', JSON.stringify(encrypted));
     }
 
     // Public save is removed/disabled because we don't save the in-memory (sanitized) vault
@@ -151,7 +151,7 @@ class VaultService {
     }
 
     async unlock(password) {
-        const encryptedJson = localStorage.getItem('safelog_vault');
+        const encryptedJson = localStorage.getItem('kryptolog_vault');
         if (!encryptedJson) throw new Error("No vault found");
 
         try {
@@ -418,7 +418,7 @@ class VaultService {
     // --- Biometric Authentication (FaceID/TouchID) ---
 
     hasBiometrics() {
-        const prefs = localStorage.getItem('safelog_biometrics');
+        const prefs = localStorage.getItem('kryptolog_biometrics');
         return !!prefs;
     }
 
@@ -446,7 +446,7 @@ class VaultService {
             encryptedPass = await encryptSymmetric(password, result.prfKey);
         } else {
             // Fallback: key is already in localStorage, encrypt password with it
-            const fallbackKey = localStorage.getItem('safelog_bio_fallback_key');
+            const fallbackKey = localStorage.getItem('kryptolog_bio_fallback_key');
             encryptedPass = await encryptSymmetric(password, fallbackKey);
         }
 
@@ -457,7 +457,7 @@ class VaultService {
             encryptedPass,
             prfSalt: result.prfSalt || null       // Only set for PRF mode
         };
-        localStorage.setItem('safelog_biometrics', JSON.stringify(prefs));
+        localStorage.setItem('kryptolog_biometrics', JSON.stringify(prefs));
 
         return result.mode; // Return mode so UI can show appropriate message
     }
@@ -465,7 +465,7 @@ class VaultService {
     async recoverPasswordWithBiometrics() {
         if (!this.hasBiometrics()) throw new Error("Biometrics not set up.");
 
-        const prefsString = localStorage.getItem('safelog_biometrics');
+        const prefsString = localStorage.getItem('kryptolog_biometrics');
         if (!prefsString) throw new Error("No biometric preferences found.");
         const prefs = JSON.parse(prefsString);
 
@@ -489,13 +489,13 @@ class VaultService {
     }
 
     disableBiometrics() {
-        localStorage.removeItem('safelog_biometrics');
-        localStorage.removeItem('safelog_bio_fallback_key'); // Clean up fallback key if present
+        localStorage.removeItem('kryptolog_biometrics');
+        localStorage.removeItem('kryptolog_bio_fallback_key'); // Clean up fallback key if present
     }
 
     // Returns 'prf', 'fallback', or null if biometrics not enabled
     biometricMode() {
-        const prefsString = localStorage.getItem('safelog_biometrics');
+        const prefsString = localStorage.getItem('kryptolog_biometrics');
         if (!prefsString) return null;
         try {
             const prefs = JSON.parse(prefsString);

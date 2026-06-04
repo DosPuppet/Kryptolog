@@ -79,12 +79,12 @@ export default function VaultManager({ onClose }) {
     const [biometricMode, setBiometricMode] = useState(null); // 'prf' | 'fallback' | null
 
     useEffect(() => {
-        const enabled = !!localStorage.getItem('safelog_biometrics');
+        const enabled = !!localStorage.getItem('kryptolog_biometrics');
         setHasBiometrics(enabled);
         if (enabled) {
             // Read mode from stored prefs
             try {
-                const prefs = JSON.parse(localStorage.getItem('safelog_biometrics'));
+                const prefs = JSON.parse(localStorage.getItem('kryptolog_biometrics'));
                 setBiometricMode(prefs.mode || 'prf');
             } catch { setBiometricMode('prf'); }
         }
@@ -123,7 +123,7 @@ export default function VaultManager({ onClose }) {
             const url = URL.createObjectURL(blob);
             const a = document.createElement('a');
             a.href = url;
-            a.download = `safelog-vault-${Date.now()}.json`;
+            a.download = `kryptolog-vault-${Date.now()}.json`;
             a.click();
             setMsg({ type: 'success', text: 'Vault exported' });
         } catch (e) {

@@ -96,7 +96,7 @@ const AuthBridge = () => {
             });
         }
 
-        // Method 2: Post Message (Works if content script is injected - e.g. Localhost or SafeLog domain)
+        // Method 2: Post Message (Works if content script is injected - e.g. Localhost or Kryptolog domain)
         // If we didn't send via runtime (no ID), or as a parallel/fallback mechanism.
         if (!sent) {
             sendViaPostMessage(response.credential);
@@ -152,7 +152,7 @@ const AuthBridge = () => {
             background: '#152033',
             color: '#fff'
         }}>
-            <h2>SafeLog Auth Bridge</h2>
+            <h2>Kryptolog Auth Bridge</h2>
 
             {status === 'initializing' && (
                 <div style={{ color: '#aaa' }}>

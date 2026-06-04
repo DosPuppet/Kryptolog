@@ -4,7 +4,7 @@ TrustKeys is a quantum-resistant browser extension designed to secure interactio
 
 > **Status**: Beta (Production Functional)
 > **Algorithms**: Crystals-Kyber-768 (ML-KEM) & Crystals-Dilithium-2 (ML-DSA)
-> **Role**: Primary PQC Authentication Provider for SafeLog.
+> **Role**: Primary PQC Authentication Provider for Kryptolog.
 
 ---
 

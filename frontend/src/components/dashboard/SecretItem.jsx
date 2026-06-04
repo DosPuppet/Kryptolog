@@ -53,7 +53,7 @@ const SecretItem = ({ secret, decryptedContent, onDecrypt, onDelete, onShare, on
     const handleDownloadProof = (secretName, docData) => {
         const isPQC = docData.signerPublicKey.length > 200;
         const proof = {
-            type: 'safelog_signed_document_proof',
+            type: 'kryptolog_signed_document_proof',
             version: '1.0',
             exported_at: new Date().toISOString(),
             document: {
@@ -70,7 +70,7 @@ const SecretItem = ({ secret, decryptedContent, onDecrypt, onDelete, onShare, on
         const url = URL.createObjectURL(blob);
         const a = document.createElement('a');
         a.href = url;
-        a.download = `${secretName.replace(/[^a-zA-Z0-9_-]/g, '_')}.safelog-proof.json`;
+        a.download = `${secretName.replace(/[^a-zA-Z0-9_-]/g, '_')}.kryptolog-proof.json`;
         a.click();
         URL.revokeObjectURL(url);
     };

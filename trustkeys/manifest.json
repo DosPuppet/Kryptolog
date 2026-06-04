@@ -19,7 +19,7 @@
     },
     "browser_specific_settings": {
         "gecko": {
-            "id": "trustkeys@safelog.hashpar.com",
+            "id": "trustkeys@kryptolog.hashpar.com",
             "strict_min_version": "109.0"
         }
     },

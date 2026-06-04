@@ -1,4 +1,4 @@
-# SafeLog — nginx production config example
+# Kryptolog — nginx production config example
 # ─────────────────────────────────────────────────────────────────────────────
 # SETUP INSTRUCTIONS
 #
@@ -14,8 +14,8 @@
 #    never sends a CORS preflight. Set it anyway as a safety net:
 #      ALLOWED_ORIGINS=https://your-domain.com
 #
-# 4. Copy this file to /etc/nginx/sites-available/safelog and symlink:
-#      sudo ln -s /etc/nginx/sites-available/safelog /etc/nginx/sites-enabled/
+# 4. Copy this file to /etc/nginx/sites-available/kryptolog and symlink:
+#      sudo ln -s /etc/nginx/sites-available/kryptolog /etc/nginx/sites-enabled/
 #      sudo nginx -t && sudo systemctl reload nginx
 #
 # HOW CORS IS ELIMINATED
@@ -43,7 +43,7 @@ server {
     ssl_prefer_server_ciphers on;
 
     # Serve the Vite build
-    root  /var/www/safelog/frontend/dist;
+    root  /var/www/kryptolog/frontend/dist;
     index index.html;
 
     # ── Security headers ───────────────────────────────────────────────────

@@ -65,7 +65,7 @@ def test_push(request: Request, current_user: models.User = Depends(get_current_
     notify_user_push(
         db,
         current_user.address,
-        "🔔 Safelog Test",
+        "🔔 Kryptolog Test",
         "Push notifications are working!",
         {"type": "test"}
     )

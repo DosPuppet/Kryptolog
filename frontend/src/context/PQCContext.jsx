@@ -111,7 +111,7 @@ export const PQCProvider = ({ children }) => {
         const { nonce } = await nonceRes.json();
 
         // 2. Sign Nonce
-        const message = `Sign in to Secure Log App with nonce: ${nonce}`;
+        const message = `Sign in to Kryptolog with nonce: ${nonce}`;
         const signature = await signFn(message);
 
         // 3. Verify on Backend

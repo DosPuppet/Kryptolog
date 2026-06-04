@@ -1,10 +1,10 @@
 #!/bin/bash
-# Unified startup script for Safelog using PM2
+# Unified startup script for Kryptolog using PM2
 
 # Ensure we are in the project root
 cd "$(dirname "$0")"
 
-echo "=== Safelog Ecosystem Startup ==="
+echo "=== Kryptolog Ecosystem Startup ==="
 
 # 1. Check for PM2
 if ! command -v pm2 &> /dev/null; then
@@ -25,10 +25,10 @@ fi
 export ALLOWED_ORIGINS="${ALLOWED_ORIGINS:-http://localhost:5173,http://127.0.0.1:5173}"
 
 # ML-DSA-44 signing runs in-process via liboqs. For a persistent server key,
-# run `python backend/generate_server_keys.py` and set SAFELOG_ML_DSA_* (in
+# run `python backend/generate_server_keys.py` and set KRYPTOLOG_ML_DSA_* (in
 # backend/.env or the environment); otherwise an ephemeral key is used.
-if [ -z "$SAFELOG_ML_DSA_SECRET_KEY" ]; then
-    echo "WARNING: SAFELOG_ML_DSA_SECRET_KEY not set — backend will use an ephemeral server key."
+if [ -z "$KRYPTOLOG_ML_DSA_SECRET_KEY" ]; then
+    echo "WARNING: KRYPTOLOG_ML_DSA_SECRET_KEY not set — backend will use an ephemeral server key."
 fi
 
 echo "Environment initialized."

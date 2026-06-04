@@ -51,7 +51,7 @@ export const Web3Provider = ({ children }) => {
         const { nonce } = await nonceRes.json();
 
         // 2. Sign Nonce
-        const message = `Sign in to Secure Log App with nonce: ${nonce}`;
+        const message = `Sign in to Kryptolog with nonce: ${nonce}`;
         const signature = await signMessage(message, account);
 
         // 3. Get Encryption Public Key

@@ -555,7 +555,7 @@ export const checkPrfSupport = async () => {
  * Returns:
  *   PRF mode:      { mode: 'prf',      credentialId, prfKey (hex), prfSalt (hex) }
  *   Fallback mode: { mode: 'fallback', credentialId }
- *   (In fallback mode, the random key is stored in localStorage under 'safelog_bio_fallback_key')
+ *   (In fallback mode, the random key is stored in localStorage under 'kryptolog_bio_fallback_key')
  */
 export const registerBiometricCredential = async (username) => {
     const challenge = crypto.getRandomValues(new Uint8Array(32));
@@ -613,7 +613,7 @@ export const registerBiometricCredential = async (username) => {
     // SECURITY NOTE: This key is stored in localStorage and is not hardware-bound.
     const fallbackKeyBytes = crypto.getRandomValues(new Uint8Array(32));
     const fallbackKey = toHex(fallbackKeyBytes);
-    localStorage.setItem('safelog_bio_fallback_key', fallbackKey);
+    localStorage.setItem('kryptolog_bio_fallback_key', fallbackKey);
 
     return {
         mode: 'fallback',
@@ -668,7 +668,7 @@ export const getBiometricKey = async (credentialId, prfSaltHex, mode = 'prf') =>
     }
 
     // Fallback mode: assertion succeeded (biometric verified), now read key from localStorage
-    const fallbackKey = localStorage.getItem('safelog_bio_fallback_key');
+    const fallbackKey = localStorage.getItem('kryptolog_bio_fallback_key');
     if (!fallbackKey) {
         throw new Error("Biometric fallback key not found. Please re-enable biometrics.");
     }

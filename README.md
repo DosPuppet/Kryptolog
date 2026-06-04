@@ -1,4 +1,4 @@
-# SafeLog
+# Kryptolog
 
 A secure secret management and document signing platform built on **NIST FIPS post-quantum cryptography** — ML-KEM-768 (FIPS 203) and ML-DSA-44 (FIPS 204).
 
@@ -9,7 +9,7 @@ Crypto runs on audited, standards-based libraries: [`@noble/post-quantum`](https
 ## Architecture
 
 ```
-safelog/
+kryptolog/
 ├── backend/          Python FastAPI API (in-process ML-DSA via liboqs)
 ├── frontend/         React 19 SPA (Vite + TailwindCSS 4)
 └── trustkeys/        Chrome/Brave extension (MV3, React 18)
@@ -80,8 +80,8 @@ The application runs **2 processes locally**: a FastAPI REST API and a Vite dev 
 ### 1. Clone the repository
 
 ```bash
-git clone https://github.com/yourusername/safelog.git
-cd safelog
+git clone https://github.com/yourusername/kryptolog.git
+cd kryptolog
 ```
 
 ### 2. Backend setup
@@ -115,8 +115,8 @@ Generate them once and paste both lines into `backend/.env`:
 
 ```bash
 python generate_server_keys.py
-# -> SAFELOG_ML_DSA_PUBLIC_KEY=...
-# -> SAFELOG_ML_DSA_SECRET_KEY=...   (treat like any production secret)
+# -> KRYPTOLOG_ML_DSA_PUBLIC_KEY=...
+# -> KRYPTOLOG_ML_DSA_SECRET_KEY=...   (treat like any production secret)
 ```
 
 If these are unset the backend falls back to an **ephemeral** key — fine for a
@@ -165,7 +165,7 @@ Then load in Chrome/Brave:
 
 ## Running the Application
 
-The recommended way to run the entire Safelog ecosystem (FastAPI Backend and Vite Frontend) is using the unified PM2 script.
+The recommended way to run the entire Kryptolog ecosystem (FastAPI Backend and Vite Frontend) is using the unified PM2 script.
 
 ### Unified Startup (Recommended)
 
@@ -291,12 +291,12 @@ alembic downgrade -1
 
 | Variable | Required | Default | Description |
 |----------|----------|---------|-------------|
-| `SAFELOG_ML_DSA_PUBLIC_KEY` | Recommended | – | Server ML-DSA-44 public key (hex). From `generate_server_keys.py`. |
-| `SAFELOG_ML_DSA_SECRET_KEY` | Recommended | – | Server ML-DSA-44 secret key (hex). Forges JWTs if leaked — treat as a production secret. Unset ⇒ ephemeral key, JWTs reset on restart. |
+| `KRYPTOLOG_ML_DSA_PUBLIC_KEY` | Recommended | – | Server ML-DSA-44 public key (hex). From `generate_server_keys.py`. |
+| `KRYPTOLOG_ML_DSA_SECRET_KEY` | Recommended | – | Server ML-DSA-44 secret key (hex). Forges JWTs if leaked — treat as a production secret. Unset ⇒ ephemeral key, JWTs reset on restart. |
 | `ALLOWED_ORIGINS` | No | `http://localhost:5173` | Comma-separated CORS origins |
 | `VAPID_PUBLIC_KEY` | No | – | Web Push VAPID public key (required for push notifications) |
 | `VAPID_PRIVATE_KEY` | No | – | Web Push VAPID private key |
-| `VAPID_SUBJECT` | No | `mailto:admin@safelog.io` | Web Push VAPID subject (contact email/URL) |
+| `VAPID_SUBJECT` | No | `mailto:admin@kryptolog.io` | Web Push VAPID subject (contact email/URL) |
 | `GOOGLE_CLIENT_ID` | No | – | Google OAuth client ID (for MPC recovery, currently disabled) |
 
 ### Frontend (`frontend/.env`)

@@ -32,7 +32,7 @@ export const NotificationProvider = ({ children }) => {
     const subscribe = useCallback(async () => {
         setError(null);
         // Clear opt-out flag since user is explicitly subscribing
-        localStorage.removeItem('safelog_push_disabled');
+        localStorage.removeItem('kryptolog_push_disabled');
         if (!('serviceWorker' in navigator) || !('PushManager' in window)) {
             const msg = 'Push messaging is not supported in this browser.';
             console.warn(msg);
@@ -89,7 +89,7 @@ export const NotificationProvider = ({ children }) => {
     }, [token]);
 
     useEffect(() => {
-        if (isAuthenticated && permission === 'granted' && !localStorage.getItem('safelog_push_disabled')) {
+        if (isAuthenticated && permission === 'granted' && !localStorage.getItem('kryptolog_push_disabled')) {
             // Check if we already have a subscription on mount
             if ('serviceWorker' in navigator) {
                 navigator.serviceWorker.ready.then(reg => {
@@ -133,7 +133,7 @@ export const NotificationProvider = ({ children }) => {
 
             setSubscription(null);
             // Persist user's opt-out so auto-subscribe doesn't re-enable on reload
-            localStorage.setItem('safelog_push_disabled', 'true');
+            localStorage.setItem('kryptolog_push_disabled', 'true');
         } catch (error) {
             console.error('Failed to unsubscribe:', error);
             setError('Failed to unsubscribe.');

@@ -129,7 +129,7 @@ def test_login_challenge_real_verification():
     Calls verify_pqc_signature directly: the autouse conftest fixture stubs the
     higher-level verify_signature, but the PQC primitive underneath is real."""
     nonce = auth.generate_nonce()
-    message = f"Sign in to Secure Log App with nonce: {nonce}".encode("utf-8")
+    message = f"Sign in to Kryptolog with nonce: {nonce}".encode("utf-8")
     with oqs.Signature(SIG_ALG) as client:
         pk = client.generate_keypair()
         sig = client.sign(message)

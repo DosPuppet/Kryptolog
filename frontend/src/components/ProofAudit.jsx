@@ -53,9 +53,9 @@ export default function ProofAudit() {
         setResults(null);
 
         try {
-            if (proofData.type === 'safelog_signed_document_proof') {
+            if (proofData.type === 'kryptolog_signed_document_proof') {
                 await verifySingleSignature(proofData);
-            } else if (proofData.type === 'safelog_multisig_proof') {
+            } else if (proofData.type === 'kryptolog_multisig_proof') {
                 await verifyMultisigProof(proofData);
             } else {
                 setError('Unknown proof type: ' + (proofData.type || 'missing'));
@@ -198,7 +198,7 @@ export default function ProofAudit() {
         if (!file) return;
 
         if (!file.name.endsWith('.json') && !file.type.includes('json')) {
-            setError('Please upload a .safelog-proof.json file');
+            setError('Please upload a .kryptolog-proof.json file');
             return;
         }
 
@@ -206,8 +206,8 @@ export default function ProofAudit() {
             const text = await file.text();
             const data = JSON.parse(text);
 
-            if (!data.type || !data.type.startsWith('safelog_')) {
-                setError('Not a valid SafeLog proof file. Expected "type" field starting with "safelog_".');
+            if (!data.type || !data.type.startsWith('kryptolog_')) {
+                setError('Not a valid Kryptolog proof file. Expected "type" field starting with "kryptolog_".');
                 return;
             }
 
@@ -232,7 +232,7 @@ export default function ProofAudit() {
         <div className="space-y-6">
             <h2 className="text-xl font-bold text-slate-900 dark:text-white">Proof Audit</h2>
             <p className="text-sm text-slate-500">
-                Upload a <code className="px-1.5 py-0.5 bg-slate-100 dark:bg-slate-750 rounded text-xs">.safelog-proof.json</code> file
+                Upload a <code className="px-1.5 py-0.5 bg-slate-100 dark:bg-slate-750 rounded text-xs">.kryptolog-proof.json</code> file
                 to verify its cryptographic signatures offline.
             </p>
 

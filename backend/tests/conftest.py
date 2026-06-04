@@ -1,5 +1,5 @@
 """
-Shared test fixtures for Safelog backend tests.
+Shared test fixtures for Kryptolog backend tests.
 
 Uses an in-memory SQLite database. PQC signing now runs in-process via liboqs
 (ML-DSA-44) — there is no sidecar to mock. We only stub the login-challenge

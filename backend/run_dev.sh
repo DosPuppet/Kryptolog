@@ -15,9 +15,9 @@ fi
 cd "$(dirname "$0")"
 
 # ML-DSA-44 signing runs in-process via liboqs (no sidecar). For a persistent
-# dev key, run `python generate_server_keys.py` and set SAFELOG_ML_DSA_* in .env.
-if [ -z "$SAFELOG_ML_DSA_SECRET_KEY" ]; then
-    echo "WARNING: SAFELOG_ML_DSA_SECRET_KEY not set — using an ephemeral server key (JWTs reset on restart)."
+# dev key, run `python generate_server_keys.py` and set KRYPTOLOG_ML_DSA_* in .env.
+if [ -z "$KRYPTOLOG_ML_DSA_SECRET_KEY" ]; then
+    echo "WARNING: KRYPTOLOG_ML_DSA_SECRET_KEY not set — using an ephemeral server key (JWTs reset on restart)."
 fi
 
 # Start FastAPI Backend (Increase HTTP Header Size for large ML-DSA JWTs)

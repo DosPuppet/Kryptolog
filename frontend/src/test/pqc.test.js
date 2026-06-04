@@ -49,7 +49,7 @@ describe('FIPS size conformance', () => {
 describe('ML-DSA-44 sign/verify', () => {
   it('round-trips and rejects tampering', async () => {
     const { publicKey, privateKey } = await generateDilithiumKeyPair();
-    const msg = 'Sign in to Secure Log App with nonce: 0123456789abcdef';
+    const msg = 'Sign in to Kryptolog with nonce: 0123456789abcdef';
     const sig = await signMessagePQC(msg, privateKey);
     expect(fromHexLocal(sig).length).toBe(2420);
     expect(await verifySignaturePQC(msg, sig, publicKey)).toBe(true);
