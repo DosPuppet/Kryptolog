@@ -5,6 +5,7 @@ export const API_ENDPOINTS = {
     AUTH: {
         NONCE: (address) => `${API_BASE_URL}/auth/nonce/${address}`,
         LOGIN: `${API_BASE_URL}/auth/login`,
+        LOGOUT: `${API_BASE_URL}/auth/logout`,
     },
     USERS: {
         GET: (address) => `${API_BASE_URL}/users/${address}`,

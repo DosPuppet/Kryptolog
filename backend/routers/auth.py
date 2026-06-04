@@ -1,5 +1,5 @@
 from fastapi import APIRouter, Depends, HTTPException, status, Request
-from dependencies import limiter
+from dependencies import limiter, get_current_user
 from sqlalchemy.orm import Session
 from datetime import datetime, timezone, timedelta
 import models, schemas, auth
@@ -85,11 +85,22 @@ def login(request: Request, login_req: schemas.LoginRequest, db: Session = Depen
     
     access_token_expires = timedelta(minutes=auth.ACCESS_TOKEN_EXPIRE_MINUTES)
     access_token = auth.create_access_token(
-        data={"sub": user.address}, expires_delta=access_token_expires
+        data={"sub": user.address, "tv": user.token_version or 0},
+        expires_delta=access_token_expires
     )
     if access_token is None:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Token signing failed. PQC service may be unavailable."
+            detail="Token signing failed."
         )
     return {"access_token": access_token, "token_type": "bearer", "user": user}
+
+
+@router.post("/logout")
+@limiter.limit("20/minute")
+def logout(request: Request, current_user: models.User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """Revoke all of this user's tokens by bumping their token_version.
+    Existing JWTs (carrying the old tv) stop validating immediately."""
+    current_user.token_version = (current_user.token_version or 0) + 1
+    db.commit()
+    return {"status": "ok"}

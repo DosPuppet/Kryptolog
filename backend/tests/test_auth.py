@@ -82,3 +82,24 @@ class TestLogin:
     def test_login_default_username_from_address(self, client):
         token, user = do_login(client, TEST_USER_ADDRESS, TEST_ENCRYPTION_KEY)
         assert user["username"] == TEST_USER_ADDRESS.lower()[:7]
+
+
+class TestTokenRevocation:
+    def test_logout_revokes_token(self, client):
+        token, _ = do_login(client, TEST_USER_ADDRESS, TEST_ENCRYPTION_KEY, "Alice")
+        # Token works before logout.
+        assert client.get("/secrets", headers=auth_header(token)).status_code == 200
+        # Logout bumps token_version.
+        assert client.post("/auth/logout", headers=auth_header(token)).status_code == 200
+        # The same token is now rejected (revoked).
+        assert client.get("/secrets", headers=auth_header(token)).status_code == 401
+
+    def test_relogin_after_logout_works(self, client):
+        token, _ = do_login(client, TEST_USER_ADDRESS, TEST_ENCRYPTION_KEY, "Alice")
+        client.post("/auth/logout", headers=auth_header(token))
+        # A fresh login mints a token at the new version and works again.
+        token2, _ = do_login(client, TEST_USER_ADDRESS, TEST_ENCRYPTION_KEY)
+        assert client.get("/secrets", headers=auth_header(token2)).status_code == 200
+
+    def test_logout_requires_auth(self, client):
+        assert client.post("/auth/logout").status_code == 401

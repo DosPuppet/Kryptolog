@@ -6,6 +6,7 @@ import { useTheme } from '../context/ThemeContext';
 import { useSecrets } from '../hooks/useSecrets';
 import { useMultisig } from '../hooks/useMultisig';
 import { Lock, Sun, Moon, Shield, Plus, LogOut } from 'lucide-react';
+import API_ENDPOINTS from '../config';
 
 // Components
 import GlobalProgressBar from './common/GlobalProgressBar';
@@ -42,6 +43,22 @@ export default function Dashboard({ view = 'secrets' }) {
     // Derived Logic
     const encryptionPublicKey = authType === 'trustkeys' ? kyberKey : ethKey;
     const currentDisplayAccount = authType === 'trustkeys' ? pqcAccount : currentAccount;
+
+    const handleLogout = async () => {
+        // Best-effort server-side revocation (bumps token_version so the JWT can't
+        // be reused even if it was exfiltrated), then clear client state regardless.
+        try {
+            if (token) {
+                await fetch(API_ENDPOINTS.AUTH.LOGOUT, {
+                    method: 'POST',
+                    headers: { 'Authorization': `Bearer ${token}` }
+                });
+            }
+        } catch (e) {
+            console.error("Logout revocation failed", e);
+        }
+        logout();
+    };
 
     // Custom Hooks
     const {
@@ -162,7 +179,7 @@ export default function Dashboard({ view = 'secrets' }) {
                             </div>
                         </button>
                         <button
-                            onClick={logout}
+                            onClick={handleLogout}
                             className="p-2 text-slate-400 hover:text-red-500 rounded-lg hover:bg-red-50 dark:hover:bg-red-900/20 transition-colors"
                             title="Logout"
                         >

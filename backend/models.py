@@ -18,6 +18,9 @@ class User(Base):
     address = Column(String, primary_key=True, index=True) # Ethereum address (lowercase)
     username = Column(String, nullable=True, unique=True)
     encryption_public_key = Column(String, nullable=True) # For eth_decrypt
+    # Bumped on logout / revoke-all; JWTs carry the version they were minted with
+    # and are rejected once it no longer matches (token revocation).
+    token_version = Column(Integer, nullable=False, default=0, server_default="0")
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
 
     secrets = relationship("Secret", back_populates="owner")

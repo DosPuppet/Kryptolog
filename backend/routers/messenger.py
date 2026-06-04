@@ -4,9 +4,9 @@ from sqlalchemy import or_, func, case, and_
 from sqlalchemy.orm import Session, defer, joinedload
 from typing import List
 import json
-import models, schemas, auth
-from database import get_db
-from dependencies import get_current_user
+import models, schemas
+from database import get_db, SessionLocal
+from dependencies import get_current_user, user_for_token
 from websocket_manager import manager
 from utils.push import notify_user_push
 
@@ -179,13 +179,18 @@ async def websocket_endpoint(websocket: WebSocket):
             await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
             return
 
-        payload = auth.decode_access_token(token)
-        if not payload or not payload.get("sub"):
+        # Validate the token AND enforce revocation (token_version), same as HTTP.
+        db = SessionLocal()
+        try:
+            ws_user = user_for_token(token, db)
+        finally:
+            db.close()
+        if ws_user is None:
             await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
             return
-            
-        user_address = payload.get("sub").lower()
-        
+
+        user_address = ws_user.address.lower()
+
         await manager.connect(websocket, user_address)
         try:
             while True:
