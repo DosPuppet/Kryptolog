@@ -303,6 +303,7 @@ alembic downgrade -1
 | `KRYPTOLOG_ML_DSA_PUBLIC_KEY` | Recommended | – | Server ML-DSA-44 public key (hex). From `generate_server_keys.py`. |
 | `KRYPTOLOG_ML_DSA_SECRET_KEY` | Recommended | – | Server ML-DSA-44 secret key (hex). Forges JWTs if leaked — treat as a production secret. Unset ⇒ ephemeral key, JWTs reset on restart. |
 | `ALLOWED_ORIGINS` | No | `http://localhost:5173` | Comma-separated CORS origins |
+| `TRUSTED_PROXY_IPS` | No | `127.0.0.1` | Comma-separated trusted reverse-proxy IPs. Rate limiting resolves the real client IP from `X-Real-IP`/`X-Forwarded-For` only when the direct peer is listed here (prevents header spoofing). |
 | `VAPID_PUBLIC_KEY` | No | – | Web Push VAPID public key (required for push notifications) |
 | `VAPID_PRIVATE_KEY` | No | – | Web Push VAPID private key |
 | `VAPID_SUBJECT` | No | `mailto:admin@kryptolog.io` | Web Push VAPID subject (contact email/URL) |
