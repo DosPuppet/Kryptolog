@@ -53,14 +53,25 @@ The application runs **2 processes locally**: a FastAPI REST API and a Vite dev 
 | **Timebomb Access** | Share secrets with self-destruct timers (ephemeral grants) |
 | **Signed Documents** | Create, share, and verify digitally signed documents (sign-then-encrypt) |
 | **Multisig Workflows** | N-of-N signature collection with key release on completion |
-| **E2EE Messenger** | Signal-lite protocol: AES-256-GCM session keys, ML-KEM-768 KEM, ML-DSA-44 signatures (PQC auth only) |
+| **E2EE Messenger** | Post-quantum end-to-end encryption: per-message ML-KEM-768 encapsulation → AES-256-GCM, ML-DSA-44 identity signatures, zero-knowledge relay (server stores/forwards only ciphertext). PQC auth only. |
 | **Group Channels** | Multi-user encrypted group chat with owner/admin/member roles |
 | **Push Notifications** | Web Push API (VAPID) for real-time alerts |
 | **Hardened Local Vault** | AES-256-GCM + PBKDF2-SHA-512 (600k iterations) for browser-stored keys |
 | **MPC Recovery** | Backup PQC identity via Google ID (multi-party computation) |
 | **User Profiles** | Manage usernames and PQC identities |
 
----
+### A note on the messenger's security properties
+
+The messenger uses **per-message hybrid encryption** (a fresh ML-KEM-768 encapsulation per
+message, used as the key for AES-256-GCM), with **ML-DSA-44** for identity/authentication and a
+**zero-knowledge server** that only ever sees ciphertext. This is genuine post-quantum E2EE.
+
+It is **not** a ratcheting protocol: each message is encrypted to the recipient's long-term
+ML-KEM key, so it does **not** yet provide **forward secrecy** or **post-compromise security** —
+compromise of a recipient's long-term private key would expose past and future messages. A
+post-quantum Double Ratchet (forward secrecy + post-compromise security) is designed and on the
+roadmap; see `Doc/RATCHET_DESIGN.md` on the `ratchet-dev` branch. We deliberately avoid
+"Signal-grade" framing until ratcheting ships.
 
 ## Prerequisites
 
