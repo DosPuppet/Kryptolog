@@ -130,7 +130,7 @@ export default function Dashboard({ view = 'secrets' }) {
                     <div className="w-10 h-10 bg-indigo-500/20 rounded-lg flex items-center justify-center">
                         <Lock className="w-5 h-5 text-indigo-600 dark:text-indigo-400" />
                     </div>
-                    <h1 className="text-2xl font-bold text-slate-900 dark:text-white">SecureVault</h1>
+                    <h1 className="text-2xl font-bold text-slate-900 dark:text-white">Kryptolog</h1>
                 </div>
                 <div className="flex items-center gap-4">
                     <button
