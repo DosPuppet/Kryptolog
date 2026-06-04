@@ -21,9 +21,14 @@ _SERVER_SECRET_KEY = None  # bytes
 _SERVER_PUBLIC_KEY = None  # bytes
 
 
+def _is_production() -> bool:
+    return (os.getenv("KRYPTOLOG_ENV") or "development").strip().lower() in ("production", "prod")
+
+
 def _load_server_keys():
-    """Load the server ML-DSA keypair from env, or generate an ephemeral one
-    (dev only — tokens won't survive a restart). Returns (secret_key, public_key)."""
+    """Load the server ML-DSA keypair from env. In production a persistent key is
+    mandatory (fail closed); in dev an ephemeral one is generated with a warning.
+    Returns (secret_key, public_key)."""
     global _SERVER_SECRET_KEY, _SERVER_PUBLIC_KEY
     if _SERVER_SECRET_KEY is not None and _SERVER_PUBLIC_KEY is not None:
         return _SERVER_SECRET_KEY, _SERVER_PUBLIC_KEY
@@ -34,6 +39,15 @@ def _load_server_keys():
     if sk_hex and pk_hex:
         _SERVER_SECRET_KEY = bytes.fromhex(sk_hex)
         _SERVER_PUBLIC_KEY = bytes.fromhex(pk_hex)
+    elif _is_production():
+        # Fail closed: an ephemeral key would invalidate every JWT on restart and
+        # differ per worker — silent, hard-to-debug auth breakage in production.
+        raise RuntimeError(
+            "KRYPTOLOG_ML_DSA_SECRET_KEY / KRYPTOLOG_ML_DSA_PUBLIC_KEY must be set when "
+            "KRYPTOLOG_ENV=production. Generate them with `python generate_server_keys.py` "
+            "and provide them via the environment / a secret manager. Refusing to start "
+            "with an ephemeral signing key."
+        )
     else:
         print(
             "WARNING: KRYPTOLOG_ML_DSA_SECRET_KEY / KRYPTOLOG_ML_DSA_PUBLIC_KEY not set. "

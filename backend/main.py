@@ -62,6 +62,13 @@ except Exception as e:
     except Exception as e2:
         print(f"WARNING: Alembic stamp also failed: {e2}")
 
+# ── Signing key validation (fail closed at boot in production) ──
+# auth.py is imported here as `signing` because `auth` already refers to the
+# router module above. In production this raises if no persistent key is set,
+# so the process never starts serving with an ephemeral signing key.
+import auth as signing
+signing.get_server_public_key()
+
 # ── Routers ─────────────────────────────────────────────────────
 
 app.include_router(auth.router)
