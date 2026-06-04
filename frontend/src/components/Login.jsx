@@ -109,7 +109,7 @@ export default function Login() {
                     <div className="w-16 h-16 bg-indigo-50 dark:bg-indigo-500/10 rounded-full flex items-center justify-center mb-4">
                         <Shield className="w-8 h-8 text-indigo-600 dark:text-indigo-500" />
                     </div>
-                    <h1 className="text-3xl font-bold text-slate-900 dark:text-white mb-2">SecureLog</h1>
+                    <h1 className="text-3xl font-bold text-slate-900 dark:text-white mb-2">Kryptolog</h1>
                     <p className="text-slate-500 dark:text-slate-400">
                         Secret management and document signing.
                     </p>

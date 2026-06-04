@@ -430,7 +430,7 @@ class VaultService {
 
         // 2. Register Credential (PRF or Fallback)
         const activeAcct = fullVault.accounts.find(a => a.id === fullVault.activeAccountId);
-        const name = activeAcct ? activeAcct.name : "SecureLog User";
+        const name = activeAcct ? activeAcct.name : "Kryptolog User";
 
         const { registerBiometricCredential, encryptSymmetric, checkPrfSupport } = await import('../utils/crypto');
 

@@ -566,7 +566,7 @@ export const registerBiometricCredential = async (username) => {
         publicKey: {
             challenge,
             rp: {
-                name: "SecureLog Vault",
+                name: "Kryptolog Vault",
                 id: window.location.hostname
             },
             user: {
