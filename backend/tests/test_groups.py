@@ -313,3 +313,61 @@ class TestGroupAdmin:
         # Verify get
         resp = client.get(f"/groups/{channel_id}", headers=auth_header(token1))
         assert resp.json()["name"] == "New Name"
+
+
+class TestOwnerLeave:
+    """Q-1: the owner leaving must never orphan the channel — ownership is
+    transferred to a successor, or the group is deleted if no one remains."""
+
+    def test_owner_leave_transfers_ownership(self, client, user1, user2):
+        token1, u1 = user1
+        token2, u2 = user2
+        cid = client.post("/groups", json={
+            "name": "Succession", "member_addresses": [u1["address"], u2["address"]],
+        }, headers=auth_header(token1)).json()["id"]
+
+        # Owner leaves a group that still has members.
+        resp = client.delete(f"/groups/{cid}/members/{u1['address']}", headers=auth_header(token1))
+        assert resp.status_code == 200
+
+        # Group still exists and the remaining member is now the owner.
+        data = client.get(f"/groups/{cid}", headers=auth_header(token2)).json()
+        assert data["owner_address"] == u2["address"]
+        assert not any(m["user_address"] == u1["address"] for m in data["members"])
+        assert next(m["role"] for m in data["members"] if m["user_address"] == u2["address"]) == "owner"
+
+    def test_owner_leave_prefers_admin_successor(self, client, user1, user2, user3):
+        token1, u1 = user1
+        _, u2 = user2
+        token3, u3 = user3
+        cid = client.post("/groups", json={
+            "name": "AdminSucc",
+            "member_addresses": [u1["address"], u2["address"], u3["address"]],
+        }, headers=auth_header(token1)).json()["id"]
+
+        # Promote u3 to admin, then the owner leaves.
+        client.put(f"/groups/{cid}/members/{u3['address']}/role", json={"role": "admin"}, headers=auth_header(token1))
+        resp = client.delete(f"/groups/{cid}/members/{u1['address']}", headers=auth_header(token1))
+        assert resp.status_code == 200
+
+        # The admin (u3) is promoted to owner ahead of the plain member (u2).
+        data = client.get(f"/groups/{cid}", headers=auth_header(token3)).json()
+        assert data["owner_address"] == u3["address"]
+        assert next(m["role"] for m in data["members"] if m["user_address"] == u3["address"]) == "owner"
+        assert next(m["role"] for m in data["members"] if m["user_address"] == u2["address"]) == "member"
+
+    def test_owner_leave_last_member_deletes_group(self, client, user1, user2):
+        token1, u1 = user1
+        token2, u2 = user2
+        cid = client.post("/groups", json={
+            "name": "Doomed", "member_addresses": [u1["address"], u2["address"]],
+        }, headers=auth_header(token1)).json()["id"]
+
+        # Everyone else leaves first, then the owner is the last member.
+        client.delete(f"/groups/{cid}/members/{u2['address']}", headers=auth_header(token2))
+        resp = client.delete(f"/groups/{cid}/members/{u1['address']}", headers=auth_header(token1))
+        assert resp.status_code == 200
+        assert resp.json().get("group_deleted") is True
+
+        # The group is gone.
+        assert client.get(f"/groups/{cid}", headers=auth_header(token1)).status_code == 404

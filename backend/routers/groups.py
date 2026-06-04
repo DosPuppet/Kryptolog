@@ -347,7 +347,7 @@ async def remove_member(
 ):
     channel = (
         db.query(models.GroupChannel)
-        .options(joinedload(models.GroupChannel.members))
+        .options(joinedload(models.GroupChannel.members).joinedload(models.GroupMember.user))
         .filter(models.GroupChannel.id == channel_id)
         .first()
     )
@@ -364,61 +364,65 @@ async def remove_member(
     if not target_member:
         raise HTTPException(status_code=404, detail="Member not found in group")
 
-    # Permissions: owner can remove anyone, member can remove themselves (leave)
+    # Permissions: anyone may remove themselves (leave); removing others needs owner/admin.
     is_self = target_addr == current_user.address
     if not is_self and caller_member.role not in ("owner", "admin"):
         raise HTTPException(status_code=403, detail="Only owners/admins can remove members")
 
-    # Handle Owner removal
-    if target_member.role == "owner":
-        if is_self:
-            # Owner leaving -> Delete group (or transfer?)
-            # For now, delete group logic or just leave and group becomes ownerless/deleted.
-            # Usually strict owner leaving requires transfer. 
-            # But here we focus on Admin removing Owner.
-            pass 
+    # Capture everything we need BEFORE any delete/commit — reading attributes off a
+    # deleted/expired instance afterward is the Q-2 bug.
+    target_was_owner = target_member.role == "owner"
+    remaining = [m for m in channel.members if m.user_address != target_addr]
+    remaining_addrs = [m.user_address for m in remaining]
+
+    # When the owner leaves, hand ownership off (or tear the group down) so we never
+    # leave an ownerless, unadministrable channel — the Q-1 bug.
+    new_owner_info = None
+    group_deleted = False
+
+    if target_was_owner:
+        if not remaining:
+            # Owner was the last member → delete the group (cascades to members + messages).
+            db.delete(channel)
+            group_deleted = True
         else:
-            # Admin removing Owner
-            if caller_member.role != "admin":
-                 raise HTTPException(status_code=403, detail="Only admins can remove the owner")
-            
-            # Transfer ownership to caller
-            caller_member.role = "owner"
-            db.add(caller_member)
-            
-            # Notify about ownership change
-            event_owner = {
-                "type": "GROUP_MEMBER_UPDATED",
-                "channel_id": channel_id,
-                "member": {
-                    "user_address": caller_member.user_address,
-                    "role": "owner",
-                    "username": caller_member.user.username,
-                    "joined_at": caller_member.joined_at.isoformat()
-                }
+            # Successor: the admin who removed the owner, else an existing admin,
+            # else the earliest-joined remaining member.
+            if not is_self and caller_member.role == "admin":
+                successor = caller_member
+            else:
+                successor = (
+                    next((m for m in remaining if m.role == "admin"), None)
+                    or min(remaining, key=lambda m: m.joined_at)
+                )
+            successor.role = "owner"
+            channel.owner_address = successor.user_address
+            db.add(successor)
+            db.add(channel)
+            new_owner_info = {
+                "user_address": successor.user_address,
+                "role": "owner",
+                "username": successor.user.username if successor.user else None,
+                "joined_at": successor.joined_at.isoformat(),
             }
-            # We will broadcast this below
-            
-            # Proceed to remove the old owner
-    
-    db.delete(target_member)
+
+    if not group_deleted:
+        db.delete(target_member)
     db.commit()
 
-    # Notify remaining members
-    remaining = [m.user_address for m in channel.members if m.user_address != target_addr]
-    
-    # If ownership changed, broadcast that first or with it
-    if target_member.role == "owner" and not is_self:
-         for addr in remaining:
-            await manager.send_personal_message(event_owner, addr)
-            # Also update channel owner_address in DB if we had it there?
-            # models.GroupChannel has owner_address. We should update it.
-    
-    # If we are transferring ownership, we MUST update channel.owner_address
-    if target_member.role == "owner" and not is_self:
-        channel.owner_address = caller_member.user_address
-        db.add(channel)
-        db.commit()
+    # If the group is gone there's no one left to notify.
+    if group_deleted:
+        return {"status": "ok", "group_deleted": True}
+
+    # Broadcast the ownership change first (if any), then the removal.
+    if new_owner_info:
+        owner_event = {
+            "type": "GROUP_MEMBER_UPDATED",
+            "channel_id": channel_id,
+            "member": new_owner_info,
+        }
+        for addr in remaining_addrs:
+            await manager.send_personal_message(owner_event, addr)
 
     event = {
         "type": "GROUP_MEMBER_REMOVED",
@@ -426,10 +430,10 @@ async def remove_member(
         "removed_address": target_addr,
         "removed_by": current_user.address,
     }
-    for addr in remaining:
+    for addr in remaining_addrs:
         await manager.send_personal_message(event, addr)
 
-    # Also notify the removed user
+    # Also notify the removed user (unless they removed themselves).
     if not is_self:
         await manager.send_personal_message(event, target_addr)
 
