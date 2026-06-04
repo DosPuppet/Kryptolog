@@ -4,7 +4,8 @@ import { useAuth } from '../context/AuthContext';
 import { usePQC } from '../context/PQCContext';
 import { useWeb3 } from '../context/Web3Context';
 import API_ENDPOINTS from '../config';
-import { decryptData, verifySignaturePQC, encryptData, verifyMessageEth } from '../utils/crypto';
+import { verifySignaturePQC } from '../utils/crypto';
+import { decryptData, encryptData, verifyMessageEth } from '../utils/web3';
 import { downloadChunkedFile, downloadFileByRange } from '../utils/fileChunks';
 
 const SignerVerificationBadge = ({ signer, contentToVerify }) => {
@@ -243,7 +244,8 @@ export default function MultisigWorkflow({ workflow, onClose, onUpdate, setUploa
             // We need secureDecrypt from useSecrets or import utils.
             // Since we are in a component, we can import `secureDecrypt` logic or helpers.
             // Let's use the raw utils for simplicity:
-            const { decryptData, decryptSymmetric } = await import('../utils/crypto');
+            const { decryptSymmetric } = await import('../utils/crypto');
+            const { decryptData } = await import('../utils/web3');
 
             let fileKey;
             // PQC or Eth?
@@ -306,7 +308,7 @@ export default function MultisigWorkflow({ workflow, onClose, onUpdate, setUploa
                     const { verifySignaturePQC } = await import('../utils/crypto');
                     isValid = await verifySignaturePQC(parsed.content, parsed.signature, parsed.signerPublicKey);
                 } else {
-                    const { verifyMessageEth } = await import('../utils/crypto');
+                    const { verifyMessageEth } = await import('../utils/web3');
                     const recovered = verifyMessageEth(parsed.content, parsed.signature);
                     isValid = recovered && recovered.toLowerCase() === parsed.signerPublicKey.toLowerCase();
                 }
@@ -494,7 +496,8 @@ export default function MultisigWorkflow({ workflow, onClose, onUpdate, setUploa
             const encryptedContentBlob = workflow.secret?.encrypted_data;
             if (!encryptedContentBlob) throw new Error("Secret content not found to sign.");
 
-            const { decryptSymmetric, signMessageEth } = await import('../utils/crypto');
+            const { decryptSymmetric } = await import('../utils/crypto');
+            const { signMessageEth } = await import('../utils/web3');
 
             const encDataObj = JSON.parse(encryptedContentBlob);
             const contentToSign = await decryptSymmetric(encDataObj, fileKey);

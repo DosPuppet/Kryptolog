@@ -2,7 +2,8 @@ import { useState, useEffect } from 'react';
 import { useAuth } from '../context/AuthContext';
 import { usePQC } from '../context/PQCContext';
 import API_ENDPOINTS from '../config';
-import { encryptData, decryptData, generateSymmetricKey, encryptSymmetric, decryptSymmetric } from '../utils/crypto';
+import { generateSymmetricKey, encryptSymmetric, decryptSymmetric } from '../utils/crypto';
+import { encryptData, decryptData } from '../utils/web3';
 import { uploadChunkedFile, downloadChunkedFile, uploadMultipleChunkedFiles, downloadFileByRange, CHUNK_SIZE } from '../utils/fileChunks';
 
 export function useSecrets(authType, encryptionPublicKey, pqcAccount, options = {}) {

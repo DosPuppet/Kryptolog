@@ -3,7 +3,8 @@ import { X, Search, Plus, Trash2, Check, Lock, Users, FileText, ArrowRight, Arro
 import { useAuth } from '../context/AuthContext';
 import { usePQC } from '../context/PQCContext';
 import { useWeb3 } from '../context/Web3Context';
-import { encryptData, getEncryptionPublicKey, signMessageEth, generateSymmetricKey, encryptSymmetric } from '../utils/crypto';
+import { generateSymmetricKey, encryptSymmetric } from '../utils/crypto';
+import { encryptData, getEncryptionPublicKey, signMessageEth } from '../utils/web3';
 import API_ENDPOINTS from '../config';
 import { uploadChunkedFile, uploadMultipleChunkedFiles, CHUNK_SIZE } from '../utils/fileChunks';
 

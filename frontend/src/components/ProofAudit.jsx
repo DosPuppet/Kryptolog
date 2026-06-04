@@ -1,6 +1,7 @@
 import { useState, useRef } from 'react';
 import { Upload, ShieldCheck, ShieldAlert, FileJson, User, Key, Clock, FileText, X, Loader2, FileCheck, FileWarning, Type } from 'lucide-react';
-import { verifySignaturePQC, verifyMessageEth } from '../utils/crypto';
+import { verifySignaturePQC } from '../utils/crypto';
+import { verifyMessageEth } from '../utils/web3';
 
 // Parse proof content to detect type: text, single file, or multi-file
 function parseProofContent(proofData) {
