@@ -438,28 +438,25 @@ class VaultService {
             throw new Error("Your browser does not support WebAuthn. Biometrics unavailable.");
         }
 
+        // Throws on devices without hardware-bound PRF — there is no software fallback.
         const result = await registerBiometricCredential(name);
 
-        // 3. Encrypt Password with the derived key
-        let encryptedPass;
-        if (result.mode === 'prf') {
-            encryptedPass = await encryptSymmetric(password, result.prfKey);
-        } else {
-            // Fallback: key is already in localStorage, encrypt password with it
-            const fallbackKey = localStorage.getItem('kryptolog_bio_fallback_key');
-            encryptedPass = await encryptSymmetric(password, fallbackKey);
-        }
+        // 3. Encrypt the vault password with the hardware-bound PRF key
+        const encryptedPass = await encryptSymmetric(password, result.prfKey);
 
-        // 4. Save Preferences (including mode)
+        // Clear any key left by the removed legacy fallback path.
+        localStorage.removeItem('kryptolog_bio_fallback_key');
+
+        // 4. Save Preferences
         const prefs = {
-            mode: result.mode,                    // 'prf' or 'fallback'
+            mode: 'prf',
             credentialId: result.credentialId,
             encryptedPass,
-            prfSalt: result.prfSalt || null       // Only set for PRF mode
+            prfSalt: result.prfSalt
         };
         localStorage.setItem('kryptolog_biometrics', JSON.stringify(prefs));
 
-        return result.mode; // Return mode so UI can show appropriate message
+        return 'prf';
     }
 
     async recoverPasswordWithBiometrics() {

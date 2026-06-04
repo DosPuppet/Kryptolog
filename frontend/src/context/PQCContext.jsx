@@ -378,7 +378,7 @@ export const PQCProvider = ({ children }) => {
                     const password = await requestPassword("Enter password to ENABLE FaceID/TouchID:");
                     const mode = await vaultService.enableBiometrics(password);
                     setBiometricsEnabled(true);
-                    return mode; // 'prf' or 'fallback'
+                    return mode; // always 'prf' (enableBiometrics throws on unsupported devices)
                 } else {
                     vaultService.disableBiometrics();
                     setBiometricsEnabled(false);

@@ -100,15 +100,11 @@ export default function VaultManager({ onClose }) {
                     setMsg({ type: 'success', text: "Biometrics disabled" });
                 }
             } else {
-                // manageBiometrics(true) now returns the mode
+                // Always hardware-bound (PRF); throws on unsupported devices.
                 const mode = await manageBiometrics(true);
                 setHasBiometrics(true);
                 setBiometricMode(mode);
-                if (mode === 'fallback') {
-                    setMsg({ type: 'warning', text: "Biometrics enabled in reduced-security mode. See warning below." });
-                } else {
-                    setMsg({ type: 'success', text: "Biometrics enabled! Hardware-bound key active." });
-                }
+                setMsg({ type: 'success', text: "Biometrics enabled! Hardware-bound key active." });
             }
         } catch (e) {
             setMsg({ type: 'error', text: e.message });
@@ -208,7 +204,7 @@ export default function VaultManager({ onClose }) {
                                     <div className="mb-3 flex items-center gap-2 px-3 py-2 bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800 rounded-lg text-xs text-amber-700 dark:text-amber-300">
                                         <span>⚠️</span>
                                         <div>
-                                            <strong>Reduced Security Mode</strong>: Your device doesn't support hardware-bound biometrics (WebAuthn PRF). The unlock key is stored in local storage. For maximum security, use your password directly.
+                                            <strong>Insecure legacy mode — no longer supported</strong>: this biometric setup stored an unlock key in local storage and is being retired. Please <strong>disable</strong> biometric unlock and re-enable it (only hardware-bound devices are now supported), or just use your password.
                                         </div>
                                     </div>
                                 )}

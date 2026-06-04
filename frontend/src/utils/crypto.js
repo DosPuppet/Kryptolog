@@ -548,14 +548,15 @@ export const checkPrfSupport = async () => {
 };
 
 /**
- * Creates a new WebAuthn credential.
- * Tries PRF extension first (iOS, modern desktop Chrome).
- * Falls back to a localStorage-stored random key gated by WebAuthn assertion (Android).
+ * Creates a new WebAuthn credential for biometric vault unlock.
  *
- * Returns:
- *   PRF mode:      { mode: 'prf',      credentialId, prfKey (hex), prfSalt (hex) }
- *   Fallback mode: { mode: 'fallback', credentialId }
- *   (In fallback mode, the random key is stored in localStorage under 'kryptolog_bio_fallback_key')
+ * Requires a HARDWARE-BOUND key via the WebAuthn PRF extension (iOS, modern
+ * desktop Chrome/Firefox). There is intentionally no software fallback: a
+ * non-hardware-bound key would have to live in JS-readable storage, which
+ * defeats the vault's at-rest encryption. On devices without PRF this throws
+ * and biometric unlock is simply not offered.
+ *
+ * Returns: { mode: 'prf', credentialId, prfKey (hex), prfSalt (hex) }
  */
 export const registerBiometricCredential = async (username) => {
     const challenge = crypto.getRandomValues(new Uint8Array(32));
@@ -596,7 +597,7 @@ export const registerBiometricCredential = async (username) => {
     const credential = await navigator.credentials.create(creationOptions);
     const extResults = credential.getClientExtensionResults();
 
-    // --- PRF path (iOS, desktop Chrome, Firefox) ---
+    // Hardware-bound PRF path (iOS, desktop Chrome, Firefox).
     if (extResults.prf && extResults.prf.results && extResults.prf.results.first) {
         const prfBytes = new Uint8Array(extResults.prf.results.first);
         return {
@@ -607,37 +608,39 @@ export const registerBiometricCredential = async (username) => {
         };
     }
 
-    // --- Fallback path (Android Chrome without PRF support) ---
-    // Generate a random key and store it in localStorage.
-    // The WebAuthn assertion (biometric check) acts as the UI gate.
-    // SECURITY NOTE: This key is stored in localStorage and is not hardware-bound.
-    const fallbackKeyBytes = crypto.getRandomValues(new Uint8Array(32));
-    const fallbackKey = toHex(fallbackKeyBytes);
-    localStorage.setItem('kryptolog_bio_fallback_key', fallbackKey);
-
-    return {
-        mode: 'fallback',
-        credentialId: credential.id
-    };
+    // No PRF => no hardware-bound key. We deliberately do NOT fall back to a
+    // localStorage-stored key (that would expose a vault-unlocking secret to any
+    // XSS / local read). Biometric unlock is unavailable; the user uses their password.
+    throw new Error(
+        "This device doesn't support hardware-bound biometric keys (WebAuthn PRF), " +
+        "so biometric unlock isn't available here. You can still unlock with your password."
+    );
 };
 
 /**
- * Authenticates with an existing credential.
- * mode: 'prf'      → derives key from PRF extension result (hardware-bound)
- * mode: 'fallback' → reads key from localStorage after assertion succeeds (biometric gate only)
+ * Authenticates with an existing credential and derives the hardware-bound key
+ * from the WebAuthn PRF extension result. Returns the key as hex.
  *
- * Returns the key as hex.
+ * `mode` exists only to reject legacy 'fallback' credentials (the insecure
+ * localStorage path has been removed) — those users must re-enable biometrics.
  */
 export const getBiometricKey = async (credentialId, prfSaltHex, mode = 'prf') => {
+    if (mode !== 'prf') {
+        throw new Error(
+            "This biometric credential uses an unsupported legacy mode. Please disable " +
+            "and re-enable biometric unlock to use a hardware-bound key."
+        );
+    }
+
     const challenge = crypto.getRandomValues(new Uint8Array(32));
 
-    const extensions = mode === 'prf' ? {
+    const extensions = {
         prf: {
             eval: {
                 first: prfSaltHex ? fromHex(prfSaltHex) : new Uint8Array(32).fill(1)
             }
         }
-    } : {};
+    };
 
     const requestOptions = {
         publicKey: {
@@ -658,21 +661,11 @@ export const getBiometricKey = async (credentialId, prfSaltHex, mode = 'prf') =>
     // This triggers the biometric prompt on the device
     const assertion = await navigator.credentials.get(requestOptions);
 
-    if (mode === 'prf') {
-        const extResults = assertion.getClientExtensionResults();
-        if (!extResults.prf || !extResults.prf.results || !extResults.prf.results.first) {
-            throw new Error("Biometric auth succeeded but PRF key was not returned. Your device may not support hardware-bound biometrics.");
-        }
-        const prfBytes = new Uint8Array(extResults.prf.results.first);
-        return toHex(prfBytes);
+    const extResults = assertion.getClientExtensionResults();
+    if (!extResults.prf || !extResults.prf.results || !extResults.prf.results.first) {
+        throw new Error("Biometric auth succeeded but PRF key was not returned. Your device may not support hardware-bound biometrics.");
     }
-
-    // Fallback mode: assertion succeeded (biometric verified), now read key from localStorage
-    const fallbackKey = localStorage.getItem('kryptolog_bio_fallback_key');
-    if (!fallbackKey) {
-        throw new Error("Biometric fallback key not found. Please re-enable biometrics.");
-    }
-    return fallbackKey;
+    return toHex(new Uint8Array(extResults.prf.results.first));
 };
 
 // Helper for Base64URL -> Uint8Array
