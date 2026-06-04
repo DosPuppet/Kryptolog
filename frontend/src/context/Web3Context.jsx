@@ -50,11 +50,7 @@ export const Web3Provider = ({ children }) => {
         const nonceRes = await fetch(API_ENDPOINTS.AUTH.NONCE(account));
         const { nonce } = await nonceRes.json();
 
-        // 2. Sign Nonce
-        const message = `Sign in to Kryptolog with nonce: ${nonce}`;
-        const signature = await signMessage(message, account);
-
-        // 3. Get Encryption Public Key
+        // 2. Get Encryption Public Key FIRST so it can be bound into the signature.
         let pubKey = encryptionPublicKey;
         if (!pubKey) {
             try {
@@ -64,6 +60,11 @@ export const Web3Provider = ({ children }) => {
                 console.warn("User rejected public key request", e);
             }
         }
+
+        // 3. Sign Nonce — bind the encryption key into the challenge (M-2). Must match server.
+        const message = `Sign in to Kryptolog with nonce: ${nonce}` +
+            (pubKey ? `\nEncryption key: ${pubKey}` : '');
+        const signature = await signMessage(message, account);
 
         // 4. Verify on Backend
         const loginRes = await fetch(API_ENDPOINTS.AUTH.LOGIN, {

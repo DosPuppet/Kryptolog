@@ -12,12 +12,11 @@ router = APIRouter(
     tags=["users"]
 )
 
-@router.put("/me/public-key")
-def update_public_key(public_key: str, current_user: models.User = Depends(get_current_user), db: Session = Depends(get_db)):
-    user = current_user
-    user.encryption_public_key = public_key
-    db.commit()
-    return {"status": "ok"}
+# NOTE: a free-form `PUT /users/me/public-key` setter used to live here. It was
+# unused by any client and let an authenticated session change its ML-KEM key
+# without a signature — undermining the login-time key binding (M-2) and lacking
+# input validation (M-5). Removed: the encryption key is set only at login, where
+# the identity's signature now covers it (see auth._login_message).
 
 @router.put("/{address}", response_model=schemas.UserResponse)
 def update_user(address: str, user_update: schemas.UserUpdate, current_user: models.User = Depends(get_current_user), db: Session = Depends(get_db)):

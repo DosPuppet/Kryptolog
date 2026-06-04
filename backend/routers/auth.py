@@ -47,7 +47,7 @@ def login(request: Request, login_req: schemas.LoginRequest, db: Session = Depen
     if login_req.nonce != nonce_entry.nonce:
          raise HTTPException(status_code=400, detail="Invalid nonce.")
 
-    if not auth.verify_signature(address, login_req.nonce, login_req.signature):
+    if not auth.verify_signature(address, login_req.nonce, login_req.signature, login_req.encryption_public_key):
         raise HTTPException(status_code=401, detail="Invalid signature")
     
     # Cleanup nonce (Anti-replay)

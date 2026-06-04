@@ -140,3 +140,23 @@ def test_login_challenge_real_verification():
     assert auth.verify_pqc_signature(pk_hex, "00" * 16, sig_hex) is False
     # garbage signature must not raise, just fail
     assert auth.verify_pqc_signature(pk_hex, nonce, "not-hex") is False
+
+
+def test_login_challenge_binds_encryption_key():
+    """M-2: when an encryption (ML-KEM) key is supplied it is folded into the
+    signed challenge, so a signature is valid only for the exact key it covers —
+    a network attacker can't substitute a different KEM key at login."""
+    nonce = auth.generate_nonce()
+    enc_key = "kem_pub_" + "ab" * 600  # stand-in ML-KEM public key (hex-ish)
+    message = auth._login_message(nonce, enc_key).encode("utf-8")
+    with oqs.Signature(SIG_ALG) as client:
+        pk = client.generate_keypair()
+        sig = client.sign(message)
+    pk_hex, sig_hex = pk.hex(), sig.hex()
+
+    # Valid only with the exact bound key.
+    assert auth.verify_pqc_signature(pk_hex, nonce, sig_hex, enc_key) is True
+    # Substituting a different encryption key fails (the binding holds).
+    assert auth.verify_pqc_signature(pk_hex, nonce, sig_hex, "different_kem_key") is False
+    # Dropping the key (downgrade attempt) also fails — the signature covers it.
+    assert auth.verify_pqc_signature(pk_hex, nonce, sig_hex, None) is False

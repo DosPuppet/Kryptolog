@@ -83,11 +83,23 @@ def generate_nonce():
     return secrets.token_hex(16)
 
 
-def verify_pqc_signature(public_key: str, nonce: str, signature: str) -> bool:
-    """Verify a client login challenge: ML-DSA-44 over the login message.
+def _login_message(nonce: str, encryption_public_key: str | None = None) -> str:
+    """Canonical login challenge. When an encryption (ML-KEM) key is supplied it
+    is folded in, so the identity's signature cryptographically authorizes that
+    key — a network attacker can't substitute their own KEM key at login (M-2).
+    Must be byte-identical to what the clients build."""
+    msg = f"Sign in to Kryptolog with nonce: {nonce}"
+    if encryption_public_key:
+        msg += f"\nEncryption key: {encryption_public_key}"
+    return msg
+
+
+def verify_pqc_signature(public_key: str, nonce: str, signature: str,
+                         encryption_public_key: str | None = None) -> bool:
+    """Verify a client login challenge: ML-DSA-44 over the (key-bound) login message.
     `public_key` and `signature` are hex; the client signs with @noble/post-quantum."""
     try:
-        message = f"Sign in to Kryptolog with nonce: {nonce}".encode("utf-8")
+        message = _login_message(nonce, encryption_public_key).encode("utf-8")
         sig_bytes = bytes.fromhex(signature)
         pk_bytes = bytes.fromhex(public_key)
         with oqs.Signature(SIG_ALG) as verifier:
@@ -97,14 +109,15 @@ def verify_pqc_signature(public_key: str, nonce: str, signature: str) -> bool:
         return False
 
 
-def verify_signature(address: str, nonce: str, signature: str) -> bool:
+def verify_signature(address: str, nonce: str, signature: str,
+                     encryption_public_key: str | None = None) -> bool:
     # A PQC identity is the ML-DSA public key (1312 bytes => 2624 hex chars);
     # an Ethereum address is 42 chars. Dispatch on length, as before.
     if len(address) > 42:
-        return verify_pqc_signature(address, nonce, signature)
+        return verify_pqc_signature(address, nonce, signature, encryption_public_key)
 
     try:
-        message_text = f"Sign in to Kryptolog with nonce: {nonce}"
+        message_text = _login_message(nonce, encryption_public_key)
         encoded_message = encode_defunct(text=message_text)
         recovered_address = Account.recover_message(encoded_message, signature=signature)
         return recovered_address.lower() == address.lower()

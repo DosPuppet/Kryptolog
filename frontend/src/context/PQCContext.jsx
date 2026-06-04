@@ -110,8 +110,10 @@ export const PQCProvider = ({ children }) => {
         if (!nonceRes.ok) throw new Error("Failed to fetch nonce");
         const { nonce } = await nonceRes.json();
 
-        // 2. Sign Nonce
-        const message = `Sign in to Kryptolog with nonce: ${nonce}`;
+        // 2. Sign Nonce — bind the encryption (ML-KEM) key into the challenge so
+        //    the identity's signature authorizes it (M-2). Must match the server.
+        const message = `Sign in to Kryptolog with nonce: ${nonce}` +
+            (encryptionKey ? `\nEncryption key: ${encryptionKey}` : '');
         const signature = await signFn(message);
 
         // 3. Verify on Backend
