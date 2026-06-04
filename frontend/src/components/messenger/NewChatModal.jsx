@@ -4,7 +4,7 @@ import { useAuth } from '../../context/AuthContext';
 import API_ENDPOINTS from '../../config';
 
 const NewChatModal = ({ isOpen, onClose, onStartChat }) => {
-    const { user } = useAuth();
+    const { user, token } = useAuth();
     const [searchQuery, setSearchQuery] = useState('');
     const [searchResults, setSearchResults] = useState([]);
     const [searching, setSearching] = useState(false);
@@ -12,7 +12,9 @@ const NewChatModal = ({ isOpen, onClose, onStartChat }) => {
     const searchUsers = async (query) => {
         setSearching(true);
         try {
-            const res = await fetch(`${API_ENDPOINTS.USERS.LIST}?search=${encodeURIComponent(query)}&only_pqc=true&limit=10`);
+            const res = await fetch(`${API_ENDPOINTS.USERS.LIST}?search=${encodeURIComponent(query)}&only_pqc=true&limit=10`, {
+                headers: { 'Authorization': `Bearer ${token}` }
+            });
             const data = await res.json();
             setSearchResults(data.filter(u => u.address !== user.address));
         } catch (e) {

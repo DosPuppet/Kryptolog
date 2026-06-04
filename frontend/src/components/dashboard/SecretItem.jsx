@@ -1,11 +1,13 @@
 import React, { useState } from 'react';
 import { Lock, Unlock, Copy, Check, FileText, Share2, Trash2, FileSignature, BadgeCheck, AlertTriangle, Download, Info, Users, ShieldCheck, ChevronDown } from 'lucide-react';
 import { useTheme } from '../../context/ThemeContext';
+import { useAuth } from '../../context/AuthContext';
 import { verifySignaturePQC } from '../../utils/crypto';
 import API_ENDPOINTS from '../../config';
 
 const SecretItem = ({ secret, decryptedContent, onDecrypt, onDelete, onShare, onViewDetails, authType, viewMode = 'grid', isSharedView }) => {
     const { theme } = useTheme();
+    const { token } = useAuth();
     const [verificationResult, setVerificationResult] = useState(null);
     const [verifying, setVerifying] = useState(false);
     const [expanded, setExpanded] = useState(false);
@@ -32,7 +34,10 @@ const SecretItem = ({ secret, decryptedContent, onDecrypt, onDelete, onShare, on
             try {
                 const res = await fetch(API_ENDPOINTS.USERS.RESOLVE, {
                     method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'Authorization': `Bearer ${token}`
+                    },
                     body: JSON.stringify({ address: docData.signerPublicKey })
                 });
                 if (res.ok) signerInfo = await res.json();

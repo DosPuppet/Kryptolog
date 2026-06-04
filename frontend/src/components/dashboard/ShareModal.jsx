@@ -19,7 +19,9 @@ const ShareModal = ({ isOpen, onClose, secret, onShare }) => {
             const url = query
                 ? `${API_ENDPOINTS.USERS.LIST}?search=${encodeURIComponent(query)}&limit=${limit}`
                 : `${API_ENDPOINTS.USERS.LIST}?limit=${limit}`;
-            const res = await fetch(url);
+            const res = await fetch(url, {
+                headers: { 'Authorization': `Bearer ${token}` }
+            });
             const data = await res.json();
             setSearchResults(data.filter(u => u.address !== user.address));
         } catch (error) {

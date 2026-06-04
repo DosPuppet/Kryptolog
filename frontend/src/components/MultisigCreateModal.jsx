@@ -76,7 +76,9 @@ export default function MultisigCreateModal({ isOpen, onClose, onCreated }) {
     const handleSearch = async (query) => {
         if (!query) return;
         try {
-            const res = await fetch(`${API_ENDPOINTS.USERS.LIST}?search=${encodeURIComponent(query)}&limit=5`);
+            const res = await fetch(`${API_ENDPOINTS.USERS.LIST}?search=${encodeURIComponent(query)}&limit=5`, {
+                headers: { 'Authorization': `Bearer ${token}` }
+            });
             const data = await res.json();
             // Filter out self and already added
             const added = step === 1 ? signers : recipients;

@@ -43,8 +43,12 @@ def update_user(address: str, user_update: schemas.UserUpdate, current_user: mod
     db.refresh(user)
     return user
 
+# Minimum length for a directory substring search — avoids dumping the whole
+# user directory via a 1-char `LIKE %x%` (anti-enumeration).
+MIN_SEARCH_LEN = 2
+
 @router.get("/{address}", response_model=schemas.UserResponse)
-def get_user(address: str, db: Session = Depends(get_db)):
+def get_user(address: str, current_user: models.User = Depends(get_current_user), db: Session = Depends(get_db)):
     user = db.query(models.User).filter(models.User.address == address.lower()).first()
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
@@ -52,32 +56,36 @@ def get_user(address: str, db: Session = Depends(get_db)):
 
 @router.get("", response_model=List[schemas.UserResponse])
 @limiter.limit("30/minute")
-def list_users(request: Request, search: str = None, only_pqc: bool = False, limit: int = 5, offset: int = 0, db: Session = Depends(get_db)):
+def list_users(request: Request, search: str = None, only_pqc: bool = False, limit: int = 5, offset: int = 0, current_user: models.User = Depends(get_current_user), db: Session = Depends(get_db)):
     if limit > 100:
         limit = 100
     query = db.query(models.User)
-    
-    if search:
-        search_pattern = f"%{search.lower()}%"
+
+    if search is not None:
+        term = search.strip()
+        # Reject too-short substring searches to limit directory enumeration.
+        if len(term) < MIN_SEARCH_LEN:
+            return []
+        search_pattern = f"%{term.lower()}%"
         query = query.filter(
-            (models.User.address.like(search_pattern)) | 
+            (models.User.address.like(search_pattern)) |
             (models.User.username.like(search_pattern))
         )
-    
+
     if only_pqc:
         # PQC keys (Kyber/Dilithium) are significantly larger than ETH public keys (x25519/SECP256K1)
         # Kyber768 PK is ~1088 bytes (hex ~2176), SECP256K1 is ~33 bytes (hex ~66).
         query = query.filter(func.length(models.User.encryption_public_key) > 500)
-    
+
     return query.limit(limit).offset(offset).all()
 
 class UserResolveRequest(schemas.BaseModel):
     address: str
 
 @router.post("/resolve", response_model=schemas.UserResponse)
-@limiter.limit("60/minute")
-def resolve_user(request: Request, req: UserResolveRequest, db: Session = Depends(get_db)):
-    # Helper to resolve user by address (Eth or PQC)
+@limiter.limit("30/minute")
+def resolve_user(request: Request, req: UserResolveRequest, current_user: models.User = Depends(get_current_user), db: Session = Depends(get_db)):
+    # Exact-match resolve of a user by address (Eth or PQC). Auth-gated.
     user = db.query(models.User).filter(models.User.address == req.address).first()
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
