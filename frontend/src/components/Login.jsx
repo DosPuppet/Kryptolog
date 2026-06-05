@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState } from 'react';
 import { useWeb3 } from '../context/Web3Context';
 import { usePQC } from '../context/PQCContext';
 import { useTheme } from '../context/ThemeContext';
@@ -20,11 +20,12 @@ export default function Login() {
     const [importJson, setImportJson] = useState(null);
     const [importFileName, setImportFileName] = useState('');
 
-    useEffect(() => {
-        if (showVaultModal) {
-            setVaultMode(hasLocalVault ? 'unlock' : 'create');
-        }
-    }, [showVaultModal, hasLocalVault]);
+    // Open the vault modal in a specific mode ('unlock' | 'create' | 'import').
+    const openVault = (mode) => {
+        setVaultMode(mode);
+        setError(null);
+        setShowVaultModal(true);
+    };
 
     const handleLogin = async (method) => {
         setError(null);
@@ -56,7 +57,7 @@ export default function Login() {
                 if (!err.message.includes("Biometrics not set up")) {
                     setError(`Biometric failed: ${err.message}. Try password.`);
                 }
-                setShowVaultModal(true);
+                openVault(hasLocalVault ? 'unlock' : 'create');
             } finally {
                 setLoading(false);
                 setActiveMethod(null);
@@ -178,7 +179,7 @@ export default function Login() {
                     </button>
                 ) : (
                     <button
-                        onClick={() => hasBiometrics ? handleLogin('biometric') : setShowVaultModal(true)}
+                        onClick={() => hasBiometrics ? handleLogin('biometric') : openVault(hasLocalVault ? 'unlock' : 'create')}
                         disabled={loading}
                         className="w-full bg-emerald-600 hover:bg-emerald-500 text-white font-semibold py-4 px-6 rounded-xl transition-all duration-200 flex items-center justify-center gap-3 disabled:opacity-50 disabled:cursor-not-allowed group mt-4 shadow-lg shadow-emerald-500/20"
                     >
@@ -197,6 +198,17 @@ export default function Login() {
                                 <ArrowRight className="w-5 h-5 group-hover:translate-x-1 transition-transform" />
                             </>
                         )}
+                    </button>
+                )}
+
+                {!isExtensionAvailable && !hasLocalVault && (
+                    <button
+                        onClick={() => openVault('import')}
+                        disabled={loading}
+                        className="w-full mt-4 flex items-center justify-center gap-2 text-sm text-slate-500 dark:text-slate-400 hover:text-emerald-600 dark:hover:text-emerald-400 transition-colors disabled:opacity-50"
+                    >
+                        <Upload className="w-4 h-4" />
+                        <span>Import existing vault (.json)</span>
                     </button>
                 )}
 
