@@ -5,7 +5,7 @@ import { useAuth } from '../../context/AuthContext';
 import { verifySignaturePQC } from '../../utils/crypto';
 import API_ENDPOINTS from '../../config';
 
-const SecretItem = ({ secret, decryptedContent, onDecrypt, onDelete, onShare, onViewDetails, authType, viewMode = 'grid', isSharedView }) => {
+const SecretItem = ({ secret, decryptedContent, onDecrypt, onLock, onDelete, onShare, onViewDetails, authType, viewMode = 'grid', isSharedView }) => {
     const { theme } = useTheme();
     const { token } = useAuth();
     const [verificationResult, setVerificationResult] = useState(null);
@@ -249,6 +249,11 @@ const SecretItem = ({ secret, decryptedContent, onDecrypt, onDelete, onShare, on
                         {secret.created_at ? new Date(secret.created_at).toLocaleDateString() : ''}
                     </span>
                     <div className="flex items-center gap-1" onClick={(e) => e.stopPropagation()}>
+                        {decryptedContent && (
+                            <button onClick={() => onLock(secret)} className="p-1.5 hover:bg-slate-100 dark:hover:bg-slate-700 rounded-md text-slate-400 hover:text-amber-500 transition-colors" title="Lock (hide content)">
+                                <Lock className="w-4 h-4" />
+                            </button>
+                        )}
                         {!secret.isShared && (
                             <button onClick={() => onShare(secret)} className="p-1.5 hover:bg-slate-100 dark:hover:bg-slate-700 rounded-md text-slate-400 hover:text-indigo-500 transition-colors" title="Share">
                                 <Share2 className="w-4 h-4" />
@@ -360,6 +365,11 @@ const SecretItem = ({ secret, decryptedContent, onDecrypt, onDelete, onShare, on
                     </div>
                 </div>
                 <div className="flex gap-1">
+                    {decryptedContent && (
+                        <button onClick={() => onLock(secret)} className="p-2 hover:bg-slate-100 dark:hover:bg-slate-700 rounded-lg text-slate-400 hover:text-amber-500 transition-colors" title="Lock (hide content)">
+                            <Lock className="w-4 h-4" />
+                        </button>
+                    )}
                     {!secret.isShared && (
                         <button onClick={() => onShare(secret)} className="p-2 hover:bg-slate-100 dark:hover:bg-slate-700 rounded-lg text-slate-400 hover:text-indigo-500 transition-colors" title="Share">
                             <Share2 className="w-4 h-4" />

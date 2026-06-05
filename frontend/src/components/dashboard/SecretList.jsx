@@ -2,7 +2,7 @@ import React, { useState, useMemo } from 'react';
 import { Loader2, LayoutGrid, List } from 'lucide-react';
 import SecretItem from './SecretItem';
 
-const SecretList = ({ secrets, sharedSecrets = [], decryptedSecrets, onDecrypt, onDelete, onShare, onRevoke, onViewDetails, loading, authType }) => {
+const SecretList = ({ secrets, sharedSecrets = [], decryptedSecrets, onDecrypt, onLock, onDelete, onShare, onRevoke, onViewDetails, loading, authType }) => {
     const [viewMode, setViewMode] = useState(() => localStorage.getItem('secretViewMode') || 'grid');
     const [sortBy, setSortBy] = useState(() => localStorage.getItem('secretSortBy') || 'date-desc');
 
@@ -97,6 +97,7 @@ const SecretList = ({ secrets, sharedSecrets = [], decryptedSecrets, onDecrypt, 
                             secret={secret}
                             decryptedContent={decryptedSecrets[secret.id]}
                             onDecrypt={onDecrypt}
+                            onLock={onLock}
                             onDelete={onDelete}
                             onShare={onShare}
                             onViewDetails={onViewDetails}
@@ -124,6 +125,7 @@ const SecretList = ({ secrets, sharedSecrets = [], decryptedSecrets, onDecrypt, 
                                 }}
                                 decryptedContent={decryptedSecrets[`shared_${grant.id}`]}
                                 onDecrypt={() => onDecrypt(grant, true)}
+                                onLock={() => onLock(grant, true)}
                                 onDelete={() => onRevoke(grant.id, true)}
                                 onShare={() => { }}
                                 authType={authType}

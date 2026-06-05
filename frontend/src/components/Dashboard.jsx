@@ -67,6 +67,7 @@ export default function Dashboard({ view = 'secrets' }) {
         loading: secretsLoading,
         decryptedSecrets,
         handleDecrypt,
+        handleLock,
         createSecret,
         updateSecret,
         deleteSecret,
@@ -228,6 +229,7 @@ export default function Dashboard({ view = 'secrets' }) {
                                 sharedSecrets={sharedSecrets}
                                 decryptedSecrets={decryptedSecrets}
                                 onDecrypt={handleDecrypt}
+                                onLock={handleLock}
                                 onDelete={deleteSecret}
                                 onShare={openShareModal}
                                 onViewDetails={handleViewDetails}

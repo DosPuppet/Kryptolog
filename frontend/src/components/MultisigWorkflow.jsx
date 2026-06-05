@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { X, Check, Clock, User, Shield, ShieldCheck, AlertTriangle, Eye, FileText, Download } from 'lucide-react';
+import { X, Check, Clock, User, Shield, ShieldCheck, AlertTriangle, Eye, EyeOff, FileText, Download } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import { usePQC } from '../context/PQCContext';
 import { useWeb3 } from '../context/Web3Context';
@@ -790,7 +790,20 @@ export default function MultisigWorkflow({ workflow, onClose, onUpdate, setUploa
                         )
                     }
 
-                    {decryptedContent && renderContent()}
+                    {decryptedContent && (
+                        <div className="space-y-2">
+                            <div className="flex justify-end">
+                                <button
+                                    onClick={() => { setDecryptedContent(null); setRawDecryptedContent(null); }}
+                                    className="text-xs text-slate-500 hover:text-amber-500 transition-colors flex items-center gap-1"
+                                    title="Hide decrypted content"
+                                >
+                                    <EyeOff className="w-3.5 h-3.5" /> Hide content
+                                </button>
+                            </div>
+                            {renderContent()}
+                        </div>
+                    )}
 
                     {/* Actions */}
                     {

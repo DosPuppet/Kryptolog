@@ -497,6 +497,17 @@ export function useSecrets(authType, encryptionPublicKey, pqcAccount, options = 
         return res.ok;
     };
 
+    // Re-lock a decrypted secret: drop its plaintext from memory so it's hidden again.
+    const handleLock = (item, isShared = false) => {
+        const key = isShared ? `shared_${item.id}` : item.id;
+        setDecryptedSecrets(prev => {
+            if (!(key in prev)) return prev;
+            const next = { ...prev };
+            delete next[key];
+            return next;
+        });
+    };
+
     return {
         secrets,
         sharedSecrets,
@@ -504,6 +515,7 @@ export function useSecrets(authType, encryptionPublicKey, pqcAccount, options = 
         decryptedSecrets,
         secureDecrypt, // Exporting for manual usage if needed
         handleDecrypt,
+        handleLock,
         createSecret,
         updateSecret,
         deleteSecret,
