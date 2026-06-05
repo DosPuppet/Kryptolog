@@ -190,6 +190,19 @@ export const PQCProvider = ({ children }) => {
         return performServerLogin(accountId, encryptionKey, (msg) => vaultService.sign(msg, password), name);
     };
 
+    const importLocalVault = async (json, password) => {
+        // Create a new local vault from an exported backup, then log in with it.
+        const account = await vaultService.importNewVault(json, password);
+        const accountId = account.dilithium.publicKey;
+        const encryptionKey = account.kyber.publicKey;
+
+        setHasLocalVault(true);
+        setPqcAccount(accountId);
+        setKyberKey(encryptionKey);
+
+        return performServerLogin(accountId, encryptionKey, (msg) => vaultService.sign(msg, password), account.name);
+    };
+
     const generateSessionKey = async () => {
         if (isExtensionAvailable && window.trustkeys) {
             return await window.trustkeys.generateSessionKey();
@@ -360,6 +373,7 @@ export const PQCProvider = ({ children }) => {
             loginTrustKeys,
             loginLocalVault,
             createLocalVault,
+            importLocalVault,
             encrypt,
             decrypt,
             decryptMany,

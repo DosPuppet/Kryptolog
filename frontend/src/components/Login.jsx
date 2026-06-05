@@ -2,11 +2,11 @@ import React, { useState, useEffect } from 'react';
 import { useWeb3 } from '../context/Web3Context';
 import { usePQC } from '../context/PQCContext';
 import { useTheme } from '../context/ThemeContext';
-import { Shield, Wallet, ArrowRight, Loader2, Sun, Moon, Lock, UserPlus, X } from 'lucide-react';
+import { Shield, Wallet, ArrowRight, Loader2, Sun, Moon, Lock, UserPlus, X, Upload, FileJson } from 'lucide-react';
 
 export default function Login() {
     const { login } = useWeb3();
-    const { loginTrustKeys, loginLocalVault, createLocalVault, isExtensionAvailable, hasLocalVault, unlockWithBiometrics, hasBiometrics } = usePQC();
+    const { loginTrustKeys, loginLocalVault, createLocalVault, importLocalVault, isExtensionAvailable, hasLocalVault, unlockWithBiometrics, hasBiometrics } = usePQC();
     const { theme, toggleTheme } = useTheme();
     const [loading, setLoading] = useState(false);
     const [error, setError] = useState(null);
@@ -14,9 +14,11 @@ export default function Login() {
 
     // Local Vault UI State
     const [showVaultModal, setShowVaultModal] = useState(false);
-    const [vaultMode, setVaultMode] = useState('unlock'); // 'unlock' | 'create'
+    const [vaultMode, setVaultMode] = useState('unlock'); // 'unlock' | 'create' | 'import'
     const [password, setPassword] = useState('');
     const [vaultName, setVaultName] = useState('');
+    const [importJson, setImportJson] = useState(null);
+    const [importFileName, setImportFileName] = useState('');
 
     useEffect(() => {
         if (showVaultModal) {
@@ -74,6 +76,22 @@ export default function Login() {
         }
     };
 
+    const switchVaultMode = (mode) => {
+        setVaultMode(mode);
+        setError(null);
+    };
+
+    const handleImportFile = (e) => {
+        const file = e.target.files?.[0];
+        if (!file) return;
+        setError(null);
+        setImportFileName(file.name);
+        const reader = new FileReader();
+        reader.onload = (ev) => setImportJson(ev.target.result);
+        reader.onerror = () => setError("Could not read the selected file.");
+        reader.readAsText(file);
+    };
+
     const handleVaultSubmit = async (e) => {
         e.preventDefault();
         setLoading(true);
@@ -83,6 +101,11 @@ export default function Login() {
                 if (!vaultName || !password) throw new Error("Name and Password required");
                 if (password.length < 6) throw new Error("Password must be at least 6 characters");
                 await createLocalVault(vaultName, password);
+            } else if (vaultMode === 'import') {
+                if (!importJson) throw new Error("Select a vault backup (.json) file first");
+                if (!password) throw new Error("Choose a password to protect the imported vault");
+                if (password.length < 6) throw new Error("Password must be at least 6 characters");
+                await importLocalVault(importJson, password);
             } else {
                 if (!password) throw new Error("Password required");
                 await loginLocalVault(password);
@@ -190,15 +213,19 @@ export default function Login() {
 
                             <div className="flex flex-col items-center mb-6">
                                 <div className="w-12 h-12 bg-emerald-500/10 rounded-full flex items-center justify-center mb-3">
-                                    {vaultMode === 'create' ? <UserPlus className="w-6 h-6 text-emerald-500" /> : <Lock className="w-6 h-6 text-emerald-500" />}
+                                    {vaultMode === 'create' ? <UserPlus className="w-6 h-6 text-emerald-500" />
+                                        : vaultMode === 'import' ? <Upload className="w-6 h-6 text-emerald-500" />
+                                            : <Lock className="w-6 h-6 text-emerald-500" />}
                                 </div>
                                 <h2 className="text-xl font-bold text-slate-900 dark:text-white">
-                                    {vaultMode === 'create' ? 'Create Local Vault' : 'Unlock Vault'}
+                                    {vaultMode === 'create' ? 'Create Local Vault'
+                                        : vaultMode === 'import' ? 'Import Vault'
+                                            : 'Unlock Vault'}
                                 </h2>
                                 <p className="text-sm text-slate-500 mt-1">
-                                    {vaultMode === 'create'
-                                        ? 'Setup a secure local PQC wallet.'
-                                        : 'Enter password to access keys.'}
+                                    {vaultMode === 'create' ? 'Setup a secure local PQC wallet.'
+                                        : vaultMode === 'import' ? 'Restore from an exported .json backup.'
+                                            : 'Enter password to access keys.'}
                                 </p>
                             </div>
 
@@ -222,14 +249,26 @@ export default function Login() {
                                         />
                                     </div>
                                 )}
+                                {vaultMode === 'import' && (
+                                    <div>
+                                        <label className="block text-xs font-medium text-slate-500 mb-1">Vault backup file</label>
+                                        <label className="w-full flex items-center gap-2 cursor-pointer bg-slate-50 dark:bg-slate-900 border border-dashed border-slate-300 dark:border-slate-700 rounded-lg px-3 py-2 text-sm text-slate-600 dark:text-slate-300 hover:border-emerald-500 transition-colors">
+                                            <FileJson className="w-4 h-4 text-emerald-500 shrink-0" />
+                                            <span className="truncate">{importFileName || 'Choose a .json file…'}</span>
+                                            <input type="file" accept="application/json,.json" className="hidden" onChange={handleImportFile} />
+                                        </label>
+                                    </div>
+                                )}
                                 <div>
-                                    <label className="block text-xs font-medium text-slate-500 mb-1">Password</label>
+                                    <label className="block text-xs font-medium text-slate-500 mb-1">
+                                        {vaultMode === 'import' ? 'New password (protects this device)' : 'Password'}
+                                    </label>
                                     <input
                                         type="password"
                                         value={password}
                                         onChange={e => setPassword(e.target.value)}
                                         className="w-full bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-lg px-3 py-2 text-slate-900 dark:text-white outline-none focus:ring-2 focus:ring-emerald-500"
-                                        placeholder="Enter secure password"
+                                        placeholder={vaultMode === 'import' ? 'Set a password for this vault' : 'Enter secure password'}
                                     />
                                 </div>
 
@@ -238,9 +277,26 @@ export default function Login() {
                                     disabled={loading}
                                     className="w-full bg-emerald-600 hover:bg-emerald-500 text-white font-semibold py-3 rounded-lg transition-all duration-200 mt-4 flex items-center justify-center"
                                 >
-                                    {loading ? <Loader2 className="w-4 h-4 animate-spin" /> : (vaultMode === 'create' ? 'Create & Connect' : 'Unlock & Connect')}
+                                    {loading ? <Loader2 className="w-4 h-4 animate-spin" />
+                                        : (vaultMode === 'create' ? 'Create & Connect'
+                                            : vaultMode === 'import' ? 'Import & Connect'
+                                                : 'Unlock & Connect')}
                                 </button>
                             </form>
+
+                            {!hasLocalVault && (
+                                <div className="text-center mt-3">
+                                    {vaultMode === 'import' ? (
+                                        <button type="button" onClick={() => switchVaultMode('create')} className="text-xs text-slate-500 hover:text-emerald-500 transition-colors">
+                                            Create a new vault instead
+                                        </button>
+                                    ) : (
+                                        <button type="button" onClick={() => switchVaultMode('import')} className="text-xs text-slate-500 hover:text-emerald-500 transition-colors">
+                                            Import an existing vault backup (.json)
+                                        </button>
+                                    )}
+                                </div>
+                            )}
                         </div>
                     )
                 }

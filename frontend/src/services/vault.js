@@ -150,6 +150,54 @@ class VaultService {
         return this._sanitize(account);
     }
 
+    // Create a BRAND-NEW local vault from an exported backup (.json from
+    // exportVault). Used on a clean device where no vault exists yet. The backup
+    // holds plaintext accounts; we re-encrypt them under a new local password.
+    async importNewVault(jsonString, password) {
+        if (this.hasVault()) {
+            throw new Error("A vault already exists on this device. Import accounts from Settings instead.");
+        }
+        if (!password || password.length < 6) {
+            throw new Error("Password must be at least 6 characters");
+        }
+
+        let data;
+        try {
+            data = JSON.parse(jsonString);
+        } catch {
+            throw new Error("Invalid file: not valid JSON");
+        }
+        if (!data.accounts || !Array.isArray(data.accounts) || data.accounts.length === 0) {
+            throw new Error("Invalid vault file: no accounts found");
+        }
+        for (const acc of data.accounts) {
+            if (!acc?.dilithium?.publicKey || !acc?.dilithium?.privateKey ||
+                !acc?.kyber?.publicKey || !acc?.kyber?.privateKey) {
+                throw new Error("Invalid vault file: accounts are missing key material");
+            }
+            // Normalize id to the ML-DSA public key (matches setup/import conventions).
+            acc.id = acc.dilithium.publicKey;
+        }
+
+        const activeAccountId = (data.activeAccountId &&
+            data.accounts.some(a => a.id === data.activeAccountId))
+            ? data.activeAccountId
+            : data.accounts[0].id;
+
+        const fullVault = { accounts: data.accounts, activeAccountId };
+
+        // Encrypt + persist under the new password, then expose sanitized in memory.
+        await this._save(fullVault, password);
+        this.vault = {
+            accounts: fullVault.accounts.map(acc => this._sanitize(acc)),
+            activeAccountId
+        };
+        this.isLocked = false;
+
+        const active = fullVault.accounts.find(a => a.id === activeAccountId);
+        return this._sanitize(active);
+    }
+
     async unlock(password) {
         const encryptedJson = localStorage.getItem('kryptolog_vault');
         if (!encryptedJson) throw new Error("No vault found");
