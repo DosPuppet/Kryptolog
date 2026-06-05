@@ -50,6 +50,10 @@ export default function DashboardSidebar({
     const [readShared, setReadShared] = React.useState(loadReadShared);
 
     React.useEffect(() => {
+        // Don't touch the persisted read-set until the shared list has actually
+        // loaded — otherwise the initial empty list would prune (wipe) every read
+        // id, and previously-read secrets would show as unread again after re-login.
+        if (sharedSecrets.length === 0) return;
         setReadShared(prev => {
             const currentIds = new Set(sharedSecrets.map(s => s.id));
             // Prune ids that are no longer shared with us.
