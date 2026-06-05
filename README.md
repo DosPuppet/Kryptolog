@@ -399,22 +399,36 @@ just logs a warning and skips sending). To enable them:
 
 ### 1. Generate a VAPID keypair (once)
 
+The env vars take the **base64url key values** (one line each) — *not* file paths,
+*not* PEM. Generate both directly (the browser's `applicationServerKey` must be
+base64url, and pywebpush accepts the base64url private key as-is):
+
 ```bash
-# pywebpush ships a `vapid` CLI
 pip install pywebpush
-vapid --gen           # writes private_key.pem / public_key.pem
-vapid --applicationServerKey   # prints the base64url PUBLIC key for the browser
+python3 - <<'PY'
+from py_vapid import Vapid01
+from cryptography.hazmat.primitives import serialization
+import base64
+v = Vapid01(); v.generate_keys()
+b64u = lambda b: base64.urlsafe_b64encode(b).rstrip(b'=').decode()
+priv = v.private_key.private_numbers().private_value.to_bytes(32, 'big')
+pub  = v.public_key.public_bytes(serialization.Encoding.X962,
+                                 serialization.PublicFormat.UncompressedPoint)
+print("VAPID_PRIVATE_KEY=" + b64u(priv))
+print("VAPID_PUBLIC_KEY="  + b64u(pub))
+PY
 ```
-The public and private halves are a pair — they must match.
 
 ### 2. Configure both sides with the matching pair
 
+Paste the **values** above (not file paths):
+
 | Where | Variable | Value |
 |-------|----------|-------|
-| Backend (`backend/.env`) | `VAPID_PRIVATE_KEY` | the private key |
-| Backend | `VAPID_PUBLIC_KEY` | the public key |
+| Backend (`backend/.env`) | `VAPID_PRIVATE_KEY` | the base64url private key |
+| Backend | `VAPID_PUBLIC_KEY` | the base64url public key |
 | Backend | `VAPID_SUBJECT` | `mailto:you@example.com` |
-| Frontend (build-time) | `VITE_VAPID_PUBLIC_KEY` | the **same** public key |
+| Frontend (build-time) | `VITE_VAPID_PUBLIC_KEY` | the **same** base64url public key |
 
 > The frontend public key **must** equal the backend's. A mismatch means
 > subscriptions are created against one key but signed with another, and the
