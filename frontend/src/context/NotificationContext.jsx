@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useEffect, useState, useCallback } from 'react';
+import React, { createContext, useContext, useEffect, useState, useCallback, useRef } from 'react';
 import { useAuth } from './AuthContext';
 import { API_ENDPOINTS } from '../config';
 
@@ -37,25 +37,25 @@ export const NotificationProvider = ({ children }) => {
     const [permission, setPermission] = useState(currentPermission);
     const [subscription, setSubscription] = useState(null);
     const [error, setError] = useState(null);
+    // Guard against concurrent subscribe() calls (requestPermission + the
+    // permission-change effect could otherwise both subscribe, leaving two
+    // backend rows → notifications delivered twice).
+    const subscribingRef = useRef(false);
 
     const subscribe = useCallback(async () => {
-        setError(null);
-        // Clear opt-out flag since user is explicitly subscribing
-        localStorage.removeItem('kryptolog_push_disabled');
+        if (subscribingRef.current) return; // a subscribe is already in flight
         if (!('serviceWorker' in navigator) || !('PushManager' in window)) {
             const msg = 'Push messaging is not supported in this browser.';
             console.warn(msg);
             setError(msg);
             return;
         }
-
         if (!window.isSecureContext) {
             const msg = 'Push notifications require a secure context (HTTPS) or localhost.';
             console.warn(msg);
             setError(msg);
             return;
         }
-
         if (!VAPID_PUBLIC_KEY) {
             const msg = 'Push notifications are not configured (VITE_VAPID_PUBLIC_KEY is unset).';
             console.warn(msg);
@@ -63,9 +63,16 @@ export const NotificationProvider = ({ children }) => {
             return;
         }
 
+        subscribingRef.current = true;
+        setError(null);
+        // Clear opt-out flag since user is explicitly subscribing
+        localStorage.removeItem('kryptolog_push_disabled');
+        const authToken = token || localStorage.getItem('token');
+
         try {
             const registration = await navigator.serviceWorker.ready;
             const existingSub = await registration.pushManager.getSubscription();
+            const oldEndpoint = existingSub?.endpoint || null;
 
             if (existingSub) {
                 await existingSub.unsubscribe();
@@ -78,7 +85,6 @@ export const NotificationProvider = ({ children }) => {
 
             // Send to backend
             const subData = newSub.toJSON();
-            const authToken = token || localStorage.getItem('token');
             const res = await fetch(API_ENDPOINTS.NOTIFICATIONS.SUBSCRIBE, {
                 method: 'POST',
                 headers: {
@@ -96,11 +102,22 @@ export const NotificationProvider = ({ children }) => {
                 throw new Error(`Server returned ${res.status} when saving subscription.`);
             }
 
+            // Drop the previous endpoint server-side so we never accumulate stale
+            // subscriptions for this device (which would deliver duplicate pushes).
+            if (oldEndpoint && oldEndpoint !== subData.endpoint) {
+                fetch(`${API_ENDPOINTS.NOTIFICATIONS.UNSUBSCRIBE}?endpoint=${encodeURIComponent(oldEndpoint)}`, {
+                    method: 'POST',
+                    headers: { 'Authorization': `Bearer ${authToken}` }
+                }).catch(() => { /* best effort */ });
+            }
+
             setSubscription(newSub);
             setPermission(currentPermission());
         } catch (error) {
             console.error('Failed to subscribe to push notifications:', error);
             setError(error.message || 'Failed to subscribe.');
+        } finally {
+            subscribingRef.current = false;
         }
     }, [token]);
 
