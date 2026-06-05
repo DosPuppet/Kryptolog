@@ -392,6 +392,54 @@ npm run build
 
 ---
 
+## Push notifications & PWA install
+
+Push notifications are **optional** — the app runs fine without them (the backend
+just logs a warning and skips sending). To enable them:
+
+### 1. Generate a VAPID keypair (once)
+
+```bash
+# pywebpush ships a `vapid` CLI
+pip install pywebpush
+vapid --gen           # writes private_key.pem / public_key.pem
+vapid --applicationServerKey   # prints the base64url PUBLIC key for the browser
+```
+The public and private halves are a pair — they must match.
+
+### 2. Configure both sides with the matching pair
+
+| Where | Variable | Value |
+|-------|----------|-------|
+| Backend (`backend/.env`) | `VAPID_PRIVATE_KEY` | the private key |
+| Backend | `VAPID_PUBLIC_KEY` | the public key |
+| Backend | `VAPID_SUBJECT` | `mailto:you@example.com` |
+| Frontend (build-time) | `VITE_VAPID_PUBLIC_KEY` | the **same** public key |
+
+> The frontend public key **must** equal the backend's. A mismatch means
+> subscriptions are created against one key but signed with another, and the
+> push service silently rejects them.
+
+### 3. Icons & install
+
+The repo ships **placeholder** icons (`frontend/public/icon-192.png`,
+`icon-512.png`, `apple-touch-icon.png`) and a `manifest.webmanifest` so the app
+is installable. Replace the placeholders with your real branding (same sizes).
+
+### iOS specifics (important)
+
+On iOS, Web Push **only works for a PWA installed to the Home Screen** (iOS
+16.4+), never in a Safari tab. To test:
+1. Open the site in Safari → Share → **Add to Home Screen**.
+2. Launch it from the Home Screen icon (it runs standalone).
+3. Inside the app, enable notifications (must be a user tap).
+
+When the app is closed, real-time WebSocket delivery stops (true for any web
+app) — push is the only way to be notified, which is why the above must be set
+up for background message alerts to work.
+
+---
+
 ## Security Notices
 
 > **⚠️ Local Vault (Extension-less Mode)**

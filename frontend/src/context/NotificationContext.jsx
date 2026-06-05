@@ -6,7 +6,10 @@ const NotificationContext = createContext();
 
 export const useNotifications = () => useContext(NotificationContext);
 
-const VAPID_PUBLIC_KEY = "BA4DL706bR_1iDyiOTfe52hp4U2_RKgn6KlrU4AiWSdXEvihmM1zS5B-TfYEG_41g-LaBLQ0YjNACz_hJ2d7kAo";
+// Public half of the server's VAPID keypair. MUST match the backend's
+// VAPID_PRIVATE_KEY, so it's configured per-deployment via env rather than
+// hardcoded. Generate a pair with the `vapid` CLI (pywebpush); see README.
+const VAPID_PUBLIC_KEY = import.meta.env.VITE_VAPID_PUBLIC_KEY || '';
 
 function urlBase64ToUint8Array(base64String) {
     const padding = '='.repeat((4 - base64String.length % 4) % 4);
@@ -48,6 +51,13 @@ export const NotificationProvider = ({ children }) => {
 
         if (!window.isSecureContext) {
             const msg = 'Push notifications require a secure context (HTTPS) or localhost.';
+            console.warn(msg);
+            setError(msg);
+            return;
+        }
+
+        if (!VAPID_PUBLIC_KEY) {
+            const msg = 'Push notifications are not configured (VITE_VAPID_PUBLIC_KEY is unset).';
             console.warn(msg);
             setError(msg);
             return;
