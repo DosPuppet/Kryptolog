@@ -23,9 +23,15 @@ function urlBase64ToUint8Array(base64String) {
     return outputArray;
 }
 
+// iOS Safari in a normal tab (not an installed PWA) has NO Notification API.
+// Touching `Notification.permission` unguarded throws at render and blanks the
+// whole app, so gate every access behind this.
+const NOTIFICATIONS_SUPPORTED = typeof window !== 'undefined' && 'Notification' in window;
+const currentPermission = () => (NOTIFICATIONS_SUPPORTED ? Notification.permission : 'default');
+
 export const NotificationProvider = ({ children }) => {
     const { user, isAuthenticated, token } = useAuth();
-    const [permission, setPermission] = useState(Notification.permission);
+    const [permission, setPermission] = useState(currentPermission);
     const [subscription, setSubscription] = useState(null);
     const [error, setError] = useState(null);
 
@@ -81,7 +87,7 @@ export const NotificationProvider = ({ children }) => {
             }
 
             setSubscription(newSub);
-            setPermission(Notification.permission);
+            setPermission(currentPermission());
         } catch (error) {
             console.error('Failed to subscribe to push notifications:', error);
             setError(error.message || 'Failed to subscribe.');
@@ -107,6 +113,10 @@ export const NotificationProvider = ({ children }) => {
     }, [isAuthenticated, permission, subscribe]);
 
     const requestPermission = async () => {
+        if (!NOTIFICATIONS_SUPPORTED) {
+            setError('Notifications are not supported here. On iOS, add Kryptolog to your Home Screen first.');
+            return;
+        }
         const result = await Notification.requestPermission();
         setPermission(result);
         if (result === 'granted' && isAuthenticated) {
