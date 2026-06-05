@@ -7,6 +7,14 @@ import { useNotifications } from '../context/NotificationContext';
 import { vaultService } from '../services/vault';
 import { API_ENDPOINTS } from '../config';
 
+// Persisted set of shared-secret ids the user has already opened, so the "unread"
+// badge stays cleared once read (instead of reappearing every time secrets re-lock).
+const READ_SHARED_KEY = 'kryptolog_read_shared';
+const loadReadShared = () => {
+    try { return new Set(JSON.parse(localStorage.getItem(READ_SHARED_KEY) || '[]')); }
+    catch { return new Set(); }
+};
+
 export default function DashboardSidebar({
     currentView,
     secrets,
@@ -38,6 +46,32 @@ export default function DashboardSidebar({
         }
     }, [lastEvent, onRefreshSecrets]);
 
+    // Track which shared secrets have been opened at least once (sticky / persisted).
+    const [readShared, setReadShared] = React.useState(loadReadShared);
+
+    React.useEffect(() => {
+        setReadShared(prev => {
+            const currentIds = new Set(sharedSecrets.map(s => s.id));
+            // Prune ids that are no longer shared with us.
+            const next = new Set([...prev].filter(id => currentIds.has(id)));
+            let changed = next.size !== prev.size;
+            // Mark any currently-decrypted shared secret as read.
+            for (const s of sharedSecrets) {
+                if (decryptedSecrets[`shared_${s.id}`] && !next.has(s.id)) {
+                    next.add(s.id);
+                    changed = true;
+                }
+            }
+            return changed ? next : prev;
+        });
+    }, [sharedSecrets, decryptedSecrets]);
+
+    React.useEffect(() => {
+        localStorage.setItem(READ_SHARED_KEY, JSON.stringify([...readShared]));
+    }, [readShared]);
+
+    const unreadSecrets = sharedSecrets.filter(s => !readShared.has(s.id)).length;
+
     const navItems = [
         { id: 'secrets', to: '/secrets', label: 'Secrets', icon: <Lock className="w-4 h-4" /> },
         { id: 'multisig', to: '/multisig', label: 'Multisig', icon: <FolderGit2 className="w-4 h-4" /> },
@@ -67,15 +101,10 @@ export default function DashboardSidebar({
                                 {actionRequiredCount}
                             </span>
                         )}
-                        {item.id === 'secrets' && (
-                            (() => {
-                                const unreadSecrets = sharedSecrets.filter(s => !decryptedSecrets[`shared_${s.id}`]).length;
-                                return unreadSecrets > 0 ? (
-                                    <span className="bg-red-500 text-white text-xs font-bold px-2 py-0.5 rounded-full">
-                                        {unreadSecrets}
-                                    </span>
-                                ) : null;
-                            })()
+                        {item.id === 'secrets' && unreadSecrets > 0 && (
+                            <span className="bg-red-500 text-white text-xs font-bold px-2 py-0.5 rounded-full">
+                                {unreadSecrets}
+                            </span>
                         )}
                     </NavLink>
                 ))}
