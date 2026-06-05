@@ -220,8 +220,8 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
                     break;
                 }
                 case 'VERIFY': {
-                    // TODO: implement real verification via crypto handler
-                    sendResponse({ success: true, isValid: true });
+                    const res = await crypto.handleVerify(request);
+                    sendResponse(res);
                     break;
                 }
                 case 'ENCRYPT': {

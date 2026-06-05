@@ -38,6 +38,15 @@ export const handleSignAsync = async (request, sender, sendResponse) => {
     await launchPopup('sign', { requestId: reqId });
 };
 
+export const handleVerify = async (request) => {
+    // Pure ML-DSA-44 signature check — no private key, no user approval needed.
+    if (!request.message || !request.signature || !request.publicKey) {
+        return { success: true, isValid: false };
+    }
+    const isValid = await verifySignature(request.message, request.signature, request.publicKey);
+    return { success: true, isValid };
+};
+
 export const handleEncrypt = async (request) => {
     let pubKey = request.publicKey;
     if (!pubKey) {
