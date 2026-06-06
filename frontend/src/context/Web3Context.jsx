@@ -24,18 +24,26 @@ export const Web3Provider = ({ children }) => {
     useEffect(() => {
         checkWalletConnection();
 
-        if (window.ethereum) {
-            window.ethereum.on('accountsChanged', (accounts) => {
-                if (accounts.length > 0) {
-                    setCurrentAccount(accounts[0]);
-                    // Note: We might want to logout on account change, but AuthContext handles user state.
-                    // For now, let's just update the local account.
-                    // Ideally, we should trigger a logout in AuthContext if the user changes wallet.
-                } else {
-                    setCurrentAccount(null);
-                }
-            });
-        }
+        if (!window.ethereum) return;
+
+        const handleAccountsChanged = (accounts) => {
+            if (accounts.length > 0) {
+                setCurrentAccount(accounts[0]);
+                // Note: We might want to logout on account change, but AuthContext handles user state.
+                // For now, let's just update the local account.
+                // Ideally, we should trigger a logout in AuthContext if the user changes wallet.
+            } else {
+                setCurrentAccount(null);
+            }
+        };
+
+        window.ethereum.on('accountsChanged', handleAccountsChanged);
+        // Remove on unmount so listeners don't accumulate on the provider's
+        // EventEmitter (StrictMode double-mount / remounts would otherwise pile
+        // up and trip MaxListenersExceededWarning).
+        return () => {
+            window.ethereum?.removeListener?.('accountsChanged', handleAccountsChanged);
+        };
     }, []);
 
     const login = async () => {
