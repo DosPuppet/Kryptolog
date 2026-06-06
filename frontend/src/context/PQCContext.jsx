@@ -75,8 +75,8 @@ export const PQCProvider = ({ children }) => {
             try {
                 const password = await vaultService.recoverPasswordWithBiometrics();
                 return password;
-            } catch (e) {
-                console.log("Auto-biometrics failed/cancelled, falling back to manual:", e);
+            } catch {
+                // auto-biometrics cancelled/unsupported — fall back to manual prompt
             }
         }
 

@@ -95,7 +95,7 @@ export const MessengerProvider = ({ children }) => {
                     }
                     return { ...msg, _sessionPayload: payload };
                 }
-            } catch (e) { }
+            } catch { /* best-effort: failure is non-fatal */ }
             return { ...msg, plainText: null };
         }));
 
@@ -146,7 +146,7 @@ export const MessengerProvider = ({ children }) => {
                         try {
                             const pt = await decryptWithSessionKey(m._sessionPayload.ct, newKeys[m._sessionPayload.sid]);
                             return { ...m, plainText: pt };
-                        } catch (e) { }
+                        } catch { /* best-effort: failure is non-fatal */ }
                     }
                     return m;
                 }));
@@ -217,7 +217,7 @@ export const MessengerProvider = ({ children }) => {
                             const pt = await decryptWithSessionKey(p.ct, sessionKey);
                             return { ...m, plainText: pt };
                         }
-                    } catch (e) { }
+                    } catch { /* best-effort: failure is non-fatal */ }
                 }
                 return m;
             }));
@@ -272,7 +272,6 @@ export const MessengerProvider = ({ children }) => {
             wsRef.current = ws;
 
             ws.onopen = () => {
-                console.log("WS Connected via Context");
                 retryCount = 0;
                 ws.send(JSON.stringify({ type: 'AUTH', token }));
 
@@ -376,7 +375,6 @@ export const MessengerProvider = ({ children }) => {
                             }
                         }
                     } else if (data.type === 'SECRET_SHARED') {
-                        console.log("WS Event: SECRET_SHARED");
                         setLastEvent({ type: 'SECRET_SHARED', timestamp: Date.now(), data: data });
                     }
                 } catch (e) {
@@ -386,11 +384,9 @@ export const MessengerProvider = ({ children }) => {
 
             ws.onclose = (e) => {
                 if (heartbeatInterval) clearInterval(heartbeatInterval);
-                console.log(`WS Disconnected (Code: ${e.code})`);
 
                 if (!isUnmounting && retryCount < maxRetries) {
                     const timeout = Math.min(1000 * (2 ** retryCount), 30000);
-                    console.log(`WS Reconnecting in ${timeout}ms...`);
                     reconnectTimeout = setTimeout(() => {
                         retryCount++;
                         connect();
@@ -445,7 +441,7 @@ export const MessengerProvider = ({ children }) => {
                     plainText = await decryptWithSessionKey(payload.ct, key);
                 }
             }
-        } catch (e) { }
+        } catch { /* best-effort: failure is non-fatal */ }
 
         const decryptedMsg = { ...msg, plainText };
 
@@ -501,7 +497,7 @@ export const MessengerProvider = ({ children }) => {
         if (!fullUser.encryption_public_key) {
             try {
                 fullUser = await api(`${API_ENDPOINTS.BASE}/users/${partnerUser.address}`);
-            } catch (e) { }
+            } catch { /* best-effort: failure is non-fatal */ }
         }
 
         setActiveConversation({ user: fullUser, messages: [] });
@@ -653,7 +649,7 @@ export const MessengerProvider = ({ children }) => {
             let fullChannel = channel;
             try {
                 fullChannel = await api(`${API_ENDPOINTS.GROUPS.GET(channel.id)}`);
-            } catch (e) { }
+            } catch { /* best-effort: failure is non-fatal */ }
 
             const rawMsgs = await api(`${API_ENDPOINTS.GROUPS.HISTORY(channel.id)}`, {
                 method: 'POST',
@@ -728,7 +724,7 @@ export const MessengerProvider = ({ children }) => {
                     plainText = await decryptWithSessionKey(payload.ct, key);
                 }
             }
-        } catch (e) { }
+        } catch { /* best-effort: failure is non-fatal */ }
 
         const decryptedMsg = { ...msg, plainText };
 

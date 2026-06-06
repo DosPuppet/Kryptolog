@@ -41,7 +41,7 @@ const SecretItem = ({ secret, decryptedContent, onDecrypt, onLock, onDelete, onS
                     body: JSON.stringify({ address: docData.signerPublicKey })
                 });
                 if (res.ok) signerInfo = await res.json();
-            } catch (e) { }
+            } catch { /* best-effort: failure is non-fatal */ }
 
             setVerificationResult({
                 valid: isValid,
@@ -132,7 +132,7 @@ const SecretItem = ({ secret, decryptedContent, onDecrypt, onLock, onDelete, onS
                     });
                 }
             }
-        } catch (e) { }
+        } catch { /* best-effort: failure is non-fatal */ }
     }
 
     // Inner Content (File/Text)
@@ -208,7 +208,7 @@ const SecretItem = ({ secret, decryptedContent, onDecrypt, onLock, onDelete, onS
                     </div>
                 );
             }
-        } catch (e) { }
+        } catch { /* best-effort: failure is non-fatal */ }
     }
 
     // === LIST VIEW ===

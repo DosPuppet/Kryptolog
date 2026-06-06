@@ -37,7 +37,6 @@ export default function DashboardSidebar({
             const eventId = lastEvent.message?.id || lastEvent.timestamp || JSON.stringify(lastEvent);
 
             if (lastProcessedEventId.current !== eventId) {
-                console.log("Real-time Update: Secret Shared event received in Sidebar");
                 lastProcessedEventId.current = eventId;
                 if (onRefreshSecrets) {
                     onRefreshSecrets();

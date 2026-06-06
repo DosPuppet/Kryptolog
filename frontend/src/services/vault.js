@@ -292,7 +292,6 @@ class VaultService {
 
         // 5. Update Memory
         this.vault.activeAccountId = id;
-        console.log("VaultService: switched to", id);
 
         return this._sanitize(exists);
     }

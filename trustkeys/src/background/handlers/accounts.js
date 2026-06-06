@@ -98,7 +98,6 @@ export const importVault = async (vaultObj, password) => {
                 addedCount++;
             }
         }
-        console.log(`TrustKeys: Merged ${addedCount} new accounts.`);
     }
 
     if (!state.vault.permissions) state.vault.permissions = {};

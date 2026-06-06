@@ -129,7 +129,6 @@ export const registerOriginScripts = async (origin) => {
                 persistAcrossSessions: true
             }
         ]);
-        console.log(`TrustKeys: Registered scripts for ${origin}`);
     } catch (e) {
         console.warn(`TrustKeys: Failed to register scripts for ${origin}:`, e);
     }
@@ -141,7 +140,6 @@ export const unregisterOriginScripts = async (origin) => {
 
     try {
         await chrome.scripting.unregisterContentScripts({ ids });
-        console.log(`TrustKeys: Unregistered scripts for ${origin}`);
     } catch (e) {
         // May not exist — ignore
     }
@@ -165,7 +163,6 @@ export const syncDynamicScripts = async () => {
             const isStillPermitted = origins.some(o => script.id.startsWith(originToScriptId(o)));
             if (!isStillPermitted) {
                 await chrome.scripting.unregisterContentScripts({ ids: [script.id] });
-                console.log(`TrustKeys: Cleaned up stale script ${script.id}`);
             }
         }
     } catch (e) {

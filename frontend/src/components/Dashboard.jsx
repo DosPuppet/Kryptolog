@@ -131,7 +131,6 @@ export default function Dashboard({ view = 'secrets' }) {
 
     // Memoize the refresh handler to verify stability
     const handleRefreshSecrets = React.useCallback(() => {
-        console.log("Dashboard: Refreshing shared secrets...");
         fetchSharedSecrets();
         updateProgress(100, "New secret shared with you!");
         setTimeout(() => updateProgress(0, ""), 3000);

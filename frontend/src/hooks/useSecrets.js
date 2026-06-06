@@ -225,7 +225,7 @@ export function useSecrets(authType, encryptionPublicKey, pqcAccount, options = 
                     setTimeout(() => reportProgress(0, ''), 500);
                     return result;
                 }
-            } catch (_) { }
+            } catch { /* best-effort: failure is non-fatal */ }
 
             const key = isShared ? `shared_${item.id}` : item.id;
             setDecryptedSecrets(prev => ({ ...prev, [key]: decrypted }));

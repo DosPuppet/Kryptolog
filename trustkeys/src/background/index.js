@@ -16,13 +16,11 @@ const initializeStorage = async () => {
             if (Date.now() - session.lastActive < ONE_HOUR) {
                 const success = await auth.unlockWithSession(session.sessionPassword);
                 if (success) {
-                    console.log("TrustKeys: Session restored");
                     await chrome.storage.session.set({ lastActive: Date.now() });
                     await conn.syncDynamicScripts();
                 }
             } else {
                 await chrome.storage.session.remove(['sessionPassword', 'lastActive']);
-                console.log("TrustKeys: Session expired");
             }
         }
     } catch (e) {

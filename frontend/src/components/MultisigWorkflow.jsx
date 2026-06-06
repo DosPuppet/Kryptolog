@@ -12,13 +12,11 @@ const SignerVerificationBadge = ({ signer, contentToVerify }) => {
     const [status, setStatus] = useState('idle'); // idle, verifying, valid, invalid
 
     const verify = async () => {
-        console.log("Verify Clicked for", signer.user_address);
         if (!signer.signature || !contentToVerify) {
             console.warn("Missing signature or content", { sig: !!signer.signature, content: !!contentToVerify });
             return;
         }
         setStatus('verifying');
-        console.log("SignerVerificationBadge: Verifying content length", contentToVerify.length);
         try {
             // Reconstruct Signed Message (Sig + Content) or detached? 
             // In handleSign, we sent detached prefix/suffix.
@@ -182,12 +180,7 @@ export default function MultisigWorkflow({ workflow, onClose, onUpdate, setUploa
                 }
             }
 
-            // 2. Check if I am a Signer with direct key access
-            if (!encryptedKeyToDecrypt && isSigner) {
-                console.log("Found signer key in workflow object");
-            }
-
-            // 3. Fallback: Check if Secret Data is embedded in Workflow (New Backend Schema)
+            // Fallback: Check if Secret Data is embedded in Workflow (New Backend Schema)
             if (!encryptedKeyToDecrypt && workflow.secret && workflow.secret.encrypted_data) {
                 // If I am a signer, I have the key (step 2), but I need the CONTENT.
                 // Wait, 'encryptedKeyToDecrypt' variable name in this function is confusing.
@@ -297,7 +290,7 @@ export default function MultisigWorkflow({ workflow, onClose, onUpdate, setUploa
     const processDecryptedContent = async (contentString, fileKey) => {
         try {
             let parsed;
-            try { parsed = JSON.parse(contentString); } catch (e) { }
+            try { parsed = JSON.parse(contentString); } catch { /* best-effort: failure is non-fatal */ }
 
             if (parsed && parsed.signature && parsed.signerPublicKey) {
                 // Signed Document Wrapper
@@ -530,7 +523,6 @@ export default function MultisigWorkflow({ workflow, onClose, onUpdate, setUploa
 
             let recipientKeys = null;
             if (isLastSigner && workflow.recipients && workflow.recipients.length > 0) {
-                console.log("Last Signer identified. Generating keys for recipients...");
                 if (setUploadProgress) {
                     setUploadProgress(70);
                     setStatusMessage && setStatusMessage("Encrypting for recipients...");
