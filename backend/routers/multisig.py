@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException, status, Request
+from fastapi import APIRouter, Depends, HTTPException, Request
 from dependencies import limiter
 from sqlalchemy.orm import Session, joinedload
 from typing import List
@@ -6,7 +6,6 @@ from datetime import datetime, timezone
 import models, schemas
 from database import get_db
 from dependencies import get_current_user
-from websocket_manager import manager
 from utils.push import notify_user_push
 
 router = APIRouter(

@@ -83,15 +83,6 @@ const CreateSecret = ({ onCreate, onCancel }) => {
         }
     };
 
-    const readFileAsBase64 = (file) => {
-        return new Promise((resolve, reject) => {
-            const reader = new FileReader();
-            reader.onload = () => resolve(reader.result);
-            reader.onerror = reject;
-            reader.readAsDataURL(file);
-        });
-    };
-
     return (
         <div className="bg-white dark:bg-slate-850 border border-slate-200 dark:border-slate-700 rounded-xl p-6 mb-6 shadow-lg animate-in fade-in slide-in-from-top-4">
             <div className="flex justify-between items-center mb-6">

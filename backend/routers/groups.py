@@ -1,7 +1,6 @@
 from fastapi import APIRouter, Depends, HTTPException, Request
 from dependencies import limiter
 from sqlalchemy.orm import Session, joinedload
-from sqlalchemy import func
 from typing import List
 import uuid
 import models, schemas

@@ -51,12 +51,6 @@ export function useMultisig() {
         }
     };
 
-    const createWorkflow = async (name, signers, recipients, secretId) => {
-        // This usually requires a separate modal logic or API call helper
-        // For now just exposing state and fetch
-        // API call would be here if extended
-    };
-
     return {
         workflows,
         loading,

@@ -1,6 +1,7 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from database import engine, Base
+from database import engine
+from models import Base
 import os
 
 from routers import auth, users, secrets, multisig, messenger, groups, notifications

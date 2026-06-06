@@ -1,7 +1,6 @@
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, Request
 from dependencies import limiter
 from sqlalchemy.orm import Session
-from typing import List
 import models, schemas
 from database import get_db
 from dependencies import get_current_user

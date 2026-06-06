@@ -1,6 +1,5 @@
 from fastapi import WebSocket
 from typing import Dict, List, Set
-import json
 
 class ConnectionManager:
     def __init__(self):

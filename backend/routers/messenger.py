@@ -1,6 +1,6 @@
 from fastapi import APIRouter, Depends, HTTPException, WebSocket, WebSocketDisconnect, status, Request
 from dependencies import limiter
-from sqlalchemy import or_, func, case, and_
+from sqlalchemy import or_, func, case
 from sqlalchemy.orm import Session, defer, joinedload
 from typing import List
 import json
