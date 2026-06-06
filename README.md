@@ -296,6 +296,19 @@ alembic downgrade -1
 
 ## Environment Variables
 
+The app reads two `.env` files, one per service. Copy each `.env.example` to
+`.env` and fill it in **before** starting the app:
+
+- **`backend/.env`** — server config: deployment mode, the ML-DSA signing keypair
+  (mandatory in production), CORS origins, trusted-proxy IPs, and the VAPID
+  *private* key for sending Web Push. Holds the app's secrets — never commit it.
+- **`frontend/.env`** — build-time config baked into the SPA by Vite: the backend
+  API URL and the VAPID *public* key. Only `VITE_`-prefixed values are exposed to
+  the browser; put nothing secret here.
+
+Defaults are tuned for local development, so for a localhost run you can copy both
+examples unchanged (push notifications stay off until VAPID keys are set).
+
 ### Backend (`backend/.env`)
 
 | Variable | Required | Default | Description |
@@ -313,8 +326,9 @@ alembic downgrade -1
 
 | Variable | Required | Default | Description |
 |----------|----------|---------|-------------|
-| `VITE_API_BASE_URL` | No | `http://localhost:8000` | Backend API URL |
-| `ALLOWED_HOSTS` | No | – | Comma-separated Vite dev server allowed hosts |
+| `VITE_API_BASE_URL` | No | `http://localhost:8000` | Backend API URL. Also drives the CSP `connect-src` (its https + wss origins are injected into `index.html` at build time). |
+| `VITE_VAPID_PUBLIC_KEY` | No | – | Web Push VAPID **public** key. Must match the backend's `VAPID_PRIVATE_KEY`. Leave empty to disable push. |
+| `ALLOWED_HOSTS` | No | – | Comma-separated Vite dev server allowed hosts (e.g. a tunnel/proxy hostname). |
 
 ---
 
