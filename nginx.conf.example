@@ -55,14 +55,26 @@ server {
 
     # CSP via HTTP header — takes precedence over the <meta> tag in index.html.
     # frame-ancestors only works in headers (not meta tags), so it lives here.
-    # Replace "your-domain.com" in connect-src with your actual domain.
+    #
+    # Least-privilege notes (keep this tight):
+    #   script-src 'self'      — app ships as hashed external bundles; no inline
+    #                            scripts, no eval, no WASM (noble PQC is pure JS).
+    #   style-src 'unsafe-inline' — required: Tailwind/React inject inline styles
+    #                            at runtime. fonts.googleapis.com serves the CSS.
+    #   connect-src            — list every API/WS origin the SPA talks to. If the
+    #                            API is a separate subdomain you need BOTH its
+    #                            https origin and its wss origin (see below).
+    #
+    # Replace the api.your-domain.com origins below with your actual API host
+    # (same value family as the frontend's VITE_API_BASE_URL). For a same-origin
+    # API proxied under this server, "connect-src 'self'" alone is enough.
     add_header Content-Security-Policy
         "default-src 'self';
-         script-src 'self' 'wasm-unsafe-eval';
+         script-src 'self';
          style-src 'self' 'unsafe-inline' https://fonts.googleapis.com;
          font-src 'self' https://fonts.gstatic.com;
          img-src 'self' data:;
-         connect-src 'self' wss://your-domain.com;
+         connect-src 'self' https://api.your-domain.com wss://api.your-domain.com;
          worker-src 'self';
          form-action 'self';
          base-uri 'self';
