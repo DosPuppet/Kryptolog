@@ -54,4 +54,12 @@ export default defineConfig([
       globals: { ...globals.node, vi: 'readonly', vitest: 'readonly' },
     },
   },
+  // Context files intentionally export a Provider component alongside its
+  // useXxx() hook (a deliberate, conventional pattern). That trips Fast
+  // Refresh's only-export-components rule — a dev-only HMR concern with no
+  // runtime impact — so disable it just for this directory.
+  {
+    files: ['src/context/**/*.{js,jsx}'],
+    rules: { 'react-refresh/only-export-components': 'off' },
+  },
 ])
