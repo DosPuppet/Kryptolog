@@ -16,11 +16,14 @@ export function useSecrets(authType, encryptionPublicKey, pqcAccount, options = 
     const [loading, setLoading] = useState(true);
     const [decryptedSecrets, setDecryptedSecrets] = useState({});
 
+    // Load secrets once authenticated. The fetchers close only over the
+    // current token, so token is the only meaningful trigger.
     useEffect(() => {
         if (token) {
             fetchSecrets();
             fetchSharedSecrets();
         }
+        // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [token]);
 
     const reportProgress = (percent, msg) => {

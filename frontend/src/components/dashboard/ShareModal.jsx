@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { Search, Loader2, X, Check } from 'lucide-react';
 import API_ENDPOINTS from '../../config';
 import { useAuth } from '../../context/AuthContext';
@@ -12,7 +12,7 @@ const ShareModal = ({ isOpen, onClose, secret, onShare }) => {
     const [selectedUser, setSelectedUser] = useState(null);
     const [expiry, setExpiry] = useState(0);
 
-    const searchUsers = async (query) => {
+    const searchUsers = useCallback(async (query) => {
         setLoading(true);
         try {
             const limit = 10;
@@ -29,7 +29,7 @@ const ShareModal = ({ isOpen, onClose, secret, onShare }) => {
         } finally {
             setLoading(false);
         }
-    };
+    }, [token, user]);
 
     // Debounce
     useEffect(() => {
@@ -41,7 +41,7 @@ const ShareModal = ({ isOpen, onClose, secret, onShare }) => {
         }
         const timer = setTimeout(() => searchUsers(searchQuery), 500);
         return () => clearTimeout(timer);
-    }, [searchQuery, isOpen]);
+    }, [searchQuery, isOpen, searchUsers]);
 
     const handleShare = async () => {
         if (!selectedUser || !secret) return;

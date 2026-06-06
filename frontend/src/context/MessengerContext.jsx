@@ -414,15 +414,21 @@ export const MessengerProvider = ({ children }) => {
                 wsRef.current = null;
             }
         };
+        // Reconnect only on identity/token change. The handlers called inside
+        // ws.onmessage are intentionally excluded — including them would tear
+        // down and rebuild the socket on every render.
+        // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [user?.address, token]);
 
     // ── Initial Load ───────────────────────────────────────────────
 
+    // Load conversations once authenticated; fetchers close over the current token.
     useEffect(() => {
         if (token) {
             fetchConversations();
             fetchGroupConversations();
         }
+        // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [token]);
 
     // ── DM Functions ───────────────────────────────────────────────

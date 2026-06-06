@@ -21,13 +21,14 @@ export default function VaultManager({ onClose }) {
     const [importJson, setImportJson] = useState('');
     const [msg, setMsg] = useState({ type: '', text: '' });
 
-    useEffect(() => {
-        refresh();
-    }, [pqcAccount]); // access/refresh when active account changes
-
     const refresh = () => {
         setAccounts(getVaultAccounts());
     };
+
+    // Refresh only when the active account changes. getVaultAccounts is a
+    // stateless localStorage accessor, so it's intentionally not a dep.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    useEffect(() => { refresh(); }, [pqcAccount]);
 
     const handleCreate = async () => {
         try {

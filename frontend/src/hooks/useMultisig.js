@@ -9,6 +9,9 @@ export function useMultisig() {
 
     const [actionRequiredCount, setActionRequiredCount] = useState(0);
 
+    // Fetch + poll while authenticated. fetchWorkflows closes only over the
+    // current token, so re-running solely on token change is correct; keeping
+    // it out of deps avoids tearing down the interval every render.
     useEffect(() => {
         if (token) {
             fetchWorkflows();
@@ -16,6 +19,7 @@ export function useMultisig() {
             const interval = setInterval(fetchWorkflows, 10000);
             return () => clearInterval(interval);
         }
+        // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [token]);
 
     const fetchWorkflows = async () => {

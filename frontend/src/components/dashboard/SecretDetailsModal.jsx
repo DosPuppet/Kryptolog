@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { X, Clock, User, Trash2, Loader2, Info } from 'lucide-react';
 import API_ENDPOINTS from '../../config';
 import { useAuth } from '../../context/AuthContext';
@@ -9,15 +9,7 @@ const SecretDetailsModal = ({ isOpen, onClose, secret }) => {
     const [grants, setGrants] = useState([]);
     const [error, setError] = useState(null);
 
-    useEffect(() => {
-        if (isOpen && secret) {
-            fetchGrants();
-        } else {
-            setGrants([]);
-        }
-    }, [isOpen, secret]);
-
-    const fetchGrants = async () => {
+    const fetchGrants = useCallback(async () => {
         setLoading(true);
         setError(null);
         try {
@@ -36,7 +28,15 @@ const SecretDetailsModal = ({ isOpen, onClose, secret }) => {
         } finally {
             setLoading(false);
         }
-    };
+    }, [token, secret]);
+
+    useEffect(() => {
+        if (isOpen && secret) {
+            fetchGrants();
+        } else {
+            setGrants([]);
+        }
+    }, [isOpen, secret, fetchGrants]);
 
     const handleRevoke = async (grantId) => {
         if (!confirm("Are you sure you want to revoke access?")) return;

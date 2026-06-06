@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { X, Search, Loader2 } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
 import API_ENDPOINTS from '../../config';
@@ -9,7 +9,7 @@ const NewChatModal = ({ isOpen, onClose, onStartChat }) => {
     const [searchResults, setSearchResults] = useState([]);
     const [searching, setSearching] = useState(false);
 
-    const searchUsers = async (query) => {
+    const searchUsers = useCallback(async (query) => {
         setSearching(true);
         try {
             const res = await fetch(`${API_ENDPOINTS.USERS.LIST}?search=${encodeURIComponent(query)}&only_pqc=true&limit=10`, {
@@ -22,14 +22,14 @@ const NewChatModal = ({ isOpen, onClose, onStartChat }) => {
         } finally {
             setSearching(false);
         }
-    };
+    }, [token, user]);
 
     useEffect(() => {
         if (!isOpen) return;
         if (!searchQuery) { setSearchResults([]); return; }
         const timer = setTimeout(() => searchUsers(searchQuery), 500);
         return () => clearTimeout(timer);
-    }, [searchQuery, isOpen]);
+    }, [searchQuery, isOpen, searchUsers]);
 
     if (!isOpen) return null;
 

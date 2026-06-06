@@ -1,4 +1,4 @@
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useCallback } from 'react';
 import { Loader2, LayoutGrid, List } from 'lucide-react';
 import SecretItem from './SecretItem';
 
@@ -16,7 +16,7 @@ const SecretList = ({ secrets, sharedSecrets = [], decryptedSecrets, onDecrypt, 
         localStorage.setItem('secretSortBy', value);
     };
 
-    const sortItems = (items, getField) => {
+    const sortItems = useCallback((items, getField) => {
         const sorted = [...items];
         switch (sortBy) {
             case 'date-desc': sorted.sort((a, b) => new Date(getField(b, 'created_at')) - new Date(getField(a, 'created_at'))); break;
@@ -25,10 +25,10 @@ const SecretList = ({ secrets, sharedSecrets = [], decryptedSecrets, onDecrypt, 
             case 'name-desc': sorted.sort((a, b) => getField(b, 'name').localeCompare(getField(a, 'name'))); break;
         }
         return sorted;
-    };
+    }, [sortBy]);
 
-    const sortedSecrets = useMemo(() => sortItems(secrets, (s, f) => s[f] || ''), [secrets, sortBy]);
-    const sortedShared = useMemo(() => sortItems(sharedSecrets, (g, f) => g.secret?.[f] || ''), [sharedSecrets, sortBy]);
+    const sortedSecrets = useMemo(() => sortItems(secrets, (s, f) => s[f] || ''), [secrets, sortItems]);
+    const sortedShared = useMemo(() => sortItems(sharedSecrets, (g, f) => g.secret?.[f] || ''), [sharedSecrets, sortItems]);
 
     if (loading) {
         return (

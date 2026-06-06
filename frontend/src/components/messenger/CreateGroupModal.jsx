@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { X, Search, Loader2, Users, Plus, Check } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
 import API_ENDPOINTS from '../../config';
@@ -12,7 +12,7 @@ const CreateGroupModal = ({ isOpen, onClose, onCreate }) => {
     const [searching, setSearching] = useState(false);
     const [creating, setCreating] = useState(false);
 
-    const searchUsers = async (query) => {
+    const searchUsers = useCallback(async (query) => {
         setSearching(true);
         try {
             const res = await fetch(`${API_ENDPOINTS.USERS.LIST}?search=${encodeURIComponent(query)}&only_pqc=true&limit=10`, {
@@ -25,14 +25,14 @@ const CreateGroupModal = ({ isOpen, onClose, onCreate }) => {
         } finally {
             setSearching(false);
         }
-    };
+    }, [token, user]);
 
     useEffect(() => {
         if (!isOpen) return;
         if (!searchQuery) { setSearchResults([]); return; }
         const timer = setTimeout(() => searchUsers(searchQuery), 500);
         return () => clearTimeout(timer);
-    }, [searchQuery, isOpen]);
+    }, [searchQuery, isOpen, searchUsers]);
 
     useEffect(() => {
         if (!isOpen) {
