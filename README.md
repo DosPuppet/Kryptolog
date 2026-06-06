@@ -225,7 +225,7 @@ npm run dev
 | `/secrets` | Secret vault (default authenticated view) |
 | `/multisig` | Multisig workflows |
 | `/messenger` | E2EE messenger (PQC auth only — not available with MetaMask) |
-| `/proof-audit` | Proof audit log — view and download signed document history |
+| `/proof-audit` | Offline proof verifier — upload a `.kryptolog-proof.json` to cryptographically verify its signature(s) (ML-DSA or ETH), then check the original text/file(s) against the signed SHA-256 hash. All verification runs client-side |
 
 ---
 
