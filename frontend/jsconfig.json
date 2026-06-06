@@ -1,0 +1,18 @@
+{
+  // Plain JS project (no TypeScript). Type-checking is intentionally off:
+  // without it, the editor's TS language server emits speculative hints
+  // (e.g. TS80007 "'await' has no effect") from mis-inferred return types on
+  // untyped async functions — false positives, since the awaited calls are
+  // genuinely async. Build/test/lint do not type-check; this keeps the editor
+  // consistent with that.
+  "compilerOptions": {
+    "checkJs": false,
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "target": "ESNext",
+    "jsx": "react-jsx",
+    "baseUrl": "."
+  },
+  "include": ["src"],
+  "exclude": ["node_modules", "dist"]
+}
