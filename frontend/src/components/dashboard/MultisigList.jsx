@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import { useState, useMemo } from 'react';
 import { Loader2, FolderGit2, Check, Clock, AlertTriangle, LayoutGrid, List, ChevronDown, Eye } from 'lucide-react';
 
 const MultisigList = ({ workflows, onSelect, onCreate, loading }) => {

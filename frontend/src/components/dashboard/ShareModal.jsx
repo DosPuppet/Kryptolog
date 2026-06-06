@@ -1,5 +1,5 @@
-import React, { useState, useEffect } from 'react';
-import { Search, Loader2, X, User, Check } from 'lucide-react';
+import { useState, useEffect } from 'react';
+import { Search, Loader2, X, Check } from 'lucide-react';
 import API_ENDPOINTS from '../../config';
 import { useAuth } from '../../context/AuthContext';
 

@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { ArrowLeft, Shield, Loader2, Send, Lock, Users, UserPlus, UserMinus, Crown, ShieldCheck, Edit2, Check, X } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
 import { useMessengerContext } from '../../context/MessengerContext';

@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import { useState, useMemo } from 'react';
 import { Loader2, LayoutGrid, List } from 'lucide-react';
 import SecretItem from './SecretItem';
 

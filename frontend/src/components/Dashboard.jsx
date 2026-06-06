@@ -26,7 +26,7 @@ import ProofAudit from './ProofAudit';
 import DashboardSidebar from './DashboardSidebar';
 
 export default function Dashboard({ view = 'secrets' }) {
-    const { user, authType, logout, setUser, token } = useAuth();
+    const { user, authType, logout, token } = useAuth();
     const { theme, toggleTheme } = useTheme();
     const { currentAccount, encryptionPublicKey: ethKey } = useWeb3();
     const { hasLocalVault, isExtensionAvailable, kyberKey, pqcAccount } = usePQC();
@@ -69,7 +69,6 @@ export default function Dashboard({ view = 'secrets' }) {
         handleDecrypt,
         handleLock,
         createSecret,
-        updateSecret,
         deleteSecret,
         shareSecret,
         revokeGrant,

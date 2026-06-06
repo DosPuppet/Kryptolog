@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useEffect, useState, useCallback, useRef } from 'react';
+import { createContext, useContext, useEffect, useState, useCallback, useRef } from 'react';
 import { useAuth } from './AuthContext';
 import { API_ENDPOINTS } from '../config';
 
@@ -33,7 +33,7 @@ const NOTIFICATIONS_SUPPORTED = typeof window !== 'undefined' && 'Notification' 
 const currentPermission = () => (NOTIFICATIONS_SUPPORTED ? Notification.permission : 'default');
 
 export const NotificationProvider = ({ children }) => {
-    const { user, isAuthenticated, token } = useAuth();
+    const { isAuthenticated, token } = useAuth();
     const [permission, setPermission] = useState(currentPermission);
     const [subscription, setSubscription] = useState(null);
     const [error, setError] = useState(null);

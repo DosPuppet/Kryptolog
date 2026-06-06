@@ -1,5 +1,5 @@
-import React, { useState } from 'react';
-import { Lock, Unlock, Copy, Check, FileText, Share2, Trash2, FileSignature, BadgeCheck, AlertTriangle, Download, Info, Users, ShieldCheck, ChevronDown } from 'lucide-react';
+import { useState } from 'react';
+import { Lock, Copy, FileText, Share2, Trash2, FileSignature, BadgeCheck, AlertTriangle, Download, Users, ShieldCheck, ChevronDown } from 'lucide-react';
 import { useTheme } from '../../context/ThemeContext';
 import { useAuth } from '../../context/AuthContext';
 import { verifySignaturePQC } from '../../utils/crypto';
@@ -138,7 +138,6 @@ const SecretItem = ({ secret, decryptedContent, onDecrypt, onLock, onDelete, onS
     // Inner Content (File/Text)
     let innerDisplay = content;
     let isFile = false;
-    let fileData = null;
 
     if (content) {
         try {
@@ -181,7 +180,6 @@ const SecretItem = ({ secret, decryptedContent, onDecrypt, onLock, onDelete, onS
                 );
             } else if (parsed && parsed.type === 'file' && parsed.content) {
                 isFile = true;
-                fileData = parsed;
 
                 const isImage = parsed.mime && parsed.mime.startsWith('image/');
 

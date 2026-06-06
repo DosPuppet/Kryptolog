@@ -1,5 +1,4 @@
 import React, { useState } from 'react';
-import { useAuth } from '../context/AuthContext';
 import { useMessenger } from '../hooks/useMessenger';
 import { Loader2 } from 'lucide-react';
 

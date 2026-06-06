@@ -1,4 +1,4 @@
-import { encryptVault, decryptVault, encryptVaultWithKey, decryptVaultWithKey, deriveKey, fromHex, generateAccount, signMessagePQC, decryptMessagePQC, unwrapSessionKey, generateSessionKey, wrapSessionKey } from '../utils/crypto';
+import { encryptVault, encryptVaultWithKey, decryptVaultWithKey, deriveKey, fromHex, generateAccount, signMessagePQC, decryptMessagePQC, unwrapSessionKey, generateSessionKey, wrapSessionKey } from '../utils/crypto';
 
 class VaultService {
     constructor() {

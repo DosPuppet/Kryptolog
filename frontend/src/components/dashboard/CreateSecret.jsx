@@ -1,11 +1,9 @@
-import React, { useState } from 'react';
+import { useState } from 'react';
 import { useAuth } from '../../context/AuthContext';
-import { usePQC } from '../../context/PQCContext';
 import { Loader2, Plus, PenTool, Upload, FileText, Check, Shield, Trash2 } from 'lucide-react';
 
 const CreateSecret = ({ onCreate, onCancel }) => {
     const { authType } = useAuth();
-    const { hasLocalVault, isExtensionAvailable } = usePQC();
 
     // Form State
     const [name, setName] = useState('');

@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import { useState } from 'react';
 import { MessageSquare, Plus, Lock, Users } from 'lucide-react';
 
 const ConversationList = ({ conversations, activeConversation, onSelect, onNewChat, groupConversations, activeGroupConversation, onSelectGroup, onNewGroup }) => {

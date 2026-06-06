@@ -1,4 +1,4 @@
-import React, { createContext, useState, useEffect, useContext } from 'react';
+import { createContext, useState, useEffect, useContext } from 'react';
 import API_ENDPOINTS from '../config';
 import { connectWallet, getEncryptionPublicKey, signMessage } from '../utils/web3';
 import { useAuth } from './AuthContext';

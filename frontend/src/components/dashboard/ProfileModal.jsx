@@ -1,5 +1,5 @@
-import React, { useState, useEffect } from 'react';
-import { X, User, Key, Check, Copy, Save, Loader2 } from 'lucide-react';
+import { useState, useEffect } from 'react';
+import { X, User, Key, Save, Loader2 } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
 import { useWeb3 } from '../../context/Web3Context';
 import { usePQC } from '../../context/PQCContext';

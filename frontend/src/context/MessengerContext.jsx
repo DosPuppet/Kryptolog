@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useState, useEffect, useRef, useMemo, useCallback } from 'react';
+import { createContext, useContext, useState, useEffect, useRef, useMemo } from 'react';
 import { useAuth } from './AuthContext';
 import { usePQC } from './PQCContext';
 import API_ENDPOINTS from '../config';
@@ -15,8 +15,8 @@ export const useMessengerContext = () => {
 };
 
 export const MessengerProvider = ({ children }) => {
-    const { user, token, authType } = useAuth();
-    const { encrypt, decrypt, generateSessionKey, wrapSessionKey, unwrapSessionKey, unwrapManySessionKeys, kyberKey } = usePQC();
+    const { user, token } = useAuth();
+    const { generateSessionKey, wrapSessionKey, unwrapSessionKey, unwrapManySessionKeys, kyberKey } = usePQC();
 
     const [conversations, setConversations] = useState([]);
     const [activeConversation, setActiveConversation] = useState(null); // { user, messages: [] }

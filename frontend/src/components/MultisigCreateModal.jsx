@@ -1,10 +1,10 @@
-import React, { useState, useEffect } from 'react';
-import { X, Search, Plus, Trash2, Check, Lock, Users, FileText, ArrowRight, ArrowLeft, Upload } from 'lucide-react';
+import { useState, useEffect } from 'react';
+import { X, Search, Plus, Trash2, Check, FileText, ArrowRight, Upload } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import { usePQC } from '../context/PQCContext';
 import { useWeb3 } from '../context/Web3Context';
 import { generateSymmetricKey, encryptSymmetric } from '../utils/crypto';
-import { encryptData, getEncryptionPublicKey, signMessageEth } from '../utils/web3';
+import { encryptData, signMessageEth } from '../utils/web3';
 import API_ENDPOINTS from '../config';
 import { uploadChunkedFile, uploadMultipleChunkedFiles, CHUNK_SIZE } from '../utils/fileChunks';
 

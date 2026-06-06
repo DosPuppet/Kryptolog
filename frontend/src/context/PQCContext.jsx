@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useState, useEffect } from 'react';
+import { createContext, useContext, useState, useEffect } from 'react';
 import API_ENDPOINTS from '../config';
 import { useAuth } from './AuthContext';
 import { vaultService } from '../services/vault';

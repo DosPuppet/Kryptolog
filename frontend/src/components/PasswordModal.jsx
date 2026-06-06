@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef } from 'react';
 
 const PasswordModal = ({ isOpen, onSubmit, onCancel, message, onBiometric }) => {
     const [password, setPassword] = useState('');

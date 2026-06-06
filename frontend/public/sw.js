@@ -1,4 +1,4 @@
-/* eslint-disable no-restricted-globals */
+ 
 
 // Force new service worker to activate immediately (no waiting for tabs to close)
 self.addEventListener('install', function () { self.skipWaiting(); });

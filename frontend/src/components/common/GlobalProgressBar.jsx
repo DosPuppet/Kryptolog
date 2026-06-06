@@ -1,4 +1,3 @@
-import React from 'react';
 
 const GlobalProgressBar = ({ progress, message }) => {
     if (progress <= 0) return null;

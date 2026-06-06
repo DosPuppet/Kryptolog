@@ -1,5 +1,5 @@
-import React, { useState } from 'react';
-import { X, Check, Clock, User, Shield, ShieldCheck, AlertTriangle, Eye, EyeOff, FileText, Download } from 'lucide-react';
+import { useState } from 'react';
+import { X, Check, User, Shield, ShieldCheck, AlertTriangle, Eye, EyeOff, FileText, Download } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import { usePQC } from '../context/PQCContext';
 import { useWeb3 } from '../context/Web3Context';
@@ -74,11 +74,11 @@ const SignerVerificationBadge = ({ signer, contentToVerify }) => {
 
 export default function MultisigWorkflow({ workflow, onClose, onUpdate, setUploadProgress, setStatusMessage }) {
     const { user, token, authType } = useAuth();
-    const { encrypt: encryptPQC, decrypt: decryptPQC, sign: signPQC, pqcAccount, kyberKey } = usePQC();
+    const { encrypt: encryptPQC, decrypt: decryptPQC, sign: signPQC } = usePQC();
     const { currentAccount } = useWeb3();
 
     const [isSigning, setIsSigning] = useState(false);
-    const [isViewing, setIsViewing] = useState(false);
+    const [, setIsViewing] = useState(false);
     const [decryptedContent, setDecryptedContent] = useState(null);
     const [rawDecryptedContent, setRawDecryptedContent] = useState(null); // The actual string signers signed
     const [verificationStatus, setVerificationStatus] = useState(null); // 'verified', 'failed', 'unsigned'
@@ -184,7 +184,6 @@ export default function MultisigWorkflow({ workflow, onClose, onUpdate, setUploa
 
             // 2. Check if I am a Signer with direct key access
             if (!encryptedKeyToDecrypt && isSigner) {
-                const mySignerEntry = workflow.signers.find(s => s.user_address === user.address);
                 console.log("Found signer key in workflow object");
             }
 

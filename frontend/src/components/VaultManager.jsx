@@ -1,7 +1,6 @@
-import React, { useState, useEffect } from 'react';
+import { useState, useEffect } from 'react';
 import { usePQC } from '../context/PQCContext';
-import { useAuth } from '../context/AuthContext';
-import { X, Plus, Trash2, Download, Upload, User, Check, RefreshCw, Timer } from 'lucide-react';
+import { X, Plus, Trash2, Download, Upload, User, RefreshCw, Timer } from 'lucide-react';
 import { vaultService } from '../services/vault';
 
 export default function VaultManager({ onClose }) {
