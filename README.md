@@ -160,6 +160,8 @@ npm install
 
 ### 4. TrustKeys extension (optional — required for PQC features)
 
+> See [trustkeys/README.md](trustkeys/README.md) for full extension documentation (architecture, Web API reference, key management).
+
 ```bash
 cd ../trustkeys
 npm install

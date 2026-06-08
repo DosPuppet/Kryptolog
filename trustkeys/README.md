@@ -3,7 +3,7 @@
 TrustKeys is a quantum-resistant browser extension designed to secure interactions against future quantum computing threats. It implements the **Module-Lattice-based Key Encapsulation Mechanism (ML-KEM)** and **Digital Signature Algorithm (ML-DSA)** standards.
 
 > **Status**: Beta (Production Functional)
-> **Algorithms**: Crystals-Kyber-768 (ML-KEM) & Crystals-Dilithium-2 (ML-DSA)
+> **Algorithms**: ML-KEM-768 (FIPS 203) & ML-DSA-44 (FIPS 204)
 > **Role**: Primary PQC Authentication Provider for Kryptolog.
 
 ---
@@ -12,10 +12,10 @@ TrustKeys is a quantum-resistant browser extension designed to secure interactio
 
 ### 1. Quantum-Proof Algorithms
 TrustKeys utilizes the NIST multi-round selected algorithms for post-quantum security:
-- **Encryption**: [Crystals-Kyber-768](https://pq-crystals.org/kyber/) (ML-KEM)
+- **Encryption**: ML-KEM-768 (FIPS 203) via `@noble/post-quantum`
   - Used for securely establishing shared secrets (Key Encapsulation).
-  - Hybrid Encryption: Kyber derives a shared secret, which is then used to encrypt messages via **AES-256-GCM**.
-- **Signing**: [Crystals-Dilithium-2](https://pq-crystals.org/dilithium/) (ML-DSA)
+  - Hybrid Encryption: ML-KEM derives a shared secret, which is then used to encrypt messages via **AES-256-GCM**.
+- **Signing**: ML-DSA-44 (FIPS 204) via `@noble/post-quantum`
   - Used for generating unforgeable digital signatures.
 
 ### 2. The Secure Vault
@@ -121,7 +121,7 @@ const account = await window.trustkeys.getAccount();
 ### Digital Signatures (ML-DSA)
 
 #### `sign(message)`
-Sign a message using the active account's Dilithium private key.
+Sign a message using the active account's ML-DSA-44 private key.
 ```javascript
 const signature = await window.trustkeys.sign("Login Nonce: 12345");
 // Triggers Approval Popup. Returns hex-encoded signature.
@@ -196,12 +196,12 @@ const keys = await window.trustkeys.unwrapManySessionKeys([blob1, blob2, blob3])
 |-----------|------------|
 | UI | React 18, Manifest V3 |
 | Build | Vite + @crxjs/vite-plugin |
-| PQC Encryption | crystals-kyber (ML-KEM 768) |
-| PQC Signatures | dilithium-crystals-js (ML-DSA 2) |
+| PQC Encryption | @noble/post-quantum — ML-KEM-768 (FIPS 203) |
+| PQC Signatures | @noble/post-quantum — ML-DSA-44 (FIPS 204) |
 | Vault | AES-256-GCM encrypted storage |
 | Dynamic Scripts | chrome.scripting API |
 
 ---
 
 ## Disclaimer
-This software uses experimental cryptographic standards. While Kyber and Dilithium are NIST-selected, this specific implementation has not undergone a formal security audit. Use for testing and development purposes only.
+This software implements NIST-standardized post-quantum algorithms (FIPS 203/204) via `@noble/post-quantum`, which has been formally audited. The broader application (vault storage, key management, authorization flows) has not undergone an independent security audit. Use for testing and development purposes only.
