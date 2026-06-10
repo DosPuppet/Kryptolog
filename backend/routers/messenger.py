@@ -4,7 +4,8 @@ from sqlalchemy import or_, func, case
 from sqlalchemy.orm import Session, defer, joinedload
 from typing import List
 import json
-import models, schemas
+import asyncio
+import models, schemas, config
 from database import get_db, SessionLocal
 from dependencies import get_current_user, user_for_token
 from websocket_manager import manager
@@ -161,13 +162,33 @@ def mark_read(partner_address: str, current_user: models.User = Depends(get_curr
 # WebSocket router without prefix so it mounts at /ws
 ws_router = APIRouter()
 
+# How long an accepted socket may stay unauthenticated before we close it (M2).
+WS_AUTH_TIMEOUT_SECONDS = 10.0
+
 @ws_router.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
+    # Origin allowlist (M2): CORS does NOT cover WebSocket handshakes, so reject
+    # cross-site connections here. Token auth already blocks CSWSH (the bearer
+    # token isn't auto-sent like a cookie), but an unchecked Origin still lets any
+    # page open sockets. Only enforced when an allowlist is configured (dev may
+    # leave ALLOWED_ORIGINS unset); closing before accept() rejects the handshake.
+    allowed = config.get_allowed_origins()
+    if allowed:
+        origin = websocket.headers.get("origin")
+        if origin is None or origin.rstrip("/") not in allowed:
+            await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
+            return
+
     await websocket.accept()
-    
-    # Wait for authentication message
+
+    # Wait for the authentication message — bounded (M2) so unauthenticated
+    # sockets can't linger and pile up. Clients send AUTH immediately on connect.
     try:
-        data = await websocket.receive_text()
+        try:
+            data = await asyncio.wait_for(websocket.receive_text(), timeout=WS_AUTH_TIMEOUT_SECONDS)
+        except asyncio.TimeoutError:
+            await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
+            return
         auth_data = json.loads(data)
         
         if auth_data.get("type") != "AUTH":

@@ -29,14 +29,11 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
 app.add_middleware(SecurityHeadersMiddleware)
 
 # CORS configuration
-origins = []
-
-env_origins = os.getenv("ALLOWED_ORIGINS")
-if env_origins:
-    origins.extend([origin.strip().rstrip("/") for origin in env_origins.split(",")])
+import config
+origins = config.get_allowed_origins()
+if origins:
     print(f"INFO: Loaded ALLOWED_ORIGINS: {origins}")
-
-if not origins:
+else:
     print("WARNING: ALLOWED_ORIGINS not set. CORS will block all requests.")
 
 app.add_middleware(
