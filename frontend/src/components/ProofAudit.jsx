@@ -1,6 +1,6 @@
 import { useState, useRef } from 'react';
 import { Upload, ShieldCheck, ShieldAlert, FileJson, User, Key, Clock, FileText, X, Loader2, FileCheck, FileWarning, Type } from 'lucide-react';
-import { verifySignaturePQC } from '../utils/crypto';
+import { verifySignaturePQC, domainSeparate, SIGNING_CONTEXT } from '../utils/crypto';
 import { verifyMessageEth } from '../utils/web3';
 
 // Parse proof content to detect type: text, single file, or multi-file
@@ -75,10 +75,12 @@ export default function ProofAudit() {
         let isValid = false;
         let recoveredAddress = null;
 
+        // Verify against the `content`-domain-separated bytes the signer actually signed (H1).
+        const signedBody = domainSeparate(SIGNING_CONTEXT.CONTENT, doc.content);
         if (isPQC) {
-            isValid = await verifySignaturePQC(doc.content, signature, signer.publicKey);
+            isValid = await verifySignaturePQC(signedBody, signature, signer.publicKey);
         } else {
-            recoveredAddress = verifyMessageEth(doc.content, signature);
+            recoveredAddress = verifyMessageEth(signedBody, signature);
             isValid = !!recoveredAddress;
         }
 
@@ -98,6 +100,8 @@ export default function ProofAudit() {
 
     const verifyMultisigProof = async (proofData) => {
         const content = proofData.document.content;
+        // All signers signed the `content`-domain-separated bytes, not the raw content (H1).
+        const signedBody = domainSeparate(SIGNING_CONTEXT.CONTENT, content);
         const signerResults = [];
 
         for (const entry of proofData.signatures) {
@@ -107,9 +111,9 @@ export default function ProofAudit() {
 
             try {
                 if (isPQC) {
-                    isValid = await verifySignaturePQC(content, entry.signature, entry.address);
+                    isValid = await verifySignaturePQC(signedBody, entry.signature, entry.address);
                 } else {
-                    recoveredAddress = verifyMessageEth(content, entry.signature);
+                    recoveredAddress = verifyMessageEth(signedBody, entry.signature);
                     isValid = recoveredAddress && recoveredAddress.toLowerCase() === entry.address.toLowerCase();
                 }
             } catch (e) {

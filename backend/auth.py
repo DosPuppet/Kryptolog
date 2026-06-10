@@ -83,15 +83,31 @@ def generate_nonce():
     return secrets.token_hex(16)
 
 
+# Domain separation (audit H1): every signed payload is wrapped with a context
+# tag so a signature minted for one purpose (e.g. approving multisig/document
+# content) can never be replayed as another (e.g. this login challenge). The
+# context is fixed here in code, never drawn from user-supplied content, and the
+# header line cannot be reproduced by a content body, so the namespaces are
+# disjoint. Clients apply the identical wrapper (frontend `domainSeparate`).
+_DS_HEADER = "Kryptolog Signed Message v1"
+_CTX_LOGIN = "login"
+
+
+def _domain_separate(context: str, body: str) -> str:
+    return f"{_DS_HEADER}\ncontext={context}\n{body}"
+
+
 def _login_message(nonce: str, encryption_public_key: str | None = None) -> str:
     """Canonical login challenge. When an encryption (ML-KEM) key is supplied it
     is folded in, so the identity's signature cryptographically authorizes that
     key — a network attacker can't substitute their own KEM key at login (M-2).
+    The whole thing is domain-separated under the `login` context (H1) so a
+    content-signing operation can never produce these exact bytes.
     Must be byte-identical to what the clients build."""
-    msg = f"Sign in to Kryptolog with nonce: {nonce}"
+    body = f"Sign in to Kryptolog with nonce: {nonce}"
     if encryption_public_key:
-        msg += f"\nEncryption key: {encryption_public_key}"
-    return msg
+        body += f"\nEncryption key: {encryption_public_key}"
+    return _domain_separate(_CTX_LOGIN, body)
 
 
 def verify_pqc_signature(public_key: str, nonce: str, signature: str,

@@ -12,6 +12,18 @@ import { Buffer } from 'buffer';
 export const toHex = (arr) => Buffer.from(arr).toString('hex');
 export const fromHex = (hex) => new Uint8Array(Buffer.from(hex, 'hex'));
 
+// --- Domain separation (audit H1) ---
+// Every signed payload is wrapped with a context tag *before* it is signed, so a
+// signature minted for one purpose (e.g. approving multisig/document content)
+// can never be replayed as another (e.g. a login challenge). The context is
+// fixed here by the calling code — never drawn from user-supplied content — and
+// the header line cannot be reproduced by a content body, so the namespaces are
+// disjoint. The server (backend/auth.py `_login_message`) and the Ethereum path
+// apply the identical wrapper, so signatures stay interoperable across libs.
+export const SIGNING_CONTEXT = Object.freeze({ LOGIN: 'login', CONTENT: 'content' });
+const DS_HEADER = 'Kryptolog Signed Message v1';
+export const domainSeparate = (context, body) => `${DS_HEADER}\ncontext=${context}\n${body}`;
+
 // --- PQC Implementations ---
 
 // ML-KEM-768 keypair (encryption / key encapsulation).

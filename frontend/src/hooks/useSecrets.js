@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react';
 import { useAuth } from '../context/AuthContext';
 import { usePQC } from '../context/PQCContext';
 import API_ENDPOINTS from '../config';
-import { generateSymmetricKey, encryptSymmetric, decryptSymmetric } from '../utils/crypto';
+import { generateSymmetricKey, encryptSymmetric, decryptSymmetric, domainSeparate, SIGNING_CONTEXT } from '../utils/crypto';
 import { encryptData, decryptData } from '../utils/web3';
 import { uploadChunkedFile, downloadChunkedFile, uploadMultipleChunkedFiles, downloadFileByRange, CHUNK_SIZE } from '../utils/fileChunks';
 
@@ -325,7 +325,9 @@ export function useSecrets(authType, encryptionPublicKey, pqcAccount, options = 
 
             if (isSigned) {
                 reportProgress(20, 'Signing...');
-                const signature = await signPQC(payloadToEncrypt);
+                // Domain-separate under the `content` context (H1) so this document
+                // signature can never be replayed as a login challenge.
+                const signature = await signPQC(domainSeparate(SIGNING_CONTEXT.CONTENT, payloadToEncrypt));
                 const signedPayload = {
                     content: payloadToEncrypt,
                     signature: signature,

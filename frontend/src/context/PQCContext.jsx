@@ -2,6 +2,7 @@ import { createContext, useContext, useState, useEffect } from 'react';
 import API_ENDPOINTS from '../config';
 import { useAuth } from './AuthContext';
 import { vaultService } from '../services/vault';
+import { domainSeparate, SIGNING_CONTEXT } from '../utils/crypto';
 
 const PQCContext = createContext();
 
@@ -111,9 +112,12 @@ export const PQCProvider = ({ children }) => {
         const { nonce } = await nonceRes.json();
 
         // 2. Sign Nonce — bind the encryption (ML-KEM) key into the challenge so
-        //    the identity's signature authorizes it (M-2). Must match the server.
-        const message = `Sign in to Kryptolog with nonce: ${nonce}` +
+        //    the identity's signature authorizes it (M-2). The challenge is
+        //    domain-separated under the `login` context (H1) so a content-signing
+        //    operation can never produce these bytes. Must match the server.
+        const body = `Sign in to Kryptolog with nonce: ${nonce}` +
             (encryptionKey ? `\nEncryption key: ${encryptionKey}` : '');
+        const message = domainSeparate(SIGNING_CONTEXT.LOGIN, body);
         const signature = await signFn(message);
 
         // 3. Verify on Backend

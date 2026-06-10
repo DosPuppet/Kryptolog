@@ -28,6 +28,8 @@ import {
   generateKyberKeyPair,
   generateDilithiumKeyPair,
   toHex,
+  domainSeparate,
+  SIGNING_CONTEXT,
 } from '../utils/crypto';
 
 const fromHexLocal = (h) => new Uint8Array(Buffer.from(h, 'hex'));
@@ -85,6 +87,38 @@ describe('ML-KEM-768 hybrid envelope round-trips', () => {
     const wrapped = await wrapSessionKey(sessionKey, publicKey);
     const unwrapped = await unwrapSessionKey(wrapped, privateKey);
     expect(unwrapped).toBe(sessionKey);
+  });
+});
+
+describe('domain separation (audit H1)', () => {
+  it('login and content contexts produce disjoint signed bytes', () => {
+    const body = 'Sign in to Kryptolog with nonce: abc\nEncryption key: xyz';
+    const asLogin = domainSeparate(SIGNING_CONTEXT.LOGIN, body);
+    const asContent = domainSeparate(SIGNING_CONTEXT.CONTENT, body);
+    expect(asLogin).not.toBe(asContent);
+    expect(asLogin.startsWith('Kryptolog Signed Message v1\ncontext=login\n')).toBe(true);
+    expect(asContent.startsWith('Kryptolog Signed Message v1\ncontext=content\n')).toBe(true);
+  });
+
+  it('a content-domain signature does NOT verify as a login challenge', async () => {
+    const { publicKey, privateKey } = await generateDilithiumKeyPair();
+    // Attacker coerces the victim into approving content that equals a login body.
+    const loginBody = 'Sign in to Kryptolog with nonce: 0123456789abcdef\nEncryption key: kem';
+    const contentSig = await signMessagePQC(
+      domainSeparate(SIGNING_CONTEXT.CONTENT, loginBody), privateKey
+    );
+
+    // The harvested signature is valid for the content it covers...
+    expect(await verifySignaturePQC(
+      domainSeparate(SIGNING_CONTEXT.CONTENT, loginBody), contentSig, publicKey
+    )).toBe(true);
+
+    // ...but is NOT a valid signature over the login challenge (replay blocked).
+    expect(await verifySignaturePQC(
+      domainSeparate(SIGNING_CONTEXT.LOGIN, loginBody), contentSig, publicKey
+    )).toBe(false);
+    // ...nor over the raw, unwrapped login body (the pre-fix attack target).
+    expect(await verifySignaturePQC(loginBody, contentSig, publicKey)).toBe(false);
   });
 });
 

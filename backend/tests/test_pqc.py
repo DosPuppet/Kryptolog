@@ -129,7 +129,9 @@ def test_login_challenge_real_verification():
     Calls verify_pqc_signature directly: the autouse conftest fixture stubs the
     higher-level verify_signature, but the PQC primitive underneath is real."""
     nonce = auth.generate_nonce()
-    message = f"Sign in to Kryptolog with nonce: {nonce}".encode("utf-8")
+    # The client signs the canonical (domain-separated) login challenge — the
+    # exact bytes the server reconstructs in verify_pqc_signature (H1).
+    message = auth._login_message(nonce).encode("utf-8")
     with oqs.Signature(SIG_ALG) as client:
         pk = client.generate_keypair()
         sig = client.sign(message)
@@ -160,3 +162,55 @@ def test_login_challenge_binds_encryption_key():
     assert auth.verify_pqc_signature(pk_hex, nonce, sig_hex, "different_kem_key") is False
     # Dropping the key (downgrade attempt) also fails — the signature covers it.
     assert auth.verify_pqc_signature(pk_hex, nonce, sig_hex, None) is False
+
+
+def test_login_challenge_is_domain_separated():
+    """H1: the login challenge is wrapped under the `login` domain tag, so the
+    signed bytes are disjoint from any content-signing operation (multisig /
+    document approval). The wrapper is fixed by code, never by content."""
+    nonce = "deadbeef" * 4
+    enc_key = "kem_pub_" + "cd" * 600
+    msg = auth._login_message(nonce, enc_key)
+    assert msg.startswith("Kryptolog Signed Message v1\ncontext=login\n")
+    # The human-readable body is still present, just namespaced.
+    assert f"Sign in to Kryptolog with nonce: {nonce}" in msg
+    assert f"Encryption key: {enc_key}" in msg
+
+
+def test_content_signature_cannot_be_replayed_as_login():
+    """H1 regression / the actual attack: a signature a victim produced while
+    approving attacker-chosen *content* must NOT verify as a login challenge,
+    even when the attacker set that content equal to the raw login body.
+
+    Pre-fix, the multisig path signed raw content, so a content signature over
+    `Sign in to Kryptolog with nonce: N\\nEncryption key: K` was a valid login
+    signature → account takeover. Domain separation breaks that."""
+    nonce = auth.generate_nonce()
+    enc_key = "kem_pub_" + "ef" * 600
+
+    # The exact bytes the OLD (unwrapped) login path expected — what an attacker
+    # would coerce a victim into signing via raw multisig content.
+    raw_login_body = f"Sign in to Kryptolog with nonce: {nonce}\nEncryption key: {enc_key}"
+
+    # The victim's client never signs that directly anymore; content is wrapped
+    # under the `login`-disjoint `content` domain. Emulate both attacker attempts:
+    #   (a) victim signs the raw login body (old attack), and
+    #   (b) victim signs the content-domain-wrapped body (post-fix multisig path).
+    content_wrapped = f"Kryptolog Signed Message v1\ncontext=content\n{raw_login_body}"
+
+    with oqs.Signature(SIG_ALG) as client:
+        pk = client.generate_keypair()
+        sig_raw = client.sign(raw_login_body.encode("utf-8")).hex()
+        sig_content = client.sign(content_wrapped.encode("utf-8")).hex()
+    pk_hex = pk.hex()
+
+    # Neither harvested signature is accepted as a login for this nonce+key.
+    assert auth.verify_pqc_signature(pk_hex, nonce, sig_raw, enc_key) is False
+    assert auth.verify_pqc_signature(pk_hex, nonce, sig_content, enc_key) is False
+
+    # Sanity: a signature over the *properly domain-separated* login challenge
+    # (what the real client builds) still verifies — we didn't break login.
+    with oqs.Signature(SIG_ALG) as client:
+        pk2 = client.generate_keypair()
+        good_sig = client.sign(auth._login_message(nonce, enc_key).encode("utf-8")).hex()
+    assert auth.verify_pqc_signature(pk2.hex(), nonce, good_sig, enc_key) is True

@@ -1,6 +1,7 @@
 import { createContext, useState, useEffect, useContext } from 'react';
 import API_ENDPOINTS from '../config';
 import { connectWallet, getEncryptionPublicKey, signMessage } from '../utils/web3';
+import { domainSeparate, SIGNING_CONTEXT } from '../utils/crypto';
 import { useAuth } from './AuthContext';
 
 const Web3Context = createContext();
@@ -69,9 +70,11 @@ export const Web3Provider = ({ children }) => {
             }
         }
 
-        // 3. Sign Nonce — bind the encryption key into the challenge (M-2). Must match server.
-        const message = `Sign in to Kryptolog with nonce: ${nonce}` +
+        // 3. Sign Nonce — bind the encryption key into the challenge (M-2), then
+        //    domain-separate under the `login` context (H1). Must match server.
+        const body = `Sign in to Kryptolog with nonce: ${nonce}` +
             (pubKey ? `\nEncryption key: ${pubKey}` : '');
+        const message = domainSeparate(SIGNING_CONTEXT.LOGIN, body);
         const signature = await signMessage(message, account);
 
         // 4. Verify on Backend

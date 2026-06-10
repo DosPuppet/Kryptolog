@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { Lock, Copy, FileText, Share2, Trash2, FileSignature, BadgeCheck, AlertTriangle, Download, Users, ShieldCheck, ChevronDown } from 'lucide-react';
 import { useTheme } from '../../context/ThemeContext';
 import { useAuth } from '../../context/AuthContext';
-import { verifySignaturePQC } from '../../utils/crypto';
+import { verifySignaturePQC, domainSeparate, SIGNING_CONTEXT } from '../../utils/crypto';
 import API_ENDPOINTS from '../../config';
 
 const SecretItem = ({ secret, decryptedContent, onDecrypt, onLock, onDelete, onShare, onViewDetails, authType, viewMode = 'grid', isSharedView }) => {
@@ -27,7 +27,7 @@ const SecretItem = ({ secret, decryptedContent, onDecrypt, onLock, onDelete, onS
                 return;
             }
 
-            const isValid = await verifySignaturePQC(docData.content, docData.signature, docData.signerPublicKey);
+            const isValid = await verifySignaturePQC(domainSeparate(SIGNING_CONTEXT.CONTENT, docData.content), docData.signature, docData.signerPublicKey);
 
             // Resolve User (Optional)
             let signerInfo = null;

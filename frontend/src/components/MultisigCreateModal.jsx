@@ -3,7 +3,7 @@ import { X, Search, Plus, Trash2, Check, FileText, ArrowRight, Upload } from 'lu
 import { useAuth } from '../context/AuthContext';
 import { usePQC } from '../context/PQCContext';
 import { useWeb3 } from '../context/Web3Context';
-import { generateSymmetricKey, encryptSymmetric } from '../utils/crypto';
+import { generateSymmetricKey, encryptSymmetric, domainSeparate, SIGNING_CONTEXT } from '../utils/crypto';
 import { encryptData, signMessageEth } from '../utils/web3';
 import API_ENDPOINTS from '../config';
 import { uploadChunkedFile, uploadMultipleChunkedFiles, CHUNK_SIZE } from '../utils/fileChunks';
@@ -189,7 +189,9 @@ export default function MultisigCreateModal({ isOpen, onClose, onCreated }) {
             let payloadToEncrypt = rawContent;
 
             if (authType === 'trustkeys' && pqcAccount) {
-                const signature = await signPQC(rawContent);
+                // Domain-separate under the `content` context (H1) so this approval
+                // signature can never be replayed as a login challenge.
+                const signature = await signPQC(domainSeparate(SIGNING_CONTEXT.CONTENT, rawContent));
                 payloadToEncrypt = JSON.stringify({
                     content: rawContent,
                     signature: signature,
@@ -197,8 +199,8 @@ export default function MultisigCreateModal({ isOpen, onClose, onCreated }) {
                 });
                 secretType = 'signed_document';
             } else if ((authType === 'metamask' || !authType) && currentAccount) {
-                // MetaMask / Standard Signing
-                const signature = await signMessageEth(rawContent);
+                // MetaMask / Standard Signing (same `content` domain separation, H1)
+                const signature = await signMessageEth(domainSeparate(SIGNING_CONTEXT.CONTENT, rawContent));
                 payloadToEncrypt = JSON.stringify({
                     content: rawContent,
                     signature: signature,

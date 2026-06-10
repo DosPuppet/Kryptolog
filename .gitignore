@@ -30,3 +30,7 @@ Thumbs.db
 
 # Local audit / scratch docs (not tracked)
 .tempdoc/
+
+# Local audit venv (liboqs) — never commit
+backend/.venv-audit/
+.venv-audit/
