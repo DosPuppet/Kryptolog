@@ -20,9 +20,31 @@ export const fromHex = (hex) => new Uint8Array(Buffer.from(hex, 'hex'));
 // the header line cannot be reproduced by a content body, so the namespaces are
 // disjoint. The server (backend/auth.py `_login_message`) and the Ethereum path
 // apply the identical wrapper, so signatures stay interoperable across libs.
-export const SIGNING_CONTEXT = Object.freeze({ LOGIN: 'login', CONTENT: 'content' });
+export const SIGNING_CONTEXT = Object.freeze({
+    LOGIN: 'login',
+    CONTENT: 'content',
+    MULTISIG_APPROVAL: 'multisig-approval',
+});
 const DS_HEADER = 'Kryptolog Signed Message v1';
 export const domainSeparate = (context, body) => `${DS_HEADER}\ncontext=${context}\n${body}`;
+
+// SHA-256 of a UTF-8 string -> lowercase hex (matches Python hashlib.sha256().hexdigest()).
+export const sha256Hex = async (str) => {
+    const bytes = new TextEncoder().encode(str);
+    const digest = await crypto.subtle.digest('SHA-256', bytes);
+    return toHex(new Uint8Array(digest));
+};
+
+// Server-verifiable multisig approval message (audit M1). A signer approves a
+// workflow by signing the SHA-256 of the STORED CIPHERTEXT, bound to the
+// workflow + secret id. The server is zero-knowledge (can't see plaintext) but
+// can hash the ciphertext it holds, so it can verify this. Must be byte-
+// identical to the server's auth.multisig_approval_message().
+export const multisigApprovalMessage = (workflowId, secretId, ciphertextSha256Hex) =>
+    domainSeparate(
+        SIGNING_CONTEXT.MULTISIG_APPROVAL,
+        `workflow=${workflowId}\nsecret=${secretId}\nct=${ciphertextSha256Hex}`
+    );
 
 // --- PQC Implementations ---
 

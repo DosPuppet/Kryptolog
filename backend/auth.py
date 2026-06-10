@@ -110,6 +110,42 @@ def _login_message(nonce: str, encryption_public_key: str | None = None) -> str:
     return _domain_separate(_CTX_LOGIN, body)
 
 
+_CTX_MULTISIG = "multisig-approval"
+
+
+def multisig_approval_message(workflow_id, secret_id, ciphertext_sha256_hex: str) -> str:
+    """Server-verifiable multisig approval (audit M1). The server is
+    zero-knowledge — it can't see the plaintext a signer approved — but it *can*
+    hash the ciphertext it stores. A signer therefore signs the SHA-256 of the
+    workflow's stored ciphertext, bound to the workflow + secret id. Domain-
+    separated under `multisig-approval` (H1) so it can't be replayed as a login
+    or a content/document signature. Clients build the byte-identical string
+    (frontend `multisigApprovalMessage`)."""
+    body = f"workflow={workflow_id}\nsecret={secret_id}\nct={ciphertext_sha256_hex}"
+    return _domain_separate(_CTX_MULTISIG, body)
+
+
+def verify_message_signature(address: str, message: str, signature: str) -> bool:
+    """Verify an exact-message signature from either a PQC identity (ML-DSA-44,
+    `address` is the public-key hex) or an Ethereum account (`address` is the
+    0x… address). Dispatches on identity length, like `verify_signature`. Used
+    for non-login signatures the server must check (e.g. multisig approvals).
+    `message` is the exact UTF-8 string that was signed; `signature` is hex
+    (PQC) or an 0x ECDSA signature (Ethereum)."""
+    try:
+        if len(address) > 42:
+            with oqs.Signature(SIG_ALG) as verifier:
+                return verifier.verify(message.encode("utf-8"),
+                                       bytes.fromhex(signature),
+                                       bytes.fromhex(address))
+        encoded_message = encode_defunct(text=message)
+        recovered = Account.recover_message(encoded_message, signature=signature)
+        return recovered.lower() == address.lower()
+    except Exception as e:
+        print(f"Message signature verification failed: {e}")
+        return False
+
+
 def verify_pqc_signature(public_key: str, nonce: str, signature: str,
                          encryption_public_key: str | None = None) -> bool:
     """Verify a client login challenge: ML-DSA-44 over the (key-bound) login message.

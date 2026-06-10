@@ -1,6 +1,6 @@
 import { useState, useRef } from 'react';
 import { Upload, ShieldCheck, ShieldAlert, FileJson, User, Key, Clock, FileText, X, Loader2, FileCheck, FileWarning, Type } from 'lucide-react';
-import { verifySignaturePQC, domainSeparate, SIGNING_CONTEXT } from '../utils/crypto';
+import { verifySignaturePQC, domainSeparate, SIGNING_CONTEXT, multisigApprovalMessage } from '../utils/crypto';
 import { verifyMessageEth } from '../utils/web3';
 
 // Parse proof content to detect type: text, single file, or multi-file
@@ -100,8 +100,18 @@ export default function ProofAudit() {
 
     const verifyMultisigProof = async (proofData) => {
         const content = proofData.document.content;
-        // All signers signed the `content`-domain-separated bytes, not the raw content (H1).
-        const signedBody = domainSeparate(SIGNING_CONTEXT.CONTENT, content);
+        // Each role signed different bytes (H1/M1):
+        //   creator → the plaintext document under the `content` domain.
+        //   signer  → sha256(ciphertext) bound to the workflow, under the
+        //             `multisig-approval` domain (server-verifiable).
+        const creatorBody = domainSeparate(SIGNING_CONTEXT.CONTENT, content);
+        const approvalBody = (proofData.document?.ciphertext_sha256 != null)
+            ? multisigApprovalMessage(
+                proofData.workflow?.id,
+                proofData.workflow?.secret_id,
+                proofData.document.ciphertext_sha256,
+            )
+            : null;
         const signerResults = [];
 
         for (const entry of proofData.signatures) {
@@ -109,11 +119,16 @@ export default function ProofAudit() {
             let isValid = false;
             let recoveredAddress = null;
 
+            // 'signer' approvals need the ciphertext hash; 'creator' uses content.
+            const message = entry.role === 'signer' ? approvalBody : creatorBody;
+
             try {
-                if (isPQC) {
-                    isValid = await verifySignaturePQC(signedBody, entry.signature, entry.address);
+                if (!message) {
+                    isValid = false; // proof lacks the data to verify this entry
+                } else if (isPQC) {
+                    isValid = await verifySignaturePQC(message, entry.signature, entry.address);
                 } else {
-                    recoveredAddress = verifyMessageEth(signedBody, entry.signature);
+                    recoveredAddress = verifyMessageEth(message, entry.signature);
                     isValid = recoveredAddress && recoveredAddress.toLowerCase() === entry.address.toLowerCase();
                 }
             } catch (e) {

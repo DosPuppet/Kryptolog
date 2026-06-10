@@ -214,3 +214,49 @@ def test_content_signature_cannot_be_replayed_as_login():
         pk2 = client.generate_keypair()
         good_sig = client.sign(auth._login_message(nonce, enc_key).encode("utf-8")).hex()
     assert auth.verify_pqc_signature(pk2.hex(), nonce, good_sig, enc_key) is True
+
+
+def test_multisig_approval_message_is_domain_separated():
+    """M1: the multisig approval is bound to workflow + secret + ciphertext hash
+    and namespaced under `multisig-approval`, disjoint from login and content."""
+    msg = auth.multisig_approval_message(7, 42, "ab" * 32)
+    assert msg.startswith("Kryptolog Signed Message v1\ncontext=multisig-approval\n")
+    assert "workflow=7" in msg and "secret=42" in msg and f"ct={'ab' * 32}" in msg
+    # Disjoint from a login message and a content message over the same body.
+    body = "workflow=7\nsecret=42\nct=" + "ab" * 32
+    assert msg != auth._domain_separate("login", body)
+    assert msg != auth._domain_separate("content", body)
+
+
+# Captured at import time, before the autouse conftest fixture can stub it —
+# this unit test exercises the REAL verifier (the endpoint tests use the stub).
+_real_verify_message_signature = auth.verify_message_signature
+
+
+def test_verify_message_signature_pqc():
+    """M1: the generic verifier accepts a real ML-DSA-44 signature over the exact
+    multisig approval message and rejects tampering, wrong key, and bad hex —
+    this is what the /sign endpoint relies on to gate `has_signed`."""
+    verify = _real_verify_message_signature
+    ct_hash = hashlib_sha256_hex("encrypted_payload")
+    msg = auth.multisig_approval_message(1, 1, ct_hash)
+    with oqs.Signature(SIG_ALG) as signer:
+        pk = signer.generate_keypair()
+        sig = signer.sign(msg.encode("utf-8"))
+    pk_hex, sig_hex = pk.hex(), sig.hex()
+
+    assert verify(pk_hex, msg, sig_hex) is True
+    # Wrong message (e.g. a different ciphertext hash) → reject.
+    other = auth.multisig_approval_message(1, 1, hashlib_sha256_hex("tampered"))
+    assert verify(pk_hex, other, sig_hex) is False
+    # Wrong signer key → reject.
+    with oqs.Signature(SIG_ALG) as other_signer:
+        other_pk = other_signer.generate_keypair().hex()
+    assert verify(other_pk, msg, sig_hex) is False
+    # Malformed signature → false, not an exception.
+    assert verify(pk_hex, msg, "not-hex") is False
+
+
+def hashlib_sha256_hex(s: str) -> str:
+    import hashlib
+    return hashlib.sha256(s.encode("utf-8")).hexdigest()

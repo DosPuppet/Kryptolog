@@ -133,3 +133,68 @@ class TestSignWorkflow:
         }, headers=auth_header(token2))
         assert resp2.status_code == 200
         assert resp2.json()["status"] == "completed"
+
+    def test_sign_rejected_when_signature_invalid(self, client, user1, user2, monkeypatch):
+        """M1: the server verifies the approval signature; a bad one is rejected
+        and the workflow does not advance. (Overrides the conftest stub.)"""
+        token1, _ = user1
+        token2, u2 = user2
+        wf_id = _create_workflow(client, token1, [u2["address"]]).json()["id"]
+
+        monkeypatch.setattr("auth.verify_message_signature", lambda *a, **k: False)
+        resp = client.post(f"/multisig/workflow/{wf_id}/sign", json={
+            "signature": "not_a_real_signature",
+        }, headers=auth_header(token2))
+        assert resp.status_code == 400
+        assert "Invalid approval signature" in resp.json()["detail"]
+
+        # Workflow stays pending and the signer is not marked signed.
+        wf = client.get(f"/multisig/workflow/{wf_id}", headers=auth_header(token1)).json()
+        assert wf["status"] == "pending"
+        assert wf["signers"][0]["has_signed"] is False
+
+
+RECIPIENT_ADDRESS = "recipient_" + "r" * 100
+
+
+class TestRecipientKeyRelease:
+    """M1: recipient keys may only be (re)written by the COMPLETING signer."""
+
+    def test_recipient_keys_rejected_on_non_final_sign(self, client, user1, user2):
+        token1, u1 = user1
+        token2, u2 = user2
+        wf_id = _create_workflow(
+            client, token1, [u1["address"], u2["address"]], [RECIPIENT_ADDRESS]
+        ).json()["id"]
+
+        # First of two signers tries to release recipient keys → rejected.
+        resp = client.post(f"/multisig/workflow/{wf_id}/sign", json={
+            "signature": "sig1",
+            "recipient_keys": {RECIPIENT_ADDRESS: "malicious_overwrite"},
+        }, headers=auth_header(token1))
+        assert resp.status_code == 400
+        assert "final signature" in resp.json()["detail"]
+
+        # The original creation-time recipient key is untouched.
+        wf = client.get(f"/multisig/workflow/{wf_id}", headers=auth_header(token1)).json()
+        rec = next(r for r in wf["recipients"] if r["user_address"] == RECIPIENT_ADDRESS)
+        assert rec["encrypted_key"] == f"enc_key_for_{RECIPIENT_ADDRESS}"
+
+    def test_recipient_keys_accepted_on_final_sign(self, client, user1, user2):
+        token1, _ = user1
+        token2, u2 = user2
+        wf_id = _create_workflow(
+            client, token1, [u2["address"]], [RECIPIENT_ADDRESS]
+        ).json()["id"]
+
+        # Single signer == the completing signer → may release recipient keys.
+        resp = client.post(f"/multisig/workflow/{wf_id}/sign", json={
+            "signature": "sig_final",
+            "recipient_keys": {RECIPIENT_ADDRESS: "released_key"},
+        }, headers=auth_header(token2))
+        assert resp.status_code == 200
+        assert resp.json()["status"] == "completed"
+
+        wf = client.get(f"/multisig/workflow/{wf_id}", headers=auth_header(token1)).json()
+        rec = next(r for r in wf["recipients"] if r["user_address"] == RECIPIENT_ADDRESS)
+        assert rec["encrypted_key"] == "released_key"

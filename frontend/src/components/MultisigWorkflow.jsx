@@ -4,32 +4,40 @@ import { useAuth } from '../context/AuthContext';
 import { usePQC } from '../context/PQCContext';
 import { useWeb3 } from '../context/Web3Context';
 import API_ENDPOINTS from '../config';
-import { verifySignaturePQC, domainSeparate, SIGNING_CONTEXT } from '../utils/crypto';
+import { verifySignaturePQC, domainSeparate, SIGNING_CONTEXT, sha256Hex, multisigApprovalMessage } from '../utils/crypto';
 import { decryptData, encryptData, verifyMessageEth } from '../utils/web3';
 import { downloadChunkedFile, downloadFileByRange } from '../utils/fileChunks';
 
-const SignerVerificationBadge = ({ signer, contentToVerify }) => {
+// verifyTarget describes exactly what the signer signed:
+//   { kind: 'content', content }  — the CREATOR's signature over the plaintext
+//      document (CONTENT domain, embedded in the secret; server can't see it).
+//   { kind: 'approval', workflowId, secretId, encryptedData } — an explicit
+//      SIGNER's server-verifiable approval over sha256(ciphertext) (M1).
+const SignerVerificationBadge = ({ signer, verifyTarget }) => {
     const [status, setStatus] = useState('idle'); // idle, verifying, valid, invalid
 
     const verify = async () => {
-        if (!signer.signature || !contentToVerify) {
-            console.warn("Missing signature or content", { sig: !!signer.signature, content: !!contentToVerify });
+        if (!signer.signature || !verifyTarget) {
+            console.warn("Missing signature or verify target", { sig: !!signer.signature, target: !!verifyTarget });
             return;
         }
         setStatus('verifying');
         try {
-            // Reconstruct Signed Message (Sig + Content) or detached? 
-            // In handleSign, we sent detached prefix/suffix.
-            // verifySignaturePQC handles detached.
-            // verifySignaturePQC handles detached.
-            // Signers signed the `content`-domain-separated bytes, not the raw content (H1).
-            const signedBody = domainSeparate(SIGNING_CONTEXT.CONTENT, contentToVerify);
+            // Rebuild the exact domain-separated bytes the signer signed.
+            let message;
+            if (verifyTarget.kind === 'approval') {
+                const ctHash = await sha256Hex(verifyTarget.encryptedData);
+                message = multisigApprovalMessage(verifyTarget.workflowId, verifyTarget.secretId, ctHash);
+            } else {
+                message = domainSeparate(SIGNING_CONTEXT.CONTENT, verifyTarget.content);
+            }
+
             let isValid = false;
             if (signer.user_address && signer.user_address.length > 200) { // PQC address is public key
-                isValid = await verifySignaturePQC(signedBody, signer.signature, signer.user_address);
+                isValid = await verifySignaturePQC(message, signer.signature, signer.user_address);
             } else {
                 // Eth address is short. User Address is the Public Key (Address).
-                const recovered = verifyMessageEth(signedBody, signer.signature);
+                const recovered = verifyMessageEth(message, signer.signature);
                 isValid = recovered && recovered.toLowerCase() === signer.user_address.toLowerCase();
             }
             setStatus(isValid ? 'valid' : 'invalid');
@@ -101,7 +109,7 @@ export default function MultisigWorkflow({ workflow, onClose, onUpdate, setUploa
     const totalSignatures = workflow.signers.length;
     const progress = (completedSignatures / totalSignatures) * 100;
 
-    const handleDownloadProof = () => {
+    const handleDownloadProof = async () => {
         // Build signer list: virtual creator + explicit signers
         const signatures = [];
 
@@ -133,18 +141,28 @@ export default function MultisigWorkflow({ workflow, onClose, onUpdate, setUploa
             }
         }
 
+        // Explicit signers signed sha256(ciphertext) bound to the workflow (M1),
+        // so the offline proof must carry secret_id + the ciphertext hash for the
+        // auditor to rebuild and verify their approval messages. The creator's
+        // signature is over the plaintext content (verified separately).
+        const ciphertextSha256 = workflow.secret?.encrypted_data
+            ? await sha256Hex(workflow.secret.encrypted_data)
+            : null;
+
         const proof = {
             type: 'kryptolog_multisig_proof',
-            version: '1.0',
+            version: '1.1',
             exported_at: new Date().toISOString(),
             workflow: {
                 id: workflow.id,
                 name: workflow.name,
                 status: workflow.status,
                 created_at: workflow.created_at,
+                secret_id: workflow.secret_id,
             },
             document: {
                 content: creatorSignedContent || rawDecryptedContent,
+                ciphertext_sha256: ciphertextSha256,
             },
             signatures,
         };
@@ -412,26 +430,11 @@ export default function MultisigWorkflow({ workflow, onClose, onUpdate, setUploa
         }
 
         try {
-            // We need the raw content string that was signed? 
-            // Actually, `signPQC` signs the `rawContent`.
-            // If we already verified, we have `parsed.content`.
-            // But to be safe, let's re-fetch or use state if available.
-            // Simplest: Re-run verify logic or just sign the *inner content*?
-            // WAIT. `MultisigCreateModal` logic:
-            // Signer signs `payloadToEncrypt`? OR `rawContent`?
-            // Line 146 in Modal: `signerKeys... = secureEncrypt(payloadToEncrypt...)`
-            // `payloadToEncrypt` IS the struct `{ content, signature, publicKey }`.
-            //
-            // So the Signer receives the Signed Struct.
-            // When the Signer signs, they should sign:
-            // A) The Original Content? (Proves they agree to content)
-            // B) The Creator's Signed Struct? (Proves they verify creator + content)
-            // 
-            // Logic in `MultisigWorkflow.jsx` (previous version): `signature = await signPQC(content)`.
-            // If `content` is the huge struct, fine.
-            // 
-            // Let's stick to signing what we See.
-            // If we decrypted the struct, we sign the struct.
+            // What a signer signs (M1): we decrypt the secret so the signer can
+            // review what they're approving, then sign sha256(stored ciphertext)
+            // bound to this workflow — a server-verifiable approval (see below).
+            // The creator's own signature over the plaintext lives inside the
+            // secret (created in MultisigCreateModal) and is verified separately.
 
             let encryptedKey = null;
 
@@ -493,29 +496,30 @@ export default function MultisigWorkflow({ workflow, onClose, onUpdate, setUploa
             const { decryptSymmetric } = await import('../utils/crypto');
             const { signMessageEth } = await import('../utils/web3');
 
+            // Decrypt as a readability guard: confirm we can actually read the
+            // content we're about to approve (we don't blind-sign a ciphertext).
             const encDataObj = JSON.parse(encryptedContentBlob);
-            const contentToSign = await decryptSymmetric(encDataObj, fileKey);
+            await decryptSymmetric(encDataObj, fileKey);
 
             if (setUploadProgress) {
                 setUploadProgress(50);
                 setStatusMessage && setStatusMessage(authType === 'trustkeys' ? "Signing..." : "Signing with Wallet...");
             }
 
-            // Always sign the exact string the creator signed (the inner .content).
-            // If the creator signed a JSON metadata structure representing the chunked file,
-            // we sign that EXACT metadata structure (which includes the file_hash).
-            // `creatorSignedContent` holds the exact inner JSON string originally generated by the creator.
-            const dataToSign = creatorSignedContent || contentToSign;
-
-            // Domain-separate under the `content` context (H1): the signer approves
-            // the document content, and that signature must never be replayable as a
-            // login challenge. The creator and the verification path wrap identically.
-            const signedBody = domainSeparate(SIGNING_CONTEXT.CONTENT, dataToSign);
+            // Server-verifiable approval (M1): we decrypted and reviewed the content
+            // above, but we SIGN the SHA-256 of the stored ciphertext, bound to this
+            // workflow + secret, under the `multisig-approval` domain (H1). The server
+            // is zero-knowledge — it can't see the plaintext — but it can hash the
+            // ciphertext it holds and verify this signature, so it can gate completion
+            // on the actual signing key (not merely a session token). One signature,
+            // no extra prompt.
+            const ctHash = await sha256Hex(workflow.secret.encrypted_data);
+            const approvalMessage = multisigApprovalMessage(workflow.id, workflow.secret_id, ctHash);
             let signature;
             if (authType === 'trustkeys') {
-                signature = await signPQC(signedBody);
+                signature = await signPQC(approvalMessage);
             } else {
-                signature = await signMessageEth(signedBody);
+                signature = await signMessageEth(approvalMessage);
             }
 
             // Handle "Signed Message" (Attached Code) vs "Detached Signature"
@@ -744,7 +748,14 @@ export default function MultisigWorkflow({ workflow, onClose, onUpdate, setUploa
                                         {s.has_signed && decryptedContent && (
                                             <SignerVerificationBadge
                                                 signer={s}
-                                                contentToVerify={s.isCreator ? creatorSignedContent : (creatorSignedContent || rawDecryptedContent)}
+                                                verifyTarget={s.isCreator
+                                                    ? { kind: 'content', content: creatorSignedContent }
+                                                    : {
+                                                        kind: 'approval',
+                                                        workflowId: workflow.id,
+                                                        secretId: workflow.secret_id,
+                                                        encryptedData: workflow.secret?.encrypted_data,
+                                                    }}
                                             />
                                         )}
                                     </div>

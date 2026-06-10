@@ -111,9 +111,13 @@ def _reset_rate_limiter():
 
 @pytest.fixture(autouse=True)
 def _mock_pqc():
-    """Accept the placeholder client login signature used by `do_login`.
+    """Accept the placeholder client signatures used across the endpoint tests:
+    the login challenge (`verify_signature`) and the multisig approval
+    (`verify_message_signature`). Tests that need the *real* verifier override
+    these (see test_multisig signature-gate test / the unit tests in test_pqc).
     Real ML-DSA-44 JWT issue/verify (in-process liboqs) is left untouched."""
-    with patch("auth.verify_signature", return_value=True):
+    with patch("auth.verify_signature", return_value=True), \
+         patch("auth.verify_message_signature", return_value=True):
         yield
 
 

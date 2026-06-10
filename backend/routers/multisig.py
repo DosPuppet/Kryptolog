@@ -3,7 +3,8 @@ from dependencies import limiter
 from sqlalchemy.orm import Session, joinedload
 from typing import List
 from datetime import datetime, timezone
-import models, schemas
+import hashlib
+import models, schemas, auth
 from database import get_db
 from dependencies import get_current_user
 from utils.push import notify_user_push
@@ -205,14 +206,42 @@ def sign_multisig_workflow(request: Request, workflow_id: int, sig_req: schemas.
         
     if signer.has_signed:
         raise HTTPException(status_code=400, detail="Already signed")
-        
+
+    # --- M1: verify the approval signature server-side ---
+    # The server is zero-knowledge, so the signer signs the SHA-256 of the
+    # STORED CIPHERTEXT (bound to this workflow + secret), which the server can
+    # recompute and verify against the signer's identity key. This makes
+    # `has_signed` cryptographically meaningful — only the holder of the signing
+    # key (not merely a valid session JWT) can advance the workflow.
+    secret = db.query(models.Secret).filter(models.Secret.id == wf.secret_id).first()
+    if not secret:
+        raise HTTPException(status_code=404, detail="Workflow secret not found")
+    ct_hash = hashlib.sha256((secret.encrypted_data or "").encode("utf-8")).hexdigest()
+    approval_msg = auth.multisig_approval_message(wf.id, wf.secret_id, ct_hash)
+    if not auth.verify_message_signature(current_user.address, approval_msg, sig_req.signature):
+        raise HTTPException(status_code=400, detail="Invalid approval signature")
+
+    # --- M1: recipient keys may only be released by the COMPLETING signer ---
+    # Pre-fix, any signer could overwrite recipient keys (with garbage) at any
+    # step. The release is the final signer's job, so reject recipient_keys on
+    # any sign that doesn't complete the workflow.
+    all_signers = db.query(models.MultisigWorkflowSigner).filter(
+        models.MultisigWorkflowSigner.workflow_id == wf.id
+    ).all()
+    is_completing = all(s.has_signed for s in all_signers if s.id != signer.id)
+    if sig_req.recipient_keys and not is_completing:
+        raise HTTPException(
+            status_code=400,
+            detail="Recipient keys may only be provided with the final signature",
+        )
+
     # Update Signer
     signer.has_signed = True
     signer.signature = sig_req.signature
     signer.signed_at = datetime.now(timezone.utc)
-    
-    # Store Recipient Keys (Release Mechanism) if provided
-    if sig_req.recipient_keys:
+
+    # Store Recipient Keys (Release Mechanism) — only on the completing signature.
+    if is_completing and sig_req.recipient_keys:
         for r_addr, enc_key in sig_req.recipient_keys.items():
             recipient = db.query(models.MultisigWorkflowRecipient).filter(
                 models.MultisigWorkflowRecipient.workflow_id == wf.id,
@@ -222,9 +251,9 @@ def sign_multisig_workflow(request: Request, workflow_id: int, sig_req: schemas.
                 recipient.encrypted_key = enc_key
 
     db.commit() # Commit this signature and keys first
-    
+
     sender_name = current_user.username or f"{current_user.address[:8]}..."
-    
+
     # Notify Owner
     if wf.owner_address != current_user.address:
         notify_user_push(
@@ -235,15 +264,11 @@ def sign_multisig_workflow(request: Request, workflow_id: int, sig_req: schemas.
             data={"type": "multisig_signed", "workflow_id": wf.id}
         )
 
-    # Check if ALL have signed
-    all_signers = db.query(models.MultisigWorkflowSigner).filter(models.MultisigWorkflowSigner.workflow_id == wf.id).all()
-    all_signed = all(s.has_signed for s in all_signers)
-    
-    if all_signed:
+    if is_completing:
         wf.status = "completed"
         # Release handled above via Recipient Key updates in table
         db.commit()
-        
+
         # Notify Recipients
         for recipient in wf.recipients:
             notify_user_push(
@@ -253,6 +278,6 @@ def sign_multisig_workflow(request: Request, workflow_id: int, sig_req: schemas.
                 body=f"Multisig workflow '{wf.name}' is complete. You now have access to the secret.",
                 data={"type": "multisig_completed", "workflow_id": wf.id}
             )
-    
+
     db.refresh(wf)
     return wf

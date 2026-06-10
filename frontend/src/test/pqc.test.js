@@ -30,6 +30,8 @@ import {
   toHex,
   domainSeparate,
   SIGNING_CONTEXT,
+  sha256Hex,
+  multisigApprovalMessage,
 } from '../utils/crypto';
 
 const fromHexLocal = (h) => new Uint8Array(Buffer.from(h, 'hex'));
@@ -119,6 +121,35 @@ describe('domain separation (audit H1)', () => {
     )).toBe(false);
     // ...nor over the raw, unwrapped login body (the pre-fix attack target).
     expect(await verifySignaturePQC(loginBody, contentSig, publicKey)).toBe(false);
+  });
+});
+
+describe('multisig ciphertext-bound approval (audit M1)', () => {
+  it('sha256Hex matches a known vector (interop with Python hashlib)', async () => {
+    // echo -n "abc" | sha256sum
+    expect(await sha256Hex('abc')).toBe(
+      'ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad'
+    );
+  });
+
+  it('approval message is distinct from a content signature over the same body', () => {
+    const approval = multisigApprovalMessage(7, 42, 'ab'.repeat(32));
+    expect(approval.startsWith('Kryptolog Signed Message v1\ncontext=multisig-approval\n')).toBe(true);
+    const body = `workflow=7\nsecret=42\nct=${'ab'.repeat(32)}`;
+    expect(approval).not.toBe(domainSeparate(SIGNING_CONTEXT.CONTENT, body));
+  });
+
+  it('signs sha256(ciphertext) and verifies; rejects a different ciphertext', async () => {
+    const { publicKey, privateKey } = await generateDilithiumKeyPair();
+    const ciphertext = JSON.stringify({ iv: 'aa', ciphertext: 'deadbeef' });
+    const msg = multisigApprovalMessage(3, 9, await sha256Hex(ciphertext));
+    const sig = await signMessagePQC(msg, privateKey);
+    expect(await verifySignaturePQC(msg, sig, publicKey)).toBe(true);
+
+    // A signature bound to one ciphertext does not verify against another (the
+    // server recomputes the hash from its stored ciphertext, so a swap fails).
+    const tampered = multisigApprovalMessage(3, 9, await sha256Hex('other'));
+    expect(await verifySignaturePQC(tampered, sig, publicKey)).toBe(false);
   });
 });
 
