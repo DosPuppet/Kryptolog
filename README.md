@@ -158,7 +158,7 @@ cp .env.example .env
 npm install
 ```
 
-### 4. TrustKeys extension (optional — required for PQC features)
+### 4. TrustKeys extension (optional — recommended for secure key custody)
 
 > See [trustkeys/README.md](trustkeys/README.md) for full extension documentation (architecture, Web API reference, key management).
 
