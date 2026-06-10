@@ -1,12 +1,12 @@
 import { signMessage, encryptMessage, decryptMessage, verifySignature, generateSessionKey, wrapSessionKey, unwrapSessionKey } from '../../utils/crypto.js';
 import { state } from '../state.js';
-import { launchPopup } from '../utils.js';
+import { launchPopup, isInternalSender, getSenderOrigin } from '../utils.js';
 
 export const handleSignAsync = async (request, sender, sendResponse) => {
     if (state.isLocked) throw new Error("Locked");
 
     // Check Internal vs External
-    if (sender.id === chrome.runtime.id && sender.url && sender.url.includes('index.html')) {
+    if (isInternalSender(sender)) {
         // Internal Dashboard
         const account = state.vault.accounts.find(a => a.id === state.vault.activeAccountId);
         if (!account) throw new Error("No active account");
@@ -16,9 +16,9 @@ export const handleSignAsync = async (request, sender, sendResponse) => {
         return;
     }
 
-    // External
-    const checkOrigin = sender.origin || request.origin;
-    if (!state.vault.permissions[checkOrigin]) {
+    // External — authorize on Chrome's sender.origin only (audit M4).
+    const checkOrigin = getSenderOrigin(sender);
+    if (!checkOrigin || !state.vault.permissions[checkOrigin]) {
         throw new Error("Site not connected");
     }
 
@@ -75,8 +75,8 @@ export const handleWrapSessionKey = async (request) => {
 
 export const handleDecryptAsync = async (request, sender, sendResponse) => {
     if (state.isLocked) throw new Error("Locked");
-    const checkOrigin = sender.origin || request.origin;
-    if (!state.vault.permissions[checkOrigin]) throw new Error("Site not connected");
+    const checkOrigin = getSenderOrigin(sender);
+    if (!checkOrigin || !state.vault.permissions[checkOrigin]) throw new Error("Site not connected");
 
     const reqId = Math.random().toString(36).substr(2, 9);
     state.pendingRequests.set(reqId, {
@@ -96,8 +96,8 @@ export const handleDecryptAsync = async (request, sender, sendResponse) => {
 
 export const handleUnwrapSessionKeyAsync = async (request, sender, sendResponse) => {
     if (state.isLocked) throw new Error("Locked");
-    const checkOrigin = sender.origin || request.origin;
-    if (!state.vault.permissions[checkOrigin]) throw new Error("Site not connected");
+    const checkOrigin = getSenderOrigin(sender);
+    if (!checkOrigin || !state.vault.permissions[checkOrigin]) throw new Error("Site not connected");
 
     const reqId = Math.random().toString(36).substr(2, 9);
     state.pendingRequests.set(reqId, {
@@ -124,8 +124,8 @@ export const handleUnwrapSessionKeyAsync = async (request, sender, sendResponse)
 // Batch Unwrap
 export const handleUnwrapManySessionKeysAsync = async (request, sender, sendResponse) => {
     if (state.isLocked) throw new Error("Locked");
-    const checkOrigin = sender.origin || request.origin;
-    if (!state.vault.permissions[checkOrigin]) throw new Error("Site not connected");
+    const checkOrigin = getSenderOrigin(sender);
+    if (!checkOrigin || !state.vault.permissions[checkOrigin]) throw new Error("Site not connected");
 
     const reqId = Math.random().toString(36).substr(2, 9);
     state.pendingRequests.set(reqId, {

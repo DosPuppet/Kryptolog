@@ -3,7 +3,7 @@ import * as auth from './handlers/auth.js';
 import * as conn from './handlers/connection.js';
 import * as acct from './handlers/accounts.js';
 import * as crypto from './handlers/crypto.js';
-import { updateActivity } from './utils.js';
+import { updateActivity, isInternalSender, getSenderOrigin } from './utils.js';
 
 const initializeStorage = async () => {
     const { vaultData } = await chrome.storage.local.get('vaultData');
@@ -67,7 +67,8 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
 
                 // --- Connection & Permissions ---
                 case 'CHECK_CONNECTION': {
-                    const origin = request.origin;
+                    // Authoritative origin only (audit M4) — never request.origin.
+                    const origin = getSenderOrigin(sender);
                     sendResponse(conn.handleCheckConnection(origin));
                     break;
                 }
@@ -76,7 +77,13 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
                     break;
                 }
                 case 'CONNECT': {
-                    const origin = request.origin;
+                    // Connect the authoritative sender origin (audit M4), so the
+                    // permission we store matches what the crypto gates check.
+                    const origin = getSenderOrigin(sender);
+                    if (!origin) {
+                        sendResponse({ success: false, error: "Unknown sender origin" });
+                        break;
+                    }
                     await conn.handleConnectAsync(origin, sendResponse);
                     // Async handler handles sendResponse
                     break;
@@ -161,8 +168,16 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
                     break;
                 }
                 case 'GET_ACTIVE_ACCOUNT': {
-                    const isInternal = sender.id === chrome.runtime.id;
-                    const checkOrigin = isInternal ? null : (sender.origin || request.origin);
+                    // Content scripts also carry sender.id === chrome.runtime.id, so
+                    // the id alone wrongly treats any page as internal. Use the proper
+                    // extension-page check, and gate external callers on the
+                    // authoritative sender.origin only (audit M4) — deny if absent.
+                    const isInternal = isInternalSender(sender);
+                    const checkOrigin = isInternal ? null : getSenderOrigin(sender);
+                    if (!isInternal && !checkOrigin) {
+                        sendResponse({ success: false, error: "Unknown sender origin" });
+                        break;
+                    }
                     try {
                         const account = acct.getActiveAccount(checkOrigin);
                         sendResponse({ success: true, account });

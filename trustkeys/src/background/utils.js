@@ -44,3 +44,20 @@ export const updateActivity = () => {
         chrome.storage.session.set({ lastActive: Date.now() }).catch(() => { });
     }
 }
+
+// --- Sender trust (audit M4) ---
+// Authorization decisions MUST use the origin Chrome attaches to the message
+// sender (sender.origin / sender.url), never an origin carried in the message
+// payload (request.origin) — the page-facing code can set the latter, so it
+// must not be trusted for permission checks.
+
+// True only for the extension's own pages (popup / dashboard index.html).
+// Note: content scripts also have sender.id === chrome.runtime.id, so the id
+// alone is NOT sufficient — we additionally require the extension-page URL.
+export const isInternalSender = (sender) =>
+    !!sender && sender.id === chrome.runtime.id &&
+    !!sender.url && sender.url.includes('index.html');
+
+// The authoritative origin of the sender, or null if Chrome didn't provide one
+// (in which case callers must deny, not fall back to a payload-supplied origin).
+export const getSenderOrigin = (sender) => (sender && sender.origin) ? sender.origin : null;

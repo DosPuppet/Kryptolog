@@ -32,12 +32,10 @@ export const setActiveAccount = async (id) => {
 export const getActiveAccount = (checkOrigin) => {
     if (state.isLocked) throw new Error("Locked");
 
-    if (checkOrigin) {
-        if (!state.vault.permissions[checkOrigin]) {
-            return { success: false, error: "Not Connected" }; // Special case handling?
-            // Or throw?
-            throw new Error("Not Connected");
-        }
+    // checkOrigin is null only for the internal dashboard (trusted). For external
+    // callers it's the authoritative sender.origin, which must be connected.
+    if (checkOrigin && !state.vault.permissions[checkOrigin]) {
+        throw new Error("Not Connected");
     }
 
     const account = state.vault.accounts.find(a => a.id === state.vault.activeAccountId);
