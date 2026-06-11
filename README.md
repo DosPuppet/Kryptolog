@@ -15,7 +15,7 @@ kryptolog/
 └── trustkeys/        Chrome/Brave extension (MV3, React 18)
 ```
 
-The application runs **2 processes locally**: a FastAPI REST API and a Vite dev server for the frontend. ML-DSA signing/verification happens in-process inside the backend — there is no separate crypto service.
+The application runs **2 processes locally**: a FastAPI REST API and a Vite dev server for the frontend. ML-DSA login-challenge verification happens in-process inside the backend (session JWTs are HS256) — there is no separate crypto service.
 
 ```
 ┌─────────────────────────────┐
@@ -28,8 +28,8 @@ The application runs **2 processes locally**: a FastAPI REST API and a Vite dev 
 ┌──────────▼──────────────────┐
 │       Backend API           │
 │   FastAPI + SQLAlchemy      │
-│   liboqs ML-DSA-44 (JWTs +  │
-│   login-challenge verify)   │
+│   PyJWT HS256 tokens        │
+│   liboqs ML-DSA-44 verify   │
 │   localhost:8000            │
 └──────────┬──────────────────┘
            │
@@ -45,7 +45,7 @@ The application runs **2 processes locally**: a FastAPI REST API and a Vite dev 
 
 | Feature | Description |
 |---------|-------------|
-| **Dual Authentication** | MetaMask (Ethereum ECDSA) or TrustKeys (ML-DSA-44-signed JWTs) |
+| **Dual Authentication** | MetaMask (Ethereum ECDSA) or TrustKeys (PQC ML-DSA-44) login-challenge signatures; the server then issues an HS256 session JWT |
 | **Post-Quantum Cryptography** | ML-KEM-768 (FIPS 203) + ML-DSA-44 (FIPS 204), via `@noble/post-quantum` (clients) and `liboqs` (server) |
 | **Secret Vault** | E2EE secrets with hybrid encryption (ML-KEM-768 KEM + AES-GCM) |
 | **File Vault** | Chunked encrypted file upload/download (up to 50 MB) |
@@ -211,7 +211,7 @@ If you prefer to run the services in isolated terminals for active development:
 cd backend
 ./run_dev.sh
 ```
-*(Runs `uvicorn` with hot-reload. ML-DSA signing is in-process — no sidecar to start.)*
+*(Runs `uvicorn` with hot-reload. ML-DSA login-challenge verification is in-process — no sidecar to start.)*
 
 **Terminal 2 — Frontend**
 ```bash
@@ -301,8 +301,8 @@ alembic downgrade -1
 The app reads two `.env` files, one per service. Copy each `.env.example` to
 `.env` and fill it in **before** starting the app:
 
-- **`backend/.env`** — server config: deployment mode, the ML-DSA signing keypair
-  (mandatory in production), CORS origins, trusted-proxy IPs, and the VAPID
+- **`backend/.env`** — server config: deployment mode, the HS256 JWT signing
+  secret (mandatory in production), CORS origins, trusted-proxy IPs, and the VAPID
   *private* key for sending Web Push. Holds the app's secrets — never commit it.
 - **`frontend/.env`** — build-time config baked into the SPA by Vite: the backend
   API URL and the VAPID *public* key. Only `VITE_`-prefixed values are exposed to

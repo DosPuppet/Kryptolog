@@ -128,7 +128,7 @@ const signature = await window.trustkeys.sign("Login Nonce: 12345");
 ```
 
 #### `verify(message, signature, publicKey)`
-Verify a Dilithium signature against a public key.
+Verify an ML-DSA-44 signature against a public key.
 ```javascript
 const valid = await window.trustkeys.verify(message, signature, publicKey);
 // Returns boolean.
