@@ -7,8 +7,12 @@ backend/safelog.db
 backend/.venv/
 backend/venv/
 
+# Node (root-level PM2 install and any nested node_modules)
+node_modules/
+package.json
+package-lock.json
+
 # Frontend
-frontend/node_modules/
 frontend/dist/
 frontend/.vite/
 
