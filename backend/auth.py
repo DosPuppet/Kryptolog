@@ -3,10 +3,13 @@ from eth_account import Account
 import secrets
 import base64
 import json
+import logging
 import os
 from datetime import datetime, timedelta, timezone
 
 import oqs
+
+logger = logging.getLogger("kryptolog.auth")
 
 # --- Post-quantum signature config (NIST FIPS 204) ---
 # All ML-DSA work runs in-process via liboqs; the old Node `pqc_service.js`
@@ -49,8 +52,8 @@ def _load_server_keys():
             "with an ephemeral signing key."
         )
     else:
-        print(
-            "WARNING: KRYPTOLOG_ML_DSA_SECRET_KEY / KRYPTOLOG_ML_DSA_PUBLIC_KEY not set. "
+        logger.warning(
+            "KRYPTOLOG_ML_DSA_SECRET_KEY / KRYPTOLOG_ML_DSA_PUBLIC_KEY not set. "
             "Generating an EPHEMERAL server signing key — all JWTs become invalid on "
             "restart. Run `python generate_server_keys.py` and set the env vars for "
             "any persistent deployment."
@@ -142,7 +145,8 @@ def verify_message_signature(address: str, message: str, signature: str) -> bool
         recovered = Account.recover_message(encoded_message, signature=signature)
         return recovered.lower() == address.lower()
     except Exception as e:
-        print(f"Message signature verification failed: {e}")
+        # Verification failures are expected/attacker-triggerable — keep at debug.
+        logger.debug("Message signature verification failed: %s", e)
         return False
 
 
@@ -157,7 +161,7 @@ def verify_pqc_signature(public_key: str, nonce: str, signature: str,
         with oqs.Signature(SIG_ALG) as verifier:
             return verifier.verify(message, sig_bytes, pk_bytes)
     except Exception as e:
-        print(f"PQC verification error: {e}")
+        logger.debug("PQC verification error: %s", e)
         return False
 
 
@@ -174,7 +178,7 @@ def verify_signature(address: str, nonce: str, signature: str,
         recovered_address = Account.recover_message(encoded_message, signature=signature)
         return recovered_address.lower() == address.lower()
     except Exception as e:
-        print(f"Signature verification failed: {e}")
+        logger.debug("Signature verification failed: %s", e)
         return False
 
 
@@ -202,7 +206,8 @@ def create_access_token(data: dict, expires_delta: timedelta | None = None):
         signature_b64 = b64url_encode(signature_bytes)
         return f"{message}.{signature_b64}"
     except Exception as e:
-        print(f"Token creation failed: {e}")
+        # A genuine server-side fault (signing key / liboqs) — surface it.
+        logger.error("Token creation failed: %s", e)
         return None
 
 
@@ -234,5 +239,6 @@ def decode_access_token(token: str):
         return payload
 
     except Exception as e:
-        print(f"Token decode error: {e}")
+        # Malformed/forged tokens are attacker-triggerable — debug, not warn.
+        logger.debug("Token decode error: %s", e)
         return None

@@ -2,7 +2,13 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from database import engine
 from models import Base
+import logging
 import os
+
+# Configure root logging once, at the app entrypoint, so module loggers
+# (kryptolog.*) emit. Honors LOG_LEVEL (default INFO).
+logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO").upper())
+logger = logging.getLogger("kryptolog.main")
 
 from routers import auth, users, secrets, multisig, messenger, groups, notifications
 from dependencies import limiter
@@ -32,9 +38,9 @@ app.add_middleware(SecurityHeadersMiddleware)
 import config
 origins = config.get_allowed_origins()
 if origins:
-    print(f"INFO: Loaded ALLOWED_ORIGINS: {origins}")
+    logger.info("Loaded ALLOWED_ORIGINS: %s", origins)
 else:
-    print("WARNING: ALLOWED_ORIGINS not set. CORS will block all requests.")
+    logger.warning("ALLOWED_ORIGINS not set. CORS will block all requests.")
 
 app.add_middleware(
     CORSMiddleware,
@@ -52,13 +58,12 @@ try:
     alembic_cfg = Config(os.path.join(os.path.dirname(__file__), "alembic.ini"))
     command.upgrade(alembic_cfg, "head")
 except Exception as e:
-    print(f"WARNING: Alembic upgrade failed: {e}")
-    print("Falling back to create_all + stamp head")
+    logger.warning("Alembic upgrade failed: %s — falling back to create_all + stamp head", e)
     Base.metadata.create_all(bind=engine)
     try:
         command.stamp(alembic_cfg, "head")
     except Exception as e2:
-        print(f"WARNING: Alembic stamp also failed: {e2}")
+        logger.warning("Alembic stamp also failed: %s", e2)
 
 # ── Signing key validation (fail closed at boot in production) ──
 # auth.py is imported here as `signing` because `auth` already refers to the

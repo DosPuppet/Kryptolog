@@ -1,5 +1,6 @@
 from fastapi import APIRouter, Depends, HTTPException, Request
 from dependencies import limiter
+from sqlalchemy import func
 from sqlalchemy.orm import Session, joinedload
 from typing import List
 import uuid
@@ -111,24 +112,34 @@ def list_groups(
         .all()
     )
 
-    # For each channel, find the latest message
-    result = []
-    for ch in channels:
-        last_msg = (
+    # Latest message per channel in two queries (was N+1). GroupMessage.id is
+    # autoincrement, so max(id) per channel is the most recent message; we then
+    # load those rows with their senders in one go.
+    channel_ids = [ch.id for ch in channels]
+    latest_by_channel = {}
+    if channel_ids:
+        latest_ids = (
+            db.query(func.max(models.GroupMessage.id))
+            .filter(models.GroupMessage.channel_id.in_(channel_ids))
+            .group_by(models.GroupMessage.channel_id)
+            .scalar_subquery()
+        )
+        latest_messages = (
             db.query(models.GroupMessage)
             .options(joinedload(models.GroupMessage.sender))
-            .filter(models.GroupMessage.channel_id == ch.id)
-            .order_by(models.GroupMessage.created_at.desc())
-            .first()
+            .filter(models.GroupMessage.id.in_(latest_ids))
+            .all()
         )
+        latest_by_channel = {m.channel_id: m for m in latest_messages}
 
-        # Unread count: messages sent after the last time the user would have seen them
-        # For simplicity, we count messages not sent by user (group has no per-user read tracking yet)
-        # We'll add read tracking via a last_read_at field on GroupMember
+    result = []
+    for ch in channels:
+        # Unread count: group has no per-user read tracking yet (would be a
+        # last_read_at on GroupMember). Left at 0 until that ships.
         result.append({
             "channel": ch,
-            "last_message": last_msg,
-            "unread_count": 0,  # Will be enhanced with read tracking
+            "last_message": latest_by_channel.get(ch.id),
+            "unread_count": 0,  # TODO: per-user read tracking
         })
 
     # Sort by most recent activity

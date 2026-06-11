@@ -1,5 +1,8 @@
 from fastapi import WebSocket
 from typing import Dict, List, Set
+import logging
+
+logger = logging.getLogger("kryptolog.ws")
 
 class ConnectionManager:
     def __init__(self):
@@ -45,7 +48,7 @@ class ConnectionManager:
                 try:
                     await connection.send_json(message)
                 except Exception as e:
-                    print(f"ERROR: Sending WS message failed: {e}")
+                    logger.warning("Sending WS message failed: %s", e)
 
 manager = ConnectionManager()
 

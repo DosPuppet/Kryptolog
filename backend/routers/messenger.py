@@ -5,11 +5,14 @@ from sqlalchemy.orm import Session, defer, joinedload
 from typing import List
 import json
 import asyncio
+import logging
 import models, schemas, config
 from database import get_db, SessionLocal
 from dependencies import get_current_user, user_for_token
 from websocket_manager import manager
 from utils.push import notify_user_push
+
+logger = logging.getLogger("kryptolog.messenger")
 
 router = APIRouter(
     prefix="/messages",
@@ -232,7 +235,7 @@ async def websocket_endpoint(websocket: WebSocket):
         # Disconnected before authentication completed
         manager.disconnect(websocket, None)
     except Exception as e:
-        print(f"WS Error: {e}")
+        logger.warning("WS error: %s", e)
         # Only try to close if not already closed
         try:
             await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
