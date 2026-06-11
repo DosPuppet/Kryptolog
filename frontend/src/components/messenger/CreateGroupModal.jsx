@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback } from 'react';
 import { X, Search, Loader2, Users, Plus, Check } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
 import API_ENDPOINTS from '../../config';
+import { toast } from '../../utils/toast';
 
 const CreateGroupModal = ({ isOpen, onClose, onCreate }) => {
     const { user, token } = useAuth();
@@ -58,7 +59,7 @@ const CreateGroupModal = ({ isOpen, onClose, onCreate }) => {
             await onCreate(groupName.trim(), selectedMembers.map(m => m.address));
             onClose();
         } catch (e) {
-            alert("Failed to create group: " + e.message);
+            toast.error("Failed to create group: " + e.message);
         } finally {
             setCreating(false);
         }

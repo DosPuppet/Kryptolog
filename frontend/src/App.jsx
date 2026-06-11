@@ -6,6 +6,8 @@ import { AuthProvider, useAuth } from './context/AuthContext';
 import { ThemeProvider, useTheme } from './context/ThemeContext';
 import { MessengerProvider } from './context/MessengerContext';
 import { NotificationProvider } from './context/NotificationContext';
+import ToastContainer from './components/ui/ToastContainer';
+import ConfirmDialogHost from './components/ui/ConfirmDialogHost';
 
 // Lazy-loaded components
 const Login = React.lazy(() => import('./components/Login'));
@@ -18,6 +20,8 @@ function AppContent() {
   return (
     <div className={isCrashing ? 'crt-crash' : ''}>
       {isRetro && <div className="crt-overlay" />}
+      <ToastContainer />
+      <ConfirmDialogHost />
       <Suspense fallback={
         <div className="min-h-screen flex items-center justify-center bg-slate-950">
           <div className="animate-pulse text-indigo-400 text-lg font-medium">Loading…</div>

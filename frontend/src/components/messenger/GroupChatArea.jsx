@@ -3,6 +3,8 @@ import { ArrowLeft, Shield, Loader2, Send, Lock, Users, UserPlus, UserMinus, Cro
 import { useAuth } from '../../context/AuthContext';
 import { useMessengerContext } from '../../context/MessengerContext';
 import AddMemberModal from './AddMemberModal';
+import { toast } from '../../utils/toast';
+import { confirmDialog } from '../../utils/confirm';
 
 const GroupChatArea = ({ activeGroupConversation, onBack, onSend, loadingMessages, sending, onDecrypt }) => {
     const { user } = useAuth();
@@ -56,23 +58,33 @@ const GroupChatArea = ({ activeGroupConversation, onBack, onSend, loadingMessage
 
     const handleRemoveMember = async (targetMember) => {
         const isTargetOwner = targetMember.role === 'owner';
-        let msg = 'Are you sure you want to remove this member?';
-        if (isTargetOwner) {
-            msg = 'WARNING: You are removing the Group Owner. YOU will become the new Owner. Continue?';
-        }
-        if (confirm(msg)) {
+        const ok = await confirmDialog(
+            isTargetOwner
+                ? {
+                    title: 'Remove the Group Owner?',
+                    message: 'You are removing the Group Owner. YOU will become the new Owner. Continue?',
+                    confirmText: 'Remove & take ownership',
+                    danger: true,
+                }
+                : {
+                    title: 'Remove this member?',
+                    confirmText: 'Remove',
+                    danger: true,
+                }
+        );
+        if (ok) {
             await removeGroupMember(channel.id, targetMember.user_address);
         }
     };
 
     const handlePromote = async (member) => {
-        if (confirm(`Promote ${member.user?.username || 'member'} to Admin?`)) {
+        if (await confirmDialog({ title: `Promote ${member.user?.username || 'member'} to Admin?`, confirmText: 'Promote' })) {
             await updateGroupMemberRole(channel.id, member.user_address, 'admin');
         }
     };
 
     const handleDemote = async (member) => {
-        if (confirm(`Demote ${member.user?.username || 'member'} to Member?`)) {
+        if (await confirmDialog({ title: `Demote ${member.user?.username || 'member'} to Member?`, confirmText: 'Demote' })) {
             await updateGroupMemberRole(channel.id, member.user_address, 'member');
         }
     };
@@ -86,7 +98,7 @@ const GroupChatArea = ({ activeGroupConversation, onBack, onSend, loadingMessage
             await updateGroup(channel.id, { name: editNameValue });
             setIsEditingName(false);
         } catch (e) {
-            alert("Failed to rename group");
+            toast.error("Failed to rename group");
         }
     };
 

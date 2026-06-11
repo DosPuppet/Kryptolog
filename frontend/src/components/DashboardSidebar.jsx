@@ -6,6 +6,7 @@ import { useAuth } from '../context/AuthContext';
 import { useNotifications } from '../context/NotificationContext';
 import { vaultService } from '../services/vault';
 import { API_ENDPOINTS } from '../config';
+import { toast } from '../utils/toast';
 
 // Persisted set of shared-secret ids the user has already opened, so the "unread"
 // badge stays cleared once read (instead of reappearing every time secrets re-lock).
@@ -199,7 +200,7 @@ export default function DashboardSidebar({
                                             headers: { 'Authorization': `Bearer ${token}` }
                                         });
                                         const data = await res.json();
-                                        if (data.status === 'no_subscriptions') alert(data.message);
+                                        if (data.status === 'no_subscriptions') toast.info(data.message);
                                     } catch (e) { console.error('Test push failed:', e); }
                                 }}
                                 className="w-full py-2 px-4 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-xs font-medium transition-colors"

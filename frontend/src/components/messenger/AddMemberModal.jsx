@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback } from 'react';
 import { X, Search, Loader2, UserPlus, Check } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
 import API_ENDPOINTS from '../../config';
+import { toast } from '../../utils/toast';
 
 const AddMemberModal = ({ isOpen, onClose, onAdd, currentMembers = [] }) => {
     const { user, token } = useAuth();
@@ -53,7 +54,7 @@ const AddMemberModal = ({ isOpen, onClose, onAdd, currentMembers = [] }) => {
             await onAdd(selectedUser.address);
             onClose();
         } catch (e) {
-            alert("Failed to add member: " + e.message);
+            toast.error("Failed to add member: " + e.message);
         } finally {
             setAdding(false);
         }

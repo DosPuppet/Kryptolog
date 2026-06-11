@@ -7,6 +7,7 @@ import { generateSymmetricKey, encryptSymmetric, domainSeparate, SIGNING_CONTEXT
 import { encryptData, signMessageEth } from '../utils/web3';
 import API_ENDPOINTS from '../config';
 import { uploadChunkedFile, uploadMultipleChunkedFiles, CHUNK_SIZE } from '../utils/fileChunks';
+import { toast } from '../utils/toast';
 
 export default function MultisigCreateModal({ isOpen, onClose, onCreated }) {
     const { user, token, authType } = useAuth();
@@ -116,7 +117,7 @@ export default function MultisigCreateModal({ isOpen, onClose, onCreated }) {
 
     const handleCreate = async () => {
         if (!name || (contentType === 'text' && !content) || (contentType === 'file' && selectedFiles.length === 0) || signers.length === 0) {
-            alert("Please complete all fields. Use must have at least one signer.");
+            toast.error("Please complete all fields. Use must have at least one signer.");
             return;
         }
 
@@ -304,12 +305,12 @@ export default function MultisigCreateModal({ isOpen, onClose, onCreated }) {
                     onClose();
                 }, 500);
             } else {
-                alert("Failed to create workflow");
+                toast.error("Failed to create workflow");
             }
 
         } catch (e) {
             console.error("Creation failed", e);
-            alert("Error: " + e.message);
+            toast.error("Error: " + e.message);
         } finally {
             setIsCreating(false);
         }
@@ -318,21 +319,21 @@ export default function MultisigCreateModal({ isOpen, onClose, onCreated }) {
     const handleNext = () => {
         if (step === 0) {
             if (!name.trim()) {
-                alert("Please enter a workflow name.");
+                toast.error("Please enter a workflow name.");
                 return;
             }
             if (contentType === 'text' && !content.trim()) {
-                alert("Please enter secret content.");
+                toast.error("Please enter secret content.");
                 return;
             }
             if (contentType === 'file' && selectedFiles.length === 0) {
-                alert("Please upload at least one file.");
+                toast.error("Please upload at least one file.");
                 return;
             }
         }
         if (step === 1) {
             if (signers.length === 0) {
-                alert("You must add at least one signer.");
+                toast.error("You must add at least one signer.");
                 return;
             }
         }

@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { useAuth } from '../../context/AuthContext';
 import { Loader2, Plus, PenTool, Upload, FileText, Check, Shield, Trash2 } from 'lucide-react';
+import { toast } from '../../utils/toast';
 
 const CreateSecret = ({ onCreate, onCancel }) => {
     const { authType } = useAuth();
@@ -39,17 +40,17 @@ const CreateSecret = ({ onCreate, onCancel }) => {
         try {
             // Validation
             if (!name) {
-                alert("Please enter a name.");
+                toast.error("Please enter a name.");
                 setCreating(false);
                 return;
             }
             if (contentType === 'text' && !content) {
-                alert("Please enter content.");
+                toast.error("Please enter content.");
                 setCreating(false);
                 return;
             }
             if (contentType === 'file' && selectedFiles.length === 0) {
-                alert("Please select at least one file.");
+                toast.error("Please select at least one file.");
                 setCreating(false);
                 return;
             }
@@ -57,7 +58,7 @@ const CreateSecret = ({ onCreate, onCancel }) => {
             if (contentType === 'file') {
                 const oversized = selectedFiles.find(f => f.size > MAX_FILE_SIZE);
                 if (oversized) {
-                    alert(`File "${oversized.name}" is too large (Max 50MB per file).`);
+                    toast.error(`File "${oversized.name}" is too large (Max 50MB per file).`);
                     setCreating(false);
                     return;
                 }
@@ -75,7 +76,7 @@ const CreateSecret = ({ onCreate, onCancel }) => {
             onCancel();
         } catch (error) {
             console.error(error);
-            alert("Creation failed: " + error.message);
+            toast.error("Creation failed: " + error.message);
         } finally {
             setCreating(false);
         }

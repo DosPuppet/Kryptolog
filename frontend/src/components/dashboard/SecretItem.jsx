@@ -4,6 +4,7 @@ import { useTheme } from '../../context/ThemeContext';
 import { useAuth } from '../../context/AuthContext';
 import { verifySignaturePQC, domainSeparate, SIGNING_CONTEXT } from '../../utils/crypto';
 import API_ENDPOINTS from '../../config';
+import { toast } from '../../utils/toast';
 
 const SecretItem = ({ secret, decryptedContent, onDecrypt, onLock, onDelete, onShare, onViewDetails, authType, viewMode = 'grid', isSharedView }) => {
     const { theme } = useTheme();
@@ -14,15 +15,14 @@ const SecretItem = ({ secret, decryptedContent, onDecrypt, onLock, onDelete, onS
 
     const handleCopy = (text) => {
         navigator.clipboard.writeText(text);
-        // Toast logic handled by parent or simplified here (could add local 'copied' state)
-        alert("Copied to clipboard!");
+        toast.success("Copied to clipboard!");
     };
 
     const handleVerify = async (docData) => {
         setVerifying(true);
         try {
             if (!docData.signature || !docData.signerPublicKey) {
-                alert("Invalid document format for verification.");
+                toast.error("Invalid document format for verification.");
                 setVerifying(false);
                 return;
             }
@@ -49,7 +49,7 @@ const SecretItem = ({ secret, decryptedContent, onDecrypt, onLock, onDelete, onS
                 publicKey: docData.signerPublicKey
             });
         } catch (e) {
-            alert("Verification failed: " + e.message);
+            toast.error("Verification failed: " + e.message);
         } finally {
             setVerifying(false);
         }

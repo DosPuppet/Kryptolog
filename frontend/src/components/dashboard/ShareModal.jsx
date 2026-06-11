@@ -11,6 +11,11 @@ const ShareModal = ({ isOpen, onClose, secret, onShare }) => {
     const [sharing, setSharing] = useState(false);
     const [selectedUser, setSelectedUser] = useState(null);
     const [expiry, setExpiry] = useState(0);
+    // Inline feedback instead of window.alert(): blocking dialogs are unreliable
+    // in installed PWAs (notably iOS standalone), where they can be suppressed or
+    // hang — leaving the modal stuck open even though the share succeeded.
+    const [error, setError] = useState('');
+    const [successMsg, setSuccessMsg] = useState('');
 
     const searchUsers = useCallback(async (query) => {
         setLoading(true);
@@ -37,6 +42,8 @@ const ShareModal = ({ isOpen, onClose, secret, onShare }) => {
             setSearchQuery('');
             setSearchResults([]);
             setSelectedUser(null);
+            setError('');
+            setSuccessMsg('');
             return;
         }
         const timer = setTimeout(() => searchUsers(searchQuery), 500);
@@ -46,16 +53,18 @@ const ShareModal = ({ isOpen, onClose, secret, onShare }) => {
     const handleShare = async () => {
         if (!selectedUser || !secret) return;
         setSharing(true);
+        setError('');
         try {
             const success = await onShare(secret.id, secret.encrypted_key, selectedUser.address, selectedUser.encryption_public_key, expiry);
             if (success) {
-                alert(`Shared with ${selectedUser.username}!`);
-                onClose();
+                // Show a brief inline confirmation, then auto-close (no blocking alert).
+                setSuccessMsg(`Shared with ${selectedUser.username || 'recipient'}!`);
+                setTimeout(() => onClose(), 1200);
             } else {
-                alert("Share failed.");
+                setError("Share failed. Please try again.");
             }
         } catch (e) {
-            alert(e.message);
+            setError(e.message || "Share failed.");
         } finally {
             setSharing(false);
         }
@@ -139,11 +148,22 @@ const ShareModal = ({ isOpen, onClose, secret, onShare }) => {
                         </div>
                         <button
                             onClick={handleShare}
-                            disabled={sharing}
+                            disabled={sharing || !!successMsg}
                             className="w-full bg-indigo-600 hover:bg-indigo-500 text-white py-2 rounded-lg font-medium shadow-lg shadow-indigo-500/20 disabled:opacity-50 flex justify-center items-center gap-2"
                         >
                             {sharing ? <Loader2 className="w-5 h-5 animate-spin" /> : `Share with ${selectedUser.username}`}
                         </button>
+                    </div>
+                )}
+
+                {successMsg && (
+                    <div className="mt-3 flex items-center gap-2 text-sm text-green-600 dark:text-green-400 shrink-0">
+                        <Check className="w-4 h-4" /> {successMsg}
+                    </div>
+                )}
+                {error && (
+                    <div className="mt-3 text-sm text-red-600 dark:text-red-400 shrink-0">
+                        {error}
                     </div>
                 )}
             </div>

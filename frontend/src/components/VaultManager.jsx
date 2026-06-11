@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react';
 import { usePQC } from '../context/PQCContext';
 import { X, Plus, Trash2, Download, Upload, User, RefreshCw, Timer } from 'lucide-react';
 import { vaultService } from '../services/vault';
+import { confirmDialog } from '../utils/confirm';
 
 export default function VaultManager({ onClose }) {
     const {
@@ -55,7 +56,13 @@ export default function VaultManager({ onClose }) {
     };
 
     const handleDelete = async (id) => {
-        if (!confirm("Are you sure? This cannot be undone.")) return;
+        const ok = await confirmDialog({
+            title: "Delete this account?",
+            message: "This cannot be undone.",
+            confirmText: "Delete",
+            danger: true,
+        });
+        if (!ok) return;
         try {
             await deleteVaultAccount(id);
             setMsg({ type: 'success', text: 'Account deleted' });
@@ -93,7 +100,7 @@ export default function VaultManager({ onClose }) {
     const toggleBiometrics = async () => {
         try {
             if (hasBiometrics) {
-                if (confirm("Disable FaceID/TouchID unlock?")) {
+                if (await confirmDialog({ title: "Disable FaceID/TouchID unlock?", confirmText: "Disable" })) {
                     await manageBiometrics(false);
                     setHasBiometrics(false);
                     setBiometricMode(null);

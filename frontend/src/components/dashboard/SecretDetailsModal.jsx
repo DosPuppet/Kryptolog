@@ -2,6 +2,8 @@ import { useState, useEffect, useCallback } from 'react';
 import { X, Clock, User, Trash2, Loader2, Info } from 'lucide-react';
 import API_ENDPOINTS from '../../config';
 import { useAuth } from '../../context/AuthContext';
+import { toast } from '../../utils/toast';
+import { confirmDialog } from '../../utils/confirm';
 
 const SecretDetailsModal = ({ isOpen, onClose, secret }) => {
     const { token } = useAuth();
@@ -39,7 +41,13 @@ const SecretDetailsModal = ({ isOpen, onClose, secret }) => {
     }, [isOpen, secret, fetchGrants]);
 
     const handleRevoke = async (grantId) => {
-        if (!confirm("Are you sure you want to revoke access?")) return;
+        const ok = await confirmDialog({
+            title: "Revoke access?",
+            message: "This recipient will lose access to the secret.",
+            confirmText: "Revoke",
+            danger: true,
+        });
+        if (!ok) return;
 
         try {
             const res = await fetch(API_ENDPOINTS.SECRETS.REVOKE(grantId), {
@@ -49,10 +57,10 @@ const SecretDetailsModal = ({ isOpen, onClose, secret }) => {
             if (res.ok) {
                 setGrants(grants.filter(g => g.id !== grantId));
             } else {
-                alert("Failed to revoke access");
+                toast.error("Failed to revoke access");
             }
         } catch (e) {
-            alert("Error revoking access");
+            toast.error("Error revoking access");
         }
     };
 

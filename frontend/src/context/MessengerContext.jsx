@@ -3,6 +3,7 @@ import { useAuth } from './AuthContext';
 import { usePQC } from './PQCContext';
 import API_ENDPOINTS from '../config';
 import { encryptWithSessionKey, decryptWithSessionKey } from '../utils/crypto';
+import { toast } from '../utils/toast';
 
 const MessengerContext = createContext();
 
@@ -569,7 +570,7 @@ export const MessengerProvider = ({ children }) => {
             });
         } catch (e) {
             console.error(e);
-            alert("Send failed: " + e.message);
+            toast.error("Send failed: " + e.message);
         } finally {
             setSending(false);
         }
@@ -710,7 +711,7 @@ export const MessengerProvider = ({ children }) => {
             fetchGroupConversations();
         } catch (e) {
             console.error(e);
-            alert("Send failed: " + e.message);
+            toast.error("Send failed: " + e.message);
         } finally {
             setSending(false);
         }

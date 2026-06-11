@@ -3,6 +3,7 @@ import API_ENDPOINTS from '../config';
 import { useAuth } from './AuthContext';
 import { vaultService } from '../services/vault';
 import { domainSeparate, SIGNING_CONTEXT } from '../utils/crypto';
+import { toast } from '../utils/toast';
 
 const PQCContext = createContext();
 
@@ -364,7 +365,7 @@ export const PQCProvider = ({ children }) => {
             setModalConfig({ ...modalConfig, isOpen: false, resolve: null, reject: null });
         } catch (e) {
             console.error("Biometric auth failed", e);
-            alert("Biometric authentication failed: " + e.message);
+            toast.error("Biometric authentication failed: " + e.message);
         }
     };
 
