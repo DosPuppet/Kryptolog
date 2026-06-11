@@ -7,7 +7,8 @@ Covers:
   * Cross-library interop: a signature produced by @noble/post-quantum in the
     browser/extension MUST verify under liboqs here (committed fixture).
   * The server JWT path: create_access_token -> decode_access_token round-trip,
-    tamper rejection, and the ML-DSA-44 header.
+    tamper rejection, wrong-secret rejection, and the HS256 header. (JWTs are
+    classical HS256 via PyJWT; only the login challenge below needs PQC.)
   * The login-challenge verifier verify_signature against a real client key.
 
 The matching browser/extension half lives in frontend/src/test/pqc.test.js,
@@ -21,9 +22,11 @@ This gate pins the integration: sizes, interop, round-trips, and a
 deterministic seeded-keygen regression anchor.
 """
 
+import base64
 import json
 import os
 
+import jwt
 import oqs
 import pytest
 
@@ -77,12 +80,7 @@ def test_noble_seeded_keygen_pin_sizes(vec):
 
 
 def test_jwt_roundtrip_and_header(monkeypatch):
-    # use a real, freshly generated server key for this test
-    with oqs.Signature(SIG_ALG) as s:
-        pk = s.generate_keypair()
-        sk = s.export_secret_key()
-    monkeypatch.setattr(auth, "_SERVER_SECRET_KEY", sk)
-    monkeypatch.setattr(auth, "_SERVER_PUBLIC_KEY", pk)
+    monkeypatch.setattr(auth, "_JWT_SECRET", "a" * 64)
 
     token = auth.create_access_token({"sub": "alice", "user_id": 42})
     assert token and token.count(".") == 2
@@ -91,34 +89,36 @@ def test_jwt_roundtrip_and_header(monkeypatch):
     assert payload["sub"] == "alice"
     assert payload["user_id"] == 42
 
-    header = json.loads(auth.b64url_decode(token.split(".")[0]))
-    assert header["alg"] == SIG_ALG and header["typ"] == "JWT"
+    header = jwt.get_unverified_header(token)
+    assert header["alg"] == "HS256" and header["typ"] == "JWT"
 
 
 def test_jwt_tampered_payload_rejected(monkeypatch):
-    with oqs.Signature(SIG_ALG) as s:
-        pk = s.generate_keypair()
-        sk = s.export_secret_key()
-    monkeypatch.setattr(auth, "_SERVER_SECRET_KEY", sk)
-    monkeypatch.setattr(auth, "_SERVER_PUBLIC_KEY", pk)
+    monkeypatch.setattr(auth, "_JWT_SECRET", "b" * 64)
 
     token = auth.create_access_token({"sub": "bob", "user_id": 1})
     h, _p, s = token.split(".")
-    forged = auth.b64url_encode(json.dumps({"sub": "admin", "user_id": 0, "exp": 9999999999}).encode())
+    # Re-sign? No — keep the original signature but swap the payload. HS256 binds
+    # the signature to the payload, so verification must fail.
+    forged = base64.urlsafe_b64encode(
+        json.dumps({"sub": "admin", "user_id": 0, "exp": 9999999999}).encode()
+    ).rstrip(b"=").decode()
     assert auth.decode_access_token(f"{h}.{forged}.{s}") is None
 
 
-def test_jwt_wrong_key_rejected(monkeypatch):
-    with oqs.Signature(SIG_ALG) as s:
-        pk = s.generate_keypair(); sk = s.export_secret_key()
-    monkeypatch.setattr(auth, "_SERVER_SECRET_KEY", sk)
-    monkeypatch.setattr(auth, "_SERVER_PUBLIC_KEY", pk)
+def test_jwt_wrong_secret_rejected(monkeypatch):
+    monkeypatch.setattr(auth, "_JWT_SECRET", "c" * 64)
     token = auth.create_access_token({"sub": "carol", "user_id": 9})
 
-    # swap to a different public key -> verification must fail
-    with oqs.Signature(SIG_ALG) as s2:
-        other_pk = s2.generate_keypair()
-    monkeypatch.setattr(auth, "_SERVER_PUBLIC_KEY", other_pk)
+    # decode under a different secret -> verification must fail
+    monkeypatch.setattr(auth, "_JWT_SECRET", "d" * 64)
+    assert auth.decode_access_token(token) is None
+
+
+def test_jwt_expired_rejected(monkeypatch):
+    monkeypatch.setattr(auth, "_JWT_SECRET", "e" * 64)
+    from datetime import timedelta
+    token = auth.create_access_token({"sub": "dave"}, expires_delta=timedelta(seconds=-1))
     assert auth.decode_access_token(token) is None
 
 

@@ -117,20 +117,20 @@ pip3 install -r requirements.txt
 > fails, ensure `cmake` is on your PATH (`pip install cmake`) and a C compiler is
 > available.
 
-#### Generate the server signing keypair
+#### Generate the JWT signing secret
 
-The backend signs JWTs with ML-DSA-44. liboqs has no seeded keygen and can't
-re-derive a public key from a secret key, so the server stores **both** halves.
-Generate them once and paste both lines into `backend/.env`:
+The backend signs access tokens with HS256 (PyJWT) using a symmetric secret —
+the JWT is server-issued and server-verified only, so no keypair is needed.
+Generate one and paste the line into `backend/.env`:
 
 ```bash
 python generate_server_keys.py
-# -> KRYPTOLOG_ML_DSA_PUBLIC_KEY=...
-# -> KRYPTOLOG_ML_DSA_SECRET_KEY=...   (treat like any production secret)
+# -> KRYPTOLOG_JWT_SECRET=...   (treat like any production secret)
 ```
 
-If these are unset the backend falls back to an **ephemeral** key — fine for a
-quick local run, but every JWT becomes invalid on restart.
+If unset the backend falls back to an **ephemeral** secret — fine for a quick
+local run, but every JWT becomes invalid on restart. (liboqs/ML-DSA-44 is still
+required server-side to verify client login challenges, regardless.)
 
 #### Database initialization
 
@@ -241,12 +241,12 @@ source ../.venv/bin/activate
 python3 -m pytest tests/ -v
 ```
 
-Currently: **95 tests** covering auth, secrets, file chunks, messenger, multisig, groups, users, notifications, and the PQC gate (`tests/test_pqc.py`).
+Currently: **130 tests** covering auth, secrets, file chunks, messenger, multisig, groups, users, notifications, and the PQC gate (`tests/test_pqc.py`).
 
 The PQC gate (`backend/tests/test_pqc.py`) proves ML-DSA-44 interop between `liboqs`
 (server) and `@noble/post-quantum` (clients) using the shared fixture
-`tests/fixtures/pqc_interop.json`, plus FIPS size conformance and the JWT
-issue/verify/tamper paths.
+`tests/fixtures/pqc_interop.json`, plus FIPS size conformance and the (classical
+HS256) JWT issue/verify/tamper/expiry paths.
 
 ### Frontend (vitest)
 
@@ -315,9 +315,8 @@ examples unchanged (push notifications stay off until VAPID keys are set).
 
 | Variable | Required | Default | Description |
 |----------|----------|---------|-------------|
-| `KRYPTOLOG_ENV` | No | `development` | Set to `production` to fail closed: the backend refuses to start unless the ML-DSA signing key below is configured. |
-| `KRYPTOLOG_ML_DSA_PUBLIC_KEY` | Prod: **yes** | – | Server ML-DSA-44 public key (hex). From `generate_server_keys.py`. |
-| `KRYPTOLOG_ML_DSA_SECRET_KEY` | Prod: **yes** | – | Server ML-DSA-44 secret key (hex). Forges JWTs if leaked — treat as a production secret. Required when `KRYPTOLOG_ENV=production`; unset in dev ⇒ ephemeral key, JWTs reset on restart. |
+| `KRYPTOLOG_ENV` | No | `development` | Set to `production` to fail closed: the backend refuses to start unless the JWT secret below is configured. |
+| `KRYPTOLOG_JWT_SECRET` | Prod: **yes** | – | HS256 JWT signing secret (hex). From `generate_server_keys.py`. Forges JWTs if leaked — treat as a production secret. Required when `KRYPTOLOG_ENV=production`; unset in dev ⇒ ephemeral secret, JWTs reset on restart. |
 | `ALLOWED_ORIGINS` | No | `http://localhost:5173` | Comma-separated CORS origins |
 | `TRUSTED_PROXY_IPS` | No | `127.0.0.1` | Comma-separated trusted reverse-proxy IPs. Rate limiting resolves the real client IP from `X-Real-IP`/`X-Forwarded-For` only when the direct peer is listed here (prevents header spoofing). |
 | `VAPID_PUBLIC_KEY` | No | – | Web Push VAPID public key (required for push notifications) |
@@ -348,8 +347,8 @@ examples unchanged (push notifications stay off until VAPID keys are set).
 | Validation | Pydantic ≥2.12 |
 | ASGI server | uvicorn ≥0.40 |
 | Rate limiting | slowapi 0.1.9 |
-| Post-quantum crypto | liboqs-python (ML-DSA-44, FIPS 204) — in-process |
-| JWT | Custom ML-DSA-44-signed JWTs (header `alg: ML-DSA-44`) |
+| Post-quantum crypto | liboqs-python (ML-DSA-44, FIPS 204) — in-process, verifies client login challenges |
+| JWT | PyJWT 2.10 — HS256 (server-issued, server-verified) |
 
 ### Frontend
 
@@ -378,7 +377,7 @@ examples unchanged (push notifications stay off until VAPID keys are set).
 
 ### Nginx configuration
 
-PQC signatures (ML-DSA-44) are significantly larger than standard signatures (~2.4 KB). You **must** increase Nginx buffer sizes:
+JWTs are now compact HS256 tokens, so the Authorization header is small. But login/approval requests still carry PQC material (ML-DSA-44 public keys ~2.6 KB hex and ~4.8 KB signatures) in the request **body**, and file uploads are chunked — so keep generous body limits (and somewhat larger header buffers as a safety margin):
 
 ```nginx
 http {

@@ -14,12 +14,13 @@ fi
 # Ensure we are in the script's directory (backend)
 cd "$(dirname "$0")"
 
-# ML-DSA-44 signing runs in-process via liboqs (no sidecar). For a persistent
-# dev key, run `python generate_server_keys.py` and set KRYPTOLOG_ML_DSA_* in .env.
-if [ -z "$KRYPTOLOG_ML_DSA_SECRET_KEY" ]; then
-    echo "WARNING: KRYPTOLOG_ML_DSA_SECRET_KEY not set — using an ephemeral server key (JWTs reset on restart)."
+# JWTs are HS256-signed (PyJWT). For a persistent dev secret, run
+# `python generate_server_keys.py` and set KRYPTOLOG_JWT_SECRET in .env.
+# (liboqs/ML-DSA-44 is still used in-process to verify client login challenges.)
+if [ -z "$KRYPTOLOG_JWT_SECRET" ]; then
+    echo "WARNING: KRYPTOLOG_JWT_SECRET not set — using an ephemeral JWT secret (tokens reset on restart)."
 fi
 
-# Start FastAPI Backend (Increase HTTP Header Size for large ML-DSA JWTs)
+# Start FastAPI Backend
 echo "Starting FastAPI Backend..."
 uvicorn main:app --reload --reload-exclude "*.db" --reload-exclude "*.db-journal" --port 8000 --h11-max-incomplete-event-size 65536

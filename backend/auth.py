@@ -1,85 +1,69 @@
 from eth_account.messages import encode_defunct
 from eth_account import Account
 import secrets
-import base64
-import json
 import logging
 import os
 from datetime import datetime, timedelta, timezone
 
+import jwt
 import oqs
 
 logger = logging.getLogger("kryptolog.auth")
 
 # --- Post-quantum signature config (NIST FIPS 204) ---
-# All ML-DSA work runs in-process via liboqs; the old Node `pqc_service.js`
-# sidecar (audit A1/M1) is gone. ML-DSA-44 byte encodings are interop-verified
-# against the browser/extension's @noble/post-quantum (see tests/test_pqc.py).
+# liboqs (ML-DSA-44) is used in-process to verify CLIENT login challenges and
+# multisig/document approvals — the only place server-side PQC is genuinely
+# needed (the old Node `pqc_service.js` sidecar, audit A1/M1, is gone). Byte
+# encodings are interop-verified against the browser/extension's
+# @noble/post-quantum (see tests/test_pqc.py).
 SIG_ALG = "ML-DSA-44"
 
-# liboqs has no public seeded keygen, and a public key cannot be re-derived from
-# a secret key — so the server keypair is generated once (generate_server_keys.py)
-# and BOTH halves are stored as hex in the environment.
-_SERVER_SECRET_KEY = None  # bytes
-_SERVER_PUBLIC_KEY = None  # bytes
+# --- JWT signing (classical) ---
+# Access tokens are server-issued and server-verified only (no JWKS, clients
+# never verify them), so a symmetric HS256 secret is the right primitive — no
+# keypair to manage and the token stays small. PyJWT replaces the former
+# hand-rolled JOSE + ML-DSA-signed JWTs (audit §2/§3).
+JWT_ALG = "HS256"
+_JWT_SECRET = None  # str
 
 
 def _is_production() -> bool:
     return (os.getenv("KRYPTOLOG_ENV") or "development").strip().lower() in ("production", "prod")
 
 
-def _load_server_keys():
-    """Load the server ML-DSA keypair from env. In production a persistent key is
-    mandatory (fail closed); in dev an ephemeral one is generated with a warning.
-    Returns (secret_key, public_key)."""
-    global _SERVER_SECRET_KEY, _SERVER_PUBLIC_KEY
-    if _SERVER_SECRET_KEY is not None and _SERVER_PUBLIC_KEY is not None:
-        return _SERVER_SECRET_KEY, _SERVER_PUBLIC_KEY
+def _load_jwt_secret() -> str:
+    """Load the HS256 JWT secret from env. In production a persistent secret is
+    mandatory (fail closed); in dev an ephemeral one is generated with a warning
+    (every JWT then resets on restart and differs per worker)."""
+    global _JWT_SECRET
+    if _JWT_SECRET is not None:
+        return _JWT_SECRET
 
-    sk_hex = os.getenv("KRYPTOLOG_ML_DSA_SECRET_KEY")
-    pk_hex = os.getenv("KRYPTOLOG_ML_DSA_PUBLIC_KEY")
-
-    if sk_hex and pk_hex:
-        _SERVER_SECRET_KEY = bytes.fromhex(sk_hex)
-        _SERVER_PUBLIC_KEY = bytes.fromhex(pk_hex)
+    secret = os.getenv("KRYPTOLOG_JWT_SECRET")
+    if secret:
+        _JWT_SECRET = secret
     elif _is_production():
-        # Fail closed: an ephemeral key would invalidate every JWT on restart and
-        # differ per worker — silent, hard-to-debug auth breakage in production.
+        # Fail closed: an ephemeral secret would invalidate every JWT on restart
+        # and differ per worker — silent, hard-to-debug auth breakage in prod.
         raise RuntimeError(
-            "KRYPTOLOG_ML_DSA_SECRET_KEY / KRYPTOLOG_ML_DSA_PUBLIC_KEY must be set when "
-            "KRYPTOLOG_ENV=production. Generate them with `python generate_server_keys.py` "
-            "and provide them via the environment / a secret manager. Refusing to start "
-            "with an ephemeral signing key."
+            "KRYPTOLOG_JWT_SECRET must be set when KRYPTOLOG_ENV=production. "
+            "Generate one with `python generate_server_keys.py` and provide it via the "
+            "environment / a secret manager. Refusing to start with an ephemeral JWT secret."
         )
     else:
         logger.warning(
-            "KRYPTOLOG_ML_DSA_SECRET_KEY / KRYPTOLOG_ML_DSA_PUBLIC_KEY not set. "
-            "Generating an EPHEMERAL server signing key — all JWTs become invalid on "
-            "restart. Run `python generate_server_keys.py` and set the env vars for "
-            "any persistent deployment."
+            "KRYPTOLOG_JWT_SECRET not set. Generating an EPHEMERAL JWT secret — all JWTs "
+            "become invalid on restart. Run `python generate_server_keys.py` and set "
+            "KRYPTOLOG_JWT_SECRET for any persistent deployment."
         )
-        with oqs.Signature(SIG_ALG) as signer:
-            _SERVER_PUBLIC_KEY = signer.generate_keypair()
-            _SERVER_SECRET_KEY = signer.export_secret_key()
-
-    return _SERVER_SECRET_KEY, _SERVER_PUBLIC_KEY
+        _JWT_SECRET = secrets.token_hex(32)
+    return _JWT_SECRET
 
 
-def get_server_public_key() -> str:
-    """Server's ML-DSA public key as hex (used to verify the JWTs it issues)."""
-    _, pk = _load_server_keys()
-    return pk.hex()
-
-
-def b64url_encode(data: bytes) -> str:
-    return base64.urlsafe_b64encode(data).rstrip(b'=').decode('utf-8')
-
-
-def b64url_decode(data: str) -> bytes:
-    padding = 4 - (len(data) % 4)
-    if padding != 4:
-        data += '=' * padding
-    return base64.urlsafe_b64decode(data)
+def get_jwt_secret() -> str:
+    """Resolve the JWT secret (triggers the production fail-closed check). Called
+    at boot so the process refuses to start without a persistent secret in prod."""
+    return _load_jwt_secret()
 
 
 def generate_nonce():
@@ -187,58 +171,25 @@ ACCESS_TOKEN_EXPIRE_MINUTES = 30
 
 def create_access_token(data: dict, expires_delta: timedelta | None = None):
     to_encode = data.copy()
-    if expires_delta:
-        expire = datetime.now(timezone.utc) + expires_delta
-    else:
-        expire = datetime.now(timezone.utc) + timedelta(minutes=15)
-
-    to_encode.update({"exp": expire.timestamp()})
-
-    header = {"alg": SIG_ALG, "typ": "JWT"}
-    header_b64 = b64url_encode(json.dumps(header).encode('utf-8'))
-    payload_b64 = b64url_encode(json.dumps(to_encode).encode('utf-8'))
-    message = f"{header_b64}.{payload_b64}"
-
+    expire = datetime.now(timezone.utc) + (
+        expires_delta or timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
+    )
+    to_encode["exp"] = expire  # PyJWT serializes datetime -> numeric exp claim
     try:
-        sk, _ = _load_server_keys()
-        with oqs.Signature(SIG_ALG, secret_key=sk) as signer:
-            signature_bytes = signer.sign(message.encode('utf-8'))
-        signature_b64 = b64url_encode(signature_bytes)
-        return f"{message}.{signature_b64}"
+        return jwt.encode(to_encode, _load_jwt_secret(), algorithm=JWT_ALG)
     except Exception as e:
-        # A genuine server-side fault (signing key / liboqs) — surface it.
+        # A genuine server-side fault (e.g. missing secret) — surface it.
         logger.error("Token creation failed: %s", e)
         return None
 
 
 def decode_access_token(token: str):
     try:
-        parts = token.split('.')
-        if len(parts) != 3:
-            return None
-
-        header_b64, payload_b64, signature_b64 = parts
-        message = f"{header_b64}.{payload_b64}".encode('utf-8')
-        signature_bytes = b64url_decode(signature_b64)
-
-        _, server_pk = _load_server_keys()
-        with oqs.Signature(SIG_ALG) as verifier:
-            valid = verifier.verify(message, signature_bytes, server_pk)
-
-        if not valid:
-            return None
-
-        payload_json = b64url_decode(payload_b64).decode('utf-8')
-        payload = json.loads(payload_json)
-
-        exp = payload.get("exp")
-        if exp:
-            if datetime.now(timezone.utc).timestamp() > exp:
-                return None
-
-        return payload
-
-    except Exception as e:
-        # Malformed/forged tokens are attacker-triggerable — debug, not warn.
+        # PyJWT validates the signature, the `exp` claim, and that the header
+        # `alg` is in the allowed list — so alg-confusion / `none` (audit L2)
+        # cannot apply. Malformed/expired/forged tokens raise InvalidTokenError.
+        return jwt.decode(token, _load_jwt_secret(), algorithms=[JWT_ALG])
+    except jwt.InvalidTokenError as e:
+        # Attacker-triggerable; keep at debug to avoid log spam.
         logger.debug("Token decode error: %s", e)
         return None

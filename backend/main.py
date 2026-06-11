@@ -65,12 +65,12 @@ except Exception as e:
     except Exception as e2:
         logger.warning("Alembic stamp also failed: %s", e2)
 
-# ── Signing key validation (fail closed at boot in production) ──
+# ── JWT secret validation (fail closed at boot in production) ──
 # auth.py is imported here as `signing` because `auth` already refers to the
-# router module above. In production this raises if no persistent key is set,
-# so the process never starts serving with an ephemeral signing key.
+# router module above. In production this raises if no persistent JWT secret is
+# set, so the process never starts serving with an ephemeral one.
 import auth as signing
-signing.get_server_public_key()
+signing.get_jwt_secret()
 
 # ── Routers ─────────────────────────────────────────────────────
 

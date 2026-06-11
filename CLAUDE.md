@@ -28,11 +28,12 @@ N-of-N multisig workflows, E2EE messenger + group chat, web-push notifications.
 The lib swap is **done and tested**, not pending. Clients use `@noble/post-quantum`
 0.6.1 (ML-KEM-768 + ML-DSA-44); the backend uses in-process `oqs` (ML-DSA-44) and the
 Node sidecar is deleted. noble↔liboqs ML-DSA-44 interop is proven **both directions**.
-Test gate green: `backend/tests/test_pqc.py` (8) + `frontend/src/test/pqc.test.js` (9)
-+ the existing backend suite (87). Server signing key is now
-`KRYPTOLOG_ML_DSA_PUBLIC_KEY` / `KRYPTOLOG_ML_DSA_SECRET_KEY` (generate via
-`backend/generate_server_keys.py`; unset ⇒ ephemeral key + warning). The sections
-below are retained as the rationale of record.
+Test gate green: `backend/tests/test_pqc.py` + `frontend/src/test/pqc.test.js`
++ the existing backend suite (130 backend total). JWTs are now classical **HS256
+via PyJWT** (audit §3) — the server signing secret is `KRYPTOLOG_JWT_SECRET`
+(generate via `backend/generate_server_keys.py`; unset ⇒ ephemeral secret +
+warning). liboqs/ML-DSA-44 is still used server-side to verify client login
+challenges. The sections below are retained as the rationale of record.
 
 ## The migration — decisions locked in
 
@@ -52,7 +53,7 @@ used today — hence the clean cutover.
 
 Crypto runs in two places, but only **ML-DSA crosses the wire**:
 - **Browser/extension** (E2EE, must stay client-side): ML-KEM encaps/decaps + ML-DSA sign/verify.
-- **Server**: ML-DSA only — signs JWTs, verifies login challenges.
+- **Server**: ML-DSA only — verifies client login challenges (JWTs are now classical HS256, not PQC).
 - **ML-KEM is browser-internal** (server never touches it) → only clients must agree.
 - **ML-DSA must interoperate** between noble (browser/extension) and liboqs (server). Both emit
   FIPS 204 byte encodings so they *should* match — **prove it with tests, don't assume.**
@@ -78,11 +79,11 @@ Crypto runs in two places, but only **ML-DSA crosses the wire**:
 - **`@noble/post-quantum` argument order** (`sign(secretKey, msg)` vs `(msg, secretKey)`) has changed
   between releases — pin the version and follow the installed README, don't trust memory.
 - **`liboqs-python` is not a pure wheel** — it compiles liboqs C (needs cmake + a compiler). Document in README install steps.
-- **No seeded keygen in liboqs:** today the server key is derived deterministically from
-  `KRYPTOLOG_SECRET_KEY` (in `pqc_service.js`). liboqs has no public seeded-keygen → instead
-  **generate the server signing keypair once and store the secret key** in env / a secret manager
-  (better practice anyway). Revisit whether the JWT even needs PQC signing vs. PyJWT (HS256/EdDSA);
-  liboqs is still required server-side to verify client login challenges regardless.
+- **JWTs are classical HS256 (PyJWT), resolved (audit §3).** The JWT is server-issued and
+  server-verified only, so it never crossed a quantum-threat boundary — it's now a small
+  HS256 token signed with `KRYPTOLOG_JWT_SECRET`. This retired the old "liboqs has no seeded
+  keygen → store both halves of an ML-DSA server keypair" workaround. liboqs is still required
+  server-side to verify client login challenges regardless.
 - Don't forget the **extension** — miss it and extension-based login breaks server-side verification.
 
 ## Audit highlights already addressed in this fork

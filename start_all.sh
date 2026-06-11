@@ -24,11 +24,12 @@ fi
 # Apply Development Defaults if not set
 export ALLOWED_ORIGINS="${ALLOWED_ORIGINS:-http://localhost:5173,http://127.0.0.1:5173}"
 
-# ML-DSA-44 signing runs in-process via liboqs. For a persistent server key,
-# run `python backend/generate_server_keys.py` and set KRYPTOLOG_ML_DSA_* (in
-# backend/.env or the environment); otherwise an ephemeral key is used.
-if [ -z "$KRYPTOLOG_ML_DSA_SECRET_KEY" ]; then
-    echo "WARNING: KRYPTOLOG_ML_DSA_SECRET_KEY not set — backend will use an ephemeral server key."
+# JWTs are HS256-signed (PyJWT). For a persistent secret, run
+# `python backend/generate_server_keys.py` and set KRYPTOLOG_JWT_SECRET (in
+# backend/.env or the environment); otherwise an ephemeral secret is used.
+# (liboqs/ML-DSA-44 is still used in-process to verify client login challenges.)
+if [ -z "$KRYPTOLOG_JWT_SECRET" ]; then
+    echo "WARNING: KRYPTOLOG_JWT_SECRET not set — backend will use an ephemeral JWT secret."
 fi
 
 echo "Environment initialized."
