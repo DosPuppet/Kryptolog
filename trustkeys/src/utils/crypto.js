@@ -2,6 +2,27 @@
 //   ML-KEM-768  (FIPS 203) — key encapsulation, replaces Kyber768
 //   ML-DSA-44   (FIPS 204) — signatures,        replaces Dilithium2
 // ML-DSA byte encoding is interop-verified against the server's liboqs.
+//
+// ┌─ SHARED CRYPTO CORE — KEEP IN SYNC ───────────────────────────────────────┐
+// │ Sibling: frontend/src/utils/crypto.js. The two files are independent       │
+// │ copies (separate Vite builds) of the same primitives. The wire/storage     │
+// │ formats below are produced here and consumed by the SPA (and vice-versa),  │
+// │ so they MUST stay byte-compatible. Verified identical as of 2026-06-11:    │
+// │   • KEM message envelope ...... { kem, iv, content }  (all hex)            │
+// │   • session-key wrap .......... { kem, iv, encKey }   (all hex)            │
+// │   • vault blob ................ { salt, iv, data }    (all hex)            │
+// │   • KDF ....................... PBKDF2, 600000 iters, SHA-512 → AES-GCM-256 │
+// │   • AEAD ...................... AES-GCM, fresh 12-byte random IV per call   │
+// │ Naming: this file is PQC-only, so functions are bare (signMessage,         │
+// │ verifySignature, encryptMessage, decryptMessage). The SPA suffixes the     │
+// │ same functions with `PQC` (signMessagePQC, …) because it ALSO has `*Eth`   │
+// │ variants (in web3.js). Behavior is identical; only the names differ.       │
+// │ The SPA additionally has helpers absent here ON PURPOSE — domain           │
+// │ separation (domainSeparate / multisigApprovalMessage / sha256Hex), chunked │
+// │ file enc, encryptVaultWithKey, and WebAuthn-PRF biometrics. The extension  │
+// │ signs the exact bytes the page hands it, so H1 domain-wrapping is applied  │
+// │ at the SPA's call sites, not here. Change a shared format? Edit BOTH files.│
+// └────────────────────────────────────────────────────────────────────────────┘
 import { ml_kem768 } from '@noble/post-quantum/ml-kem.js';
 import { ml_dsa44 } from '@noble/post-quantum/ml-dsa.js';
 import { Buffer } from 'buffer';

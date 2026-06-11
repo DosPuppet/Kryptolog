@@ -1,6 +1,26 @@
 // NIST FIPS post-quantum primitives (audited, pure-TS, no WASM):
 //   ML-KEM-768  (FIPS 203) — key encapsulation, replaces Kyber768
 //   ML-DSA-44   (FIPS 204) — signatures,        replaces Dilithium2
+//
+// ┌─ SHARED CRYPTO CORE — KEEP IN SYNC ───────────────────────────────────────┐
+// │ Sibling: trustkeys/src/utils/crypto.js. The two files are independent      │
+// │ copies (separate Vite builds) of the same primitives. The wire/storage     │
+// │ formats below are produced here and consumed by the extension (and         │
+// │ vice-versa), so they MUST stay byte-compatible. Verified identical as of   │
+// │ 2026-06-11:                                                                 │
+// │   • KEM message envelope ...... { kem, iv, content }  (all hex)            │
+// │   • session-key wrap .......... { kem, iv, encKey }   (all hex)            │
+// │   • vault blob ................ { salt, iv, data }    (all hex)            │
+// │   • KDF ....................... PBKDF2, 600000 iters, SHA-512 → AES-GCM-256 │
+// │   • AEAD ...................... AES-GCM, fresh 12-byte random IV per call   │
+// │ Naming: the PQC sign/verify/encrypt/decrypt here carry a `PQC` suffix       │
+// │ because this app ALSO has `*Eth` variants (web3.js); the extension is      │
+// │ PQC-only so it uses the bare names (signMessage, …). Behavior is identical.│
+// │ The helpers below with NO extension counterpart are intentional: domain    │
+// │ separation (domainSeparate / multisigApprovalMessage / sha256Hex), chunked │
+// │ file enc, encryptVaultWithKey, WebAuthn-PRF biometrics. Change a shared     │
+// │ format? Edit BOTH files.                                                    │
+// └────────────────────────────────────────────────────────────────────────────┘
 import { ml_kem768 } from '@noble/post-quantum/ml-kem.js';
 import { ml_dsa44 } from '@noble/post-quantum/ml-dsa.js';
 import { Buffer } from 'buffer';
