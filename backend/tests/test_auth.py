@@ -1,0 +1,126 @@
+"""Tests for /auth endpoints — nonce generation and login flow."""
+
+from conftest import (
+    TEST_USER_ADDRESS, TEST_ENCRYPTION_KEY,
+    get_nonce, do_login, auth_header,
+)
+
+
+class TestNonce:
+    def test_get_nonce_returns_hex_string(self, client):
+        nonce = get_nonce(client, TEST_USER_ADDRESS)
+        assert isinstance(nonce, str)
+        assert len(nonce) == 32  # token_hex(16) → 32 hex chars
+
+    def test_get_nonce_replaces_on_second_call(self, client):
+        nonce1 = get_nonce(client, TEST_USER_ADDRESS)
+        nonce2 = get_nonce(client, TEST_USER_ADDRESS)
+        assert isinstance(nonce2, str)
+        assert len(nonce2) == 32
+
+    def test_get_nonce_normalizes_to_lowercase(self, client):
+        addr = "PQC_UPPER_" + "A" * 100
+        nonce = get_nonce(client, addr)
+        assert len(nonce) == 32
+
+
+class TestLogin:
+    def test_login_success_creates_user(self, client):
+        token, user = do_login(client, TEST_USER_ADDRESS, TEST_ENCRYPTION_KEY, "Alice")
+        assert token is not None
+        assert len(token) > 0
+        assert user["address"] == TEST_USER_ADDRESS.lower()
+        assert user["username"] == "Alice"
+
+    def test_login_returns_bearer_token(self, client):
+        nonce = get_nonce(client, TEST_USER_ADDRESS)
+        resp = client.post("/auth/login", json={
+            "address": TEST_USER_ADDRESS,
+            "signature": "fake",
+            "nonce": nonce,
+            "encryption_public_key": TEST_ENCRYPTION_KEY,
+        })
+        data = resp.json()
+        assert data["token_type"] == "bearer"
+
+    def test_login_with_wrong_nonce_fails(self, client):
+        get_nonce(client, TEST_USER_ADDRESS)
+        resp = client.post("/auth/login", json={
+            "address": TEST_USER_ADDRESS,
+            "signature": "fake",
+            "nonce": "wrong_nonce_value",
+        })
+        assert resp.status_code == 400
+
+    def test_login_without_requesting_nonce_fails(self, client):
+        resp = client.post("/auth/login", json={
+            "address": TEST_USER_ADDRESS,
+            "signature": "fake",
+            "nonce": "whatever",
+        })
+        assert resp.status_code == 400
+
+    def test_nonce_consumed_after_login(self, client):
+        """Anti-replay: same nonce cannot be used twice."""
+        nonce = get_nonce(client, TEST_USER_ADDRESS)
+        body = {
+            "address": TEST_USER_ADDRESS,
+            "signature": "fake",
+            "nonce": nonce,
+            "encryption_public_key": TEST_ENCRYPTION_KEY,
+        }
+        resp1 = client.post("/auth/login", json=body)
+        assert resp1.status_code == 200
+        resp2 = client.post("/auth/login", json=body)
+        assert resp2.status_code == 400
+
+    def test_login_updates_encryption_key(self, client):
+        do_login(client, TEST_USER_ADDRESS, "old_key_" + "x" * 100)
+        token2, user2 = do_login(client, TEST_USER_ADDRESS, "new_key_" + "y" * 100)
+        assert user2["encryption_public_key"] == "new_key_" + "y" * 100
+
+    def test_login_default_username_from_address(self, client):
+        token, user = do_login(client, TEST_USER_ADDRESS, TEST_ENCRYPTION_KEY)
+        assert user["username"] == TEST_USER_ADDRESS.lower()[:7]
+
+
+class TestTokenRevocation:
+    def test_logout_revokes_token(self, client):
+        token, _ = do_login(client, TEST_USER_ADDRESS, TEST_ENCRYPTION_KEY, "Alice")
+        # Token works before logout.
+        assert client.get("/secrets", headers=auth_header(token)).status_code == 200
+        # Logout bumps token_version.
+        assert client.post("/auth/logout", headers=auth_header(token)).status_code == 200
+        # The same token is now rejected (revoked).
+        assert client.get("/secrets", headers=auth_header(token)).status_code == 401
+
+    def test_relogin_after_logout_works(self, client):
+        token, _ = do_login(client, TEST_USER_ADDRESS, TEST_ENCRYPTION_KEY, "Alice")
+        client.post("/auth/logout", headers=auth_header(token))
+        # A fresh login mints a token at the new version and works again.
+        token2, _ = do_login(client, TEST_USER_ADDRESS, TEST_ENCRYPTION_KEY)
+        assert client.get("/secrets", headers=auth_header(token2)).status_code == 200
+
+    def test_logout_requires_auth(self, client):
+        assert client.post("/auth/logout").status_code == 401
+
+
+class TestKeyChangeStamp:
+    """audit S1: encryption-key changes are stamped (no longer silently overwritten)."""
+
+    ALT_KEY = "enc_pub_key_alt_" + "d" * 600  # different key, still > 500 chars
+
+    def test_new_user_has_no_key_change_stamp(self, client):
+        _, user = do_login(client, TEST_USER_ADDRESS, TEST_ENCRYPTION_KEY, "Alice")
+        assert user["key_changed_at"] is None
+
+    def test_relogin_same_key_keeps_stamp_null(self, client):
+        do_login(client, TEST_USER_ADDRESS, TEST_ENCRYPTION_KEY, "Alice")
+        _, user = do_login(client, TEST_USER_ADDRESS, TEST_ENCRYPTION_KEY)
+        assert user["key_changed_at"] is None
+
+    def test_changed_key_is_stamped_and_updated(self, client):
+        do_login(client, TEST_USER_ADDRESS, TEST_ENCRYPTION_KEY, "Alice")
+        _, user = do_login(client, TEST_USER_ADDRESS, self.ALT_KEY)
+        assert user["encryption_public_key"] == self.ALT_KEY
+        assert user["key_changed_at"] is not None

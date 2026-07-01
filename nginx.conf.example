@@ -1,0 +1,127 @@
+# Kryptolog — nginx production config example
+# ─────────────────────────────────────────────────────────────────────────────
+# SETUP INSTRUCTIONS
+#
+# 1. Replace every occurrence of "your-domain.com" with your actual domain.
+#
+# 2. Build the frontend pointing at the /api proxy path:
+#      cd frontend
+#      echo "VITE_API_BASE_URL=https://your-domain.com/api" > .env
+#      npm run build
+#
+# 3. Backend .env — ALLOWED_ORIGINS is only needed for direct API access.
+#    With nginx proxying, the browser sees everything as same-origin and
+#    never sends a CORS preflight. Set it anyway as a safety net:
+#      ALLOWED_ORIGINS=https://your-domain.com
+#
+# 4. Copy this file to /etc/nginx/sites-available/kryptolog and symlink:
+#      sudo ln -s /etc/nginx/sites-available/kryptolog /etc/nginx/sites-enabled/
+#      sudo nginx -t && sudo systemctl reload nginx
+#
+# HOW CORS IS ELIMINATED
+# ──────────────────────
+# nginx proxies /api/* → FastAPI (port 8000) and /ws → WebSocket, both under
+# the same origin (your-domain.com). The browser never performs a cross-origin
+# request, so no CORS preflight is sent and no Access-Control-Allow-Origin
+# header is needed.
+# ─────────────────────────────────────────────────────────────────────────────
+
+# Redirect HTTP → HTTPS
+server {
+    listen 80;
+    server_name your-domain.com;
+    return 301 https://$host$request_uri;
+}
+
+server {
+    listen 443 ssl http2;
+    server_name your-domain.com;
+
+    ssl_certificate     /etc/letsencrypt/live/your-domain.com/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/your-domain.com/privkey.pem;
+    ssl_protocols       TLSv1.2 TLSv1.3;
+    ssl_prefer_server_ciphers on;
+
+    # Serve the Vite build
+    root  /var/www/kryptolog/frontend/dist;
+    index index.html;
+
+    # ── Security headers ───────────────────────────────────────────────────
+    add_header Strict-Transport-Security "max-age=63072000; includeSubDomains; preload" always;
+    add_header X-Content-Type-Options    "nosniff" always;
+    add_header X-Frame-Options           "DENY" always;
+    add_header Referrer-Policy           "strict-origin-when-cross-origin" always;
+    add_header Permissions-Policy        "camera=(), microphone=(), geolocation=()" always;
+
+    # CSP via HTTP header — takes precedence over the <meta> tag in index.html.
+    # frame-ancestors only works in headers (not meta tags), so it lives here.
+    #
+    # Least-privilege notes (keep this tight):
+    #   script-src 'self'      — app ships as hashed external bundles; no inline
+    #                            scripts, no eval, no WASM (noble PQC is pure JS).
+    #   style-src 'unsafe-inline' — required: Tailwind/React inject inline styles
+    #                            at runtime. fonts.googleapis.com serves the CSS.
+    #   connect-src            — list every API/WS origin the SPA talks to. If the
+    #                            API is a separate subdomain you need BOTH its
+    #                            https origin and its wss origin (see below).
+    #
+    # Replace the api.your-domain.com origins below with your actual API host
+    # (same value family as the frontend's VITE_API_BASE_URL). For a same-origin
+    # API proxied under this server, "connect-src 'self'" alone is enough.
+    add_header Content-Security-Policy
+        "default-src 'self';
+         script-src 'self';
+         style-src 'self' 'unsafe-inline' https://fonts.googleapis.com;
+         font-src 'self' https://fonts.gstatic.com;
+         img-src 'self' data:;
+         connect-src 'self' https://api.your-domain.com wss://api.your-domain.com;
+         worker-src 'self';
+         form-action 'self';
+         base-uri 'self';
+         object-src 'none';
+         frame-ancestors 'none';"
+        always;
+
+    # ── SPA routing ────────────────────────────────────────────────────────
+    location / {
+        try_files $uri $uri/ /index.html;
+    }
+
+    # ── API proxy ──────────────────────────────────────────────────────────
+    # Strips the /api prefix before forwarding to FastAPI.
+    # e.g. GET /api/auth/nonce/0x1234 → GET /auth/nonce/0x1234 on port 8000.
+    #
+    # Dilithium JWTs are ~2-3 KB. Buffer sizes are increased accordingly.
+    location /api/ {
+        rewrite ^/api/(.*) /$1 break;
+        proxy_pass http://127.0.0.1:8000;
+
+        proxy_set_header Host              $host;
+        # X-Real-IP is used by the backend rate limiter to identify the real
+        # client (see TRUSTED_PROXY_IPS). Keep it set to $remote_addr.
+        proxy_set_header X-Real-IP         $remote_addr;
+        proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+
+        client_max_body_size         64M;
+        proxy_buffer_size            64k;
+        proxy_buffers                8 64k;
+        proxy_busy_buffers_size      128k;
+        client_header_buffer_size    16k;
+        large_client_header_buffers  4 16k;
+    }
+
+    # ── WebSocket proxy ────────────────────────────────────────────────────
+    # Messenger real-time channel. Must be proxied separately from HTTP.
+    location /ws {
+        proxy_pass http://127.0.0.1:8000/ws;
+
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade    $http_upgrade;
+        proxy_set_header Connection "upgrade";
+        proxy_set_header Host       $host;
+        proxy_set_header X-Real-IP  $remote_addr;
+
+        proxy_read_timeout 86400;  # Keep long-lived WS connections alive
+    }
+}

@@ -1,0 +1,120 @@
+name: CI
+
+# Enforces the test gate that previously had to be run by hand (audit F-4).
+# Four independent jobs so a failure points straight at the area:
+#   • crypto-core — the byte-compat / ML-DSA interop guard (the crux of the PQC
+#     migration). Mark this one a REQUIRED check in branch protection.
+#   • frontend    — SPA unit tests + a production build (the build also guards the
+#     fresh-checkout @noble resolution that broke deploys).
+#   • extension   — TrustKeys MV3 build.
+#   • backend     — pytest, incl. the noble<->liboqs interop tests (liboqs is
+#     compiled from source, so the job installs cmake + a C toolchain).
+# Lint runs advisory (continue-on-error) until the F-6 lint debt is cleared; flip
+# those steps to blocking afterwards.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# Cancel superseded runs on the same ref to save CI minutes.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  crypto-core:
+    name: crypto-core (byte-compat / interop)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: packages/crypto-core/package-lock.json
+      - run: npm ci
+        working-directory: packages/crypto-core
+      - run: npm test
+        working-directory: packages/crypto-core
+
+  frontend:
+    name: frontend (tests + build)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      # crypto-core is a file: (symlinked) dep. vitest resolves the symlink to its
+      # REAL path and then needs @noble/post-quantum next to it, so install
+      # crypto-core's own deps too. (`vite build` is covered by preserveSymlinks,
+      # but vitest's resolver is not — a fresh checkout fails the test imports.)
+      - name: Install crypto-core deps (symlinked dep)
+        run: npm ci
+        working-directory: packages/crypto-core
+      - name: Install frontend deps
+        run: npm ci
+        working-directory: frontend
+      - name: Unit tests (vitest)
+        run: npx vitest run
+        working-directory: frontend
+      - name: Production build
+        run: npx vite build
+        working-directory: frontend
+      - name: Lint (advisory until F-6 lint debt is cleared)
+        run: npx eslint .
+        working-directory: frontend
+        continue-on-error: true
+
+  extension:
+    name: trustkeys extension (build)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: trustkeys/package-lock.json
+      # Same symlinked-dep resolution as the frontend job (see note there).
+      - name: Install crypto-core deps (symlinked dep)
+        run: npm ci
+        working-directory: packages/crypto-core
+      - name: Install extension deps
+        run: npm ci
+        working-directory: trustkeys
+      - name: Build
+        run: npx vite build
+        working-directory: trustkeys
+      - name: Lint (advisory until F-6 lint debt is cleared)
+        run: npx eslint .
+        working-directory: trustkeys
+        continue-on-error: true
+
+  backend:
+    name: backend (pytest + PQC interop)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+          cache-dependency-path: backend/requirements-dev.txt
+      - name: Install liboqs build deps
+        # liboqs-python compiles liboqs (C) from source on install/first import.
+        run: sudo apt-get update && sudo apt-get install -y cmake gcc g++ libssl-dev ninja-build
+      - name: Install Python dependencies (runtime + test)
+        run: pip install -r requirements-dev.txt
+        working-directory: backend
+      - name: Run tests
+        # A fresh venv has none of the Ethereum-era packages, so the stale
+        # pytest_ethereum plugin (audit F-5, local-only) never loads here.
+        run: python -m pytest -q
+        working-directory: backend

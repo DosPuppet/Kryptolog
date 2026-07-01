@@ -1,0 +1,5 @@
+# Test/dev-only dependencies — kept out of the runtime requirements.txt so
+# production installs stay lean. Install with:
+#   pip install -r requirements-dev.txt
+-r requirements.txt
+pytest>=8        # test runner (TestClient needs httpx, already in requirements.txt)

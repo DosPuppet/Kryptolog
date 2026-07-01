@@ -1,0 +1,477 @@
+/* Global Reset & Base */
+:root {
+  --bg-color: #0d0e12;
+  --surface-color: #1a1b20;
+  --primary-color: #00e5ff;
+  --primary-hover: #00b8cc;
+  --text-color: #e0e0e0;
+  --text-muted: #888;
+  --border-color: #333;
+  --success-color: #4cd964;
+  --error-color: #ff453a;
+  --font-family: 'Inter', system-ui, -apple-system, sans-serif;
+}
+
+body {
+  margin: 0;
+  background-color: var(--bg-color);
+  color: var(--text-color);
+  font-family: var(--font-family);
+  -webkit-font-smoothing: antialiased;
+}
+
+#root {
+  padding: 0;
+  width: 350px;
+  /* Extension popup width */
+  min-height: 500px;
+  display: flex;
+  flex-direction: column;
+}
+
+/* Auth Screens (Login / Setup) */
+.auth-screen {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  align-items: center;
+  padding: 30px;
+  text-align: center;
+  background: radial-gradient(circle at top, #1a2a3a 0%, var(--bg-color) 70%);
+}
+
+.auth-screen h2 {
+  margin-bottom: 10px;
+  font-weight: 700;
+  color: #fff;
+}
+
+.auth-screen p {
+  color: var(--text-muted);
+  font-size: 0.9rem;
+  margin-bottom: 25px;
+  line-height: 1.4;
+}
+
+/* Inputs & Buttons */
+input {
+  width: 100%;
+  padding: 12px;
+  margin-bottom: 12px;
+  background: #25262b;
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  color: #fff;
+  font-size: 0.95rem;
+  box-sizing: border-box;
+  transition: border-color 0.2s;
+}
+
+input:focus {
+  outline: none;
+  border-color: var(--primary-color);
+}
+
+button.primary {
+  width: 100%;
+  padding: 12px;
+  background: var(--primary-color);
+  color: #000;
+  border: none;
+  border-radius: 6px;
+  font-weight: 600;
+  font-size: 1rem;
+  cursor: pointer;
+  transition: transform 0.1s, background-color 0.2s;
+}
+
+button.primary:hover {
+  background: var(--primary-hover);
+}
+
+button.primary:active {
+  transform: scale(0.98);
+}
+
+button.primary:disabled {
+  opacity: 0.7;
+  cursor: progress;
+}
+
+/* Inline loading spinner (e.g. during the slow vault-unlock KDF). */
+.spinner {
+  display: inline-block;
+  width: 1em;
+  height: 1em;
+  margin-right: 8px;
+  vertical-align: -0.15em;
+  border: 2px solid rgba(0, 0, 0, 0.25);
+  border-top-color: currentColor;
+  border-radius: 50%;
+  animation: spin 0.7s linear infinite;
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+.error {
+  color: var(--error-color);
+  font-size: 0.85rem;
+  margin-bottom: 15px;
+  background: rgba(255, 69, 58, 0.1);
+  padding: 8px;
+  border-radius: 4px;
+  width: 100%;
+}
+
+/* Dashboard */
+.dashboard {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  padding: 20px;
+}
+
+.header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 20px;
+  border-bottom: 1px solid var(--border-color);
+  padding-bottom: 15px;
+}
+
+.header h2 {
+  margin: 0;
+  font-size: 1.2rem;
+  color: #fff;
+}
+
+.header .highlight {
+  color: var(--primary-color);
+  font-size: 0.8em;
+}
+
+.header-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.small-btn {
+  background: none;
+  border: 1px solid var(--border-color);
+  color: var(--text-muted);
+  border-radius: 4px;
+  width: 30px;
+  height: 30px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  font-size: 14px;
+}
+
+.small-btn:hover {
+  border-color: var(--text-color);
+  color: #fff;
+}
+
+.status-indicator {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: #444;
+}
+
+.status-indicator.active {
+  background: var(--primary-color);
+  box-shadow: 0 0 8px var(--primary-color);
+}
+
+/* Active Card */
+.card {
+  background: var(--surface-color);
+  border: 1px solid var(--border-color);
+  border-radius: 12px;
+  padding: 15px;
+  margin-bottom: 25px;
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.2);
+}
+
+.card-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 15px;
+}
+
+.badge {
+  font-size: 0.65rem;
+  background: rgba(0, 229, 255, 0.1);
+  color: var(--primary-color);
+  padding: 4px 8px;
+  border-radius: 12px;
+  font-weight: 700;
+  border: 1px solid rgba(0, 229, 255, 0.2);
+}
+
+.key-section {
+  margin-bottom: 15px;
+}
+
+.key-section:last-child {
+  margin-bottom: 0;
+}
+
+.key-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 0.75rem;
+  color: var(--text-muted);
+  margin-bottom: 6px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.key-header button {
+  background: none;
+  border: none;
+  font-size: 0.7rem;
+  color: var(--primary-color);
+  cursor: pointer;
+  font-weight: 600;
+  opacity: 0.8;
+}
+
+.key-header button:hover {
+  opacity: 1;
+}
+
+.key-header button.copied {
+  color: var(--success-color);
+}
+
+.key-box {
+  background: #111;
+  padding: 10px;
+  border-radius: 6px;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 0.8rem;
+  color: #ccc;
+  border: 1px solid var(--border-color);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Accounts List */
+.accounts-list h3 {
+  font-size: 0.9rem;
+  color: var(--text-muted);
+  margin-bottom: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.account-item {
+  display: flex;
+  justify-content: space-between;
+  padding: 12px;
+  background: var(--surface-color);
+  margin-bottom: 8px;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: background 0.2s;
+  border: 1px solid transparent;
+}
+
+.account-item:hover {
+  background: #2a2b30;
+}
+
+.account-item.current {
+  border-color: var(--primary-color);
+  background: rgba(0, 229, 255, 0.05);
+}
+
+.account-item .check {
+  color: var(--primary-color);
+  font-weight: bold;
+}
+
+.account-info {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 1;
+}
+
+.delete-btn {
+  background: none;
+  border: none;
+  font-size: 1rem;
+  padding: 4px 8px;
+  border-radius: 4px;
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.2s, background-color 0.2s;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.account-item:hover .delete-btn {
+  opacity: 0.6;
+}
+
+.delete-btn:hover {
+  opacity: 1 !important;
+  background-color: rgba(255, 69, 58, 0.1);
+}
+
+.create-account {
+  display: flex;
+  gap: 8px;
+  margin-top: 15px;
+}
+
+.create-account input {
+  margin-bottom: 0;
+  padding: 10px;
+}
+
+.create-account button {
+  width: 40px;
+  background: var(--surface-color);
+  border: 1px solid var(--border-color);
+  color: #fff;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 1.2rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+}
+
+.create-account button:hover:not(:disabled) {
+  background: var(--primary-color);
+  color: #000;
+  border-color: var(--primary-color);
+}
+
+/* Modals */
+.modal-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(0, 0, 0, 0.8);
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  z-index: 1000;
+}
+
+.modal {
+  background: var(--surface-color);
+  width: 80%;
+  max-width: 320px;
+  border-radius: 12px;
+  padding: 20px;
+  position: relative;
+  box-shadow: 0 4px 30px rgba(0, 0, 0, 0.5);
+  border: 1px solid var(--border-color);
+}
+
+.close-btn {
+  position: absolute;
+  top: 10px;
+  right: 15px;
+  background: none;
+  border: none;
+  font-size: 1.5rem;
+  color: var(--text-muted);
+  cursor: pointer;
+}
+
+.close-btn:hover {
+  color: #fff;
+}
+
+.settings-menu {
+  display: flex;
+  flex-direction: column;
+  gap: 15px;
+  margin-top: 20px;
+}
+
+.danger-btn {
+  width: 100%;
+  padding: 12px;
+  background: rgba(255, 69, 58, 0.1);
+  color: var(--error-color);
+  border: 1px solid var(--error-color);
+  border-radius: 6px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.danger-btn:hover {
+  background: var(--error-color);
+  color: white;
+}
+
+.primary-btn {
+  background: var(--surface-color);
+  border: 1px solid var(--border-color);
+  color: var(--text-color);
+  padding: 12px;
+  border-radius: 6px;
+  text-align: center;
+}
+
+.primary-btn:hover {
+  border-color: var(--primary-color);
+  color: var(--primary-color);
+}
+
+.text-btn {
+  width: 100%;
+  padding: 10px;
+  background: none;
+  border: none;
+  color: var(--text-muted);
+  cursor: pointer;
+  margin-top: 10px;
+}
+
+.text-btn:hover {
+  color: #fff;
+}
+
+.warning-box {
+  background: rgba(255, 165, 0, 0.1);
+  border: 1px solid orange;
+  color: orange;
+  padding: 12px;
+  border-radius: 6px;
+  font-size: 0.85rem;
+  margin-bottom: 20px;
+  line-height: 1.4;
+}
+
+.warning-box strong {
+  display: block;
+  margin-bottom: 5px;
+  color: #ff9f00;
+}
+
+.export-flow input {
+  margin-top: 10px;
+}

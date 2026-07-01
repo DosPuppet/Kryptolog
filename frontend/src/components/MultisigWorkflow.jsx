@@ -1,0 +1,881 @@
+import { useState } from 'react';
+import { X, Check, User, Shield, ShieldCheck, AlertTriangle, Eye, EyeOff, FileText, Download } from 'lucide-react';
+import { useAuth } from '../context/AuthContext';
+import { usePQC } from '../context/PQCContext';
+import API_ENDPOINTS from '../config';
+import { verifySignaturePQC, domainSeparate, SIGNING_CONTEXT, sha256Hex, multisigApprovalMessage } from '../utils/crypto';
+import { downloadChunkedFile, downloadFileByRange } from '../utils/fileChunks';
+
+// verifyTarget describes exactly what the signer signed:
+//   { kind: 'content', content }  — the CREATOR's signature over the plaintext
+//      document (CONTENT domain, embedded in the secret; server can't see it).
+//   { kind: 'approval', workflowId, secretId, encryptedData } — an explicit
+//      SIGNER's server-verifiable approval over sha256(ciphertext) (M1).
+const SignerVerificationBadge = ({ signer, verifyTarget }) => {
+    const [status, setStatus] = useState('idle'); // idle, verifying, valid, invalid
+
+    const verify = async () => {
+        if (!signer.signature || !verifyTarget) {
+            console.warn("Missing signature or verify target", { sig: !!signer.signature, target: !!verifyTarget });
+            return;
+        }
+        setStatus('verifying');
+        try {
+            // Rebuild the exact domain-separated bytes the signer signed.
+            let message;
+            if (verifyTarget.kind === 'approval') {
+                const ctHash = await sha256Hex(verifyTarget.encryptedData);
+                message = multisigApprovalMessage(verifyTarget.workflowId, verifyTarget.secretId, ctHash);
+            } else {
+                message = domainSeparate(SIGNING_CONTEXT.CONTENT, verifyTarget.content);
+            }
+
+            // The signer's user_address is their ML-DSA-44 public key.
+            const isValid = await verifySignaturePQC(message, signer.signature, signer.user_address);
+            setStatus(isValid ? 'valid' : 'invalid');
+        } catch (e) {
+            console.error(e);
+            setStatus('invalid');
+        }
+    };
+
+    if (!signer.signature) return null;
+
+    if (status === 'idle') {
+        return (
+            <button
+                onClick={(e) => { e.stopPropagation(); verify(); }}
+                className="text-xs text-indigo-500 hover:text-indigo-400 font-medium px-2 py-1 rounded bg-indigo-50 dark:bg-indigo-900/20 border border-indigo-100 dark:border-indigo-800 transition-colors"
+                title="Verify Signature"
+            >
+                Verify
+            </button>
+        );
+    }
+
+    if (status === 'verifying') {
+        return <span className="text-xs text-slate-400 animate-pulse">Verifying...</span>;
+    }
+
+    if (status === 'valid') {
+        return (
+            <span className="flex items-center gap-1 text-xs text-emerald-600 bg-emerald-50 dark:bg-emerald-900/20 px-2 py-1 rounded border border-emerald-100 dark:border-emerald-800">
+                <Shield className="w-3 h-3" /> Verified
+            </span>
+        );
+    }
+
+    return (
+        <span className="flex items-center gap-1 text-xs text-red-600 bg-red-50 dark:bg-red-900/20 px-2 py-1 rounded border border-red-100 dark:border-red-800">
+            <AlertTriangle className="w-3 h-3" /> Invalid
+        </span>
+    );
+};
+
+export default function MultisigWorkflow({ workflow, onClose, onUpdate, onDelete, setUploadProgress, setStatusMessage }) {
+    const { user, token } = useAuth();
+    const { encrypt: encryptPQC, decrypt: decryptPQC, sign: signPQC } = usePQC();
+
+    const [isSigning, setIsSigning] = useState(false);
+    const [isRejecting, setIsRejecting] = useState(false);
+    const [isDeleting, setIsDeleting] = useState(false);
+    const [, setIsViewing] = useState(false);
+    const [decryptedContent, setDecryptedContent] = useState(null);
+    const [rawDecryptedContent, setRawDecryptedContent] = useState(null); // The actual string signers signed
+    const [verificationStatus, setVerificationStatus] = useState(null); // 'verified', 'failed', 'unsigned'
+    const [creatorSignature, setCreatorSignature] = useState(null);
+    const [creatorSignedContent, setCreatorSignedContent] = useState(null);
+    const [error, setError] = useState('');
+
+    const isOwner = workflow.owner_address.toLowerCase() === user.address.toLowerCase();
+    const mySignerEntry = workflow.signers.find(s => s.user_address.toLowerCase() === user.address.toLowerCase());
+    const isSigner = !!mySignerEntry;
+    const hasSigned = mySignerEntry?.has_signed;
+
+    // Check if user is a recipient
+    const isRecipient = workflow.recipients.find(r => r.user_address.toLowerCase() === user.address.toLowerCase());
+    const canView = isOwner || isSigner || (isRecipient && workflow.status === 'completed');
+
+    // console.log("MultisigWorkflow Debug:", { ... });
+
+    const completedSignatures = workflow.signers.filter(s => s.has_signed).length;
+    const totalSigners = workflow.signers.length;
+    // N-of-M: progress is measured against the threshold (N), not the full
+    // signer set (M). NULL threshold ⇒ legacy N-of-N (= totalSigners).
+    const requiredSignatures = workflow.threshold || totalSigners;
+    const progress = Math.min(100, (completedSignatures / requiredSignatures) * 100);
+    const isRejected = workflow.status === 'rejected';
+
+    const handleDownloadProof = async () => {
+        // Build signer list: virtual creator + explicit signers
+        const signatures = [];
+
+        // Creator (implicit signer)
+        if (creatorSignature) {
+            const isPQC = workflow.owner_address.length > 200;
+            signatures.push({
+                address: workflow.owner_address,
+                username: workflow.owner?.username || null,
+                signature: creatorSignature,
+                signed_at: workflow.created_at,
+                algorithm: isPQC ? 'DILITHIUM2' : 'ECDSA',
+                role: 'creator',
+            });
+        }
+
+        // Explicit signers
+        for (const s of workflow.signers) {
+            if (s.has_signed && s.signature) {
+                const isPQC = s.user_address.length > 200;
+                signatures.push({
+                    address: s.user_address,
+                    username: s.user?.username || null,
+                    signature: s.signature,
+                    signed_at: s.signed_at,
+                    algorithm: isPQC ? 'DILITHIUM2' : 'ECDSA',
+                    role: 'signer',
+                });
+            }
+        }
+
+        // Explicit signers signed sha256(ciphertext) bound to the workflow (M1),
+        // so the offline proof must carry secret_id + the ciphertext hash for the
+        // auditor to rebuild and verify their approval messages. The creator's
+        // signature is over the plaintext content (verified separately).
+        const ciphertextSha256 = workflow.secret?.encrypted_data
+            ? await sha256Hex(workflow.secret.encrypted_data)
+            : null;
+
+        const proof = {
+            type: 'kryptolog_multisig_proof',
+            version: '1.1',
+            exported_at: new Date().toISOString(),
+            workflow: {
+                id: workflow.id,
+                name: workflow.name,
+                status: workflow.status,
+                created_at: workflow.created_at,
+                secret_id: workflow.secret_id,
+            },
+            document: {
+                content: creatorSignedContent || rawDecryptedContent,
+                ciphertext_sha256: ciphertextSha256,
+            },
+            signatures,
+        };
+
+        const blob = new Blob([JSON.stringify(proof, null, 2)], { type: 'application/json' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `${workflow.name.replace(/[^a-zA-Z0-9_-]/g, '_')}.kryptolog-proof.json`;
+        a.click();
+        URL.revokeObjectURL(url);
+    };
+
+    const fetchAndDecrypt = async () => {
+        setIsViewing(true);
+        setError('');
+        if (setUploadProgress) {
+            setUploadProgress(10);
+            setStatusMessage && setStatusMessage("Fetching...");
+        }
+
+        try {
+            if (workflow.secret_id === undefined) {
+                console.error("Workflow object missing secret_id", workflow);
+                throw new Error("Invalid workflow data: missing secret ID");
+            }
+
+            let encryptedKeyToDecrypt = null;
+
+            // 1. Check if I am a Recipient with direct key access (Completed Workflow)
+            if (isRecipient && workflow.status === 'completed') {
+                const myRecipientEntry = workflow.recipients.find(r => r.user_address === user.address);
+                if (myRecipientEntry && myRecipientEntry.encrypted_key) {
+                    encryptedKeyToDecrypt = myRecipientEntry.encrypted_key;
+                }
+            }
+
+            // Fallback: Check if Secret Data is embedded in Workflow (New Backend Schema)
+            if (!encryptedKeyToDecrypt && workflow.secret && workflow.secret.encrypted_data) {
+                // If I am a signer, I have the key (step 2), but I need the CONTENT.
+                // Wait, 'encryptedKeyToDecrypt' variable name in this function is confusing.
+                // It seems to be used as 'dataBlobToDecrypt'.
+                // LET'S RENAME/CLARIFY LOGIC:
+                // We need TWO things:
+                // A. The KEY (AES Key) -> derived from my Signer Entry (encrypted_key)
+                // B. The CONTENT (AES Encrypted Blob) -> derived from workflow.secret.encrypted_data
+
+                // NEW ENVELOPE LOGIC:
+                // 1. Decrypt KEY (from my signer entry)
+                // 2. Decrypt CONTENT (from workflow.secret) using KEY.
+
+                // logic below is legacy "Decrypt ONE thing". We must refactor `fetchAndDecrypt` significantly.
+            }
+
+            // NEW ENVELOPE LOGIC
+            // 1. Get MY Encrypted Key
+            let myEncryptedKey = null;
+            if (isOwner) {
+                // Check top-level owner key first (robust fix)
+                if (workflow.owner_encrypted_key) {
+                    myEncryptedKey = workflow.owner_encrypted_key;
+                }
+                // Fallback to nested if top-level missing (legacy support)
+                else if (workflow.secret && workflow.secret.encrypted_key) {
+                    myEncryptedKey = workflow.secret.encrypted_key;
+                }
+            } else if (isSigner) {
+                const s = workflow.signers.find(s => s.user_address === user.address);
+                if (s) myEncryptedKey = s.encrypted_key;
+            } else if (isRecipient && workflow.status === 'completed') {
+                const r = workflow.recipients.find(r => r.user_address === user.address);
+                if (r) myEncryptedKey = r.encrypted_key;
+            }
+
+            if (!myEncryptedKey) throw new Error("Acccess Denied: No key found for your user.");
+
+            // 2. Get Encrypted Content
+            const encryptedContentBlob = workflow.secret?.encrypted_data;
+            if (!encryptedContentBlob) throw new Error("Secret content not found in workflow.");
+
+            if (setUploadProgress) {
+                setUploadProgress(40);
+                setStatusMessage && setStatusMessage("Decrypting Key...");
+            }
+
+            // 3. Decrypt the wrapped AES file key (ML-KEM envelope).
+            const { decryptSymmetric } = await import('../utils/crypto');
+            const fileKey = await decryptPQC(JSON.parse(myEncryptedKey));
+
+            if (setUploadProgress) {
+                setUploadProgress(60);
+                setStatusMessage && setStatusMessage("Decrypting Content...");
+            }
+
+            // 4. Decrypt Content
+            const encDataObj = JSON.parse(encryptedContentBlob);
+            const contentString = await decryptSymmetric(encDataObj, fileKey);
+
+            // 5. Process Content (Parse JSON / Verify Signature)
+            await processDecryptedContent(contentString, fileKey);
+
+            if (setUploadProgress) {
+                setUploadProgress(100);
+                setTimeout(() => {
+                    setUploadProgress(0);
+                    setStatusMessage && setStatusMessage('');
+                }, 500);
+            }
+
+        } catch (e) {
+            console.error("View failed", e);
+            setError(e.message);
+            setIsViewing(false);
+            if (setUploadProgress) {
+                setUploadProgress(0);
+                setStatusMessage && setStatusMessage('');
+            }
+        }
+    };
+
+    const processDecryptedContent = async (contentString, fileKey) => {
+        try {
+            let parsed;
+            try { parsed = JSON.parse(contentString); } catch { /* best-effort: failure is non-fatal */ }
+
+            if (parsed && parsed.signature && parsed.signerPublicKey) {
+                // Signed Document Wrapper. The creator signed the `content`-domain-
+                // separated bytes, not the raw content (H1) — verify against those.
+                const signedBody = domainSeparate(SIGNING_CONTEXT.CONTENT, parsed.content);
+                const isValid = await verifySignaturePQC(signedBody, parsed.signature, parsed.signerPublicKey);
+                setVerificationStatus(isValid ? 'verified' : 'failed');
+                setCreatorSignature(parsed.signature);
+                setCreatorSignedContent(parsed.content);
+                setRawDecryptedContent(contentString);
+
+                try {
+                    const inner = JSON.parse(parsed.content);
+
+                    // Check if the inner content is actually a chunked file payload
+                    if (inner.files && Array.isArray(inner.files)) {
+                        // Multi-file metadata
+                        try {
+                            if (setUploadProgress) {
+                                setUploadProgress(70);
+                                setStatusMessage && setStatusMessage("Downloading files...");
+                            }
+                            const fileResults = [];
+                            for (let fi = 0; fi < inner.files.length; fi++) {
+                                const fileMeta = inner.files[fi];
+                                const blob = await downloadFileByRange(
+                                    workflow.secret_id,
+                                    fileKey,
+                                    token,
+                                    API_ENDPOINTS.BASE,
+                                    fileMeta.chunk_offset,
+                                    fileMeta.total_chunks,
+                                    fileMeta.mime_type,
+                                    (pct, msg) => {
+                                        if (setUploadProgress) {
+                                            const overallPct = Math.round(((fi + pct / 100) / inner.files.length) * 100);
+                                            setUploadProgress(70 + Math.round(overallPct * 0.25));
+                                        }
+                                    }
+                                );
+                                fileResults.push({
+                                    name: fileMeta.file_name,
+                                    mime: fileMeta.mime_type,
+                                    content: URL.createObjectURL(blob),
+                                    size: fileMeta.total_size
+                                });
+                            }
+                            setDecryptedContent({
+                                type: 'files',
+                                items: fileResults
+                            });
+                        } catch (chunkErr) {
+                            console.error("Failed to download multi-file chunks", chunkErr);
+                            setDecryptedContent(inner);
+                        }
+                    } else if (inner.total_chunks && inner.file_name) {
+                        try {
+                            if (setUploadProgress) {
+                                setUploadProgress(70);
+                                setStatusMessage && setStatusMessage("Downloading file chunks...");
+                            }
+                            const blob = await downloadChunkedFile(
+                                workflow.secret_id,
+                                fileKey,
+                                token,
+                                API_ENDPOINTS.BASE,
+                                inner.total_chunks,
+                                inner.mime_type,
+                                (pct, msg) => {
+                                    if (setUploadProgress) setUploadProgress(70 + Math.round(pct * 0.25));
+                                }
+                            );
+                            const blobUrl = URL.createObjectURL(blob);
+                            setDecryptedContent({
+                                type: 'file',
+                                name: inner.file_name,
+                                mime: inner.mime_type,
+                                content: blobUrl,
+                                size: inner.total_size,
+                                chunked: true
+                            });
+                        } catch (chunkErr) {
+                            console.error("Failed to download chunks", chunkErr);
+                            setDecryptedContent(inner);
+                        }
+                    } else {
+                        setDecryptedContent(inner);
+                    }
+                } catch {
+                    setDecryptedContent(parsed.content);
+                }
+            } else {
+                setVerificationStatus('unsigned');
+                setDecryptedContent(parsed || contentString);
+                setRawDecryptedContent(contentString);
+            }
+            setIsViewing(false);
+        } catch (e) {
+            console.error("Processing failed", e);
+            setError("Content malformed");
+        }
+    };
+
+    const handleSign = async () => {
+        setIsSigning(true);
+        setError('');
+        if (setUploadProgress) {
+            setUploadProgress(10);
+            setStatusMessage && setStatusMessage("Preparing...");
+        }
+
+        try {
+            // What a signer signs (M1): we decrypt the secret so the signer can
+            // review what they're approving, then sign sha256(stored ciphertext)
+            // bound to this workflow — a server-verifiable approval (see below).
+            // The creator's own signature over the plaintext lives inside the
+            // secret (created in MultisigCreateModal) and is verified separately.
+
+            let encryptedKey = null;
+
+            // 1. Try to get key from my Signer Entry
+            const mySignerEntry = workflow.signers.find(s => s.user_address === user.address);
+            if (mySignerEntry && mySignerEntry.encrypted_key) {
+                encryptedKey = mySignerEntry.encrypted_key;
+            }
+
+            // 2. Fallback: Check SHARED/Access Grants (Legacy)
+            if (!encryptedKey) {
+                try {
+                    const res = await fetch(API_ENDPOINTS.SECRETS.SHARED_WITH, {
+                        headers: { 'Authorization': `Bearer ${token}` }
+                    });
+                    const shared = await res.json();
+                    const myShare = shared.find(s => s.secret_id === workflow.secret_id);
+                    if (myShare) {
+                        encryptedKey = myShare.encrypted_key;
+                    }
+                } catch (e) {
+                    console.warn("Legacy shared secret fetch failed", e);
+                }
+            }
+
+            if (!encryptedKey) throw new Error("Access denied: No key found for signing");
+
+            if (setUploadProgress) {
+                setUploadProgress(30);
+                setStatusMessage && setStatusMessage("Decrypting content for signing...");
+            }
+
+            // 1. Decrypt the AES file key (ML-KEM envelope).
+            let fileKey;
+            try {
+                const decryptedKeyJson = await decryptPQC(JSON.parse(encryptedKey));
+                // Tolerate a double-encoded (JSON-string) key from older payloads.
+                try {
+                    const obj = JSON.parse(decryptedKeyJson);
+                    fileKey = typeof obj === 'string' ? obj : decryptedKeyJson;
+                } catch {
+                    fileKey = decryptedKeyJson;
+                }
+            } catch (e) {
+                console.error("Failed to decrypt AES key", e);
+                throw new Error("Failed to decrypt your access key");
+            }
+
+            // 2. Fetch and Decrypt the Content
+            const encryptedContentBlob = workflow.secret?.encrypted_data;
+            if (!encryptedContentBlob) throw new Error("Secret content not found to sign.");
+
+            const { decryptSymmetric } = await import('../utils/crypto');
+
+            // Decrypt as a readability guard: confirm we can actually read the
+            // content we're about to approve (we don't blind-sign a ciphertext).
+            const encDataObj = JSON.parse(encryptedContentBlob);
+            await decryptSymmetric(encDataObj, fileKey);
+
+            if (setUploadProgress) {
+                setUploadProgress(50);
+                setStatusMessage && setStatusMessage("Signing...");
+            }
+
+            // Server-verifiable approval (M1): we decrypted and reviewed the content
+            // above, but we SIGN the SHA-256 of the stored ciphertext, bound to this
+            // workflow + secret, under the `multisig-approval` domain (H1). The server
+            // is zero-knowledge — it can't see the plaintext — but it can hash the
+            // ciphertext it holds and verify this signature, so it can gate completion
+            // on the actual signing key (not merely a session token). One signature,
+            // no extra prompt.
+            const ctHash = await sha256Hex(workflow.secret.encrypted_data);
+            const approvalMessage = multisigApprovalMessage(workflow.id, workflow.secret_id, ctHash);
+            const signature = await signPQC(approvalMessage);
+
+            // Handle "Signed Message" (Attached Code) vs "Detached Signature"
+            // We now support Attached Signatures (Full Blob) in backend (Text column).
+
+            // Completing Signer Logic: Release Recipient Keys.
+            // N-of-M: the signature that reaches the threshold completes the
+            // workflow and releases the secret. That signer (whoever they are,
+            // not necessarily the last in the list) re-wraps the recipient keys.
+            const alreadySignedCount = workflow.signers.filter(s => s.has_signed).length;
+            const quorum = workflow.threshold || workflow.signers.length;
+            const isCompletingSigner = (alreadySignedCount + 1) >= quorum;
+
+            let recipientKeys = null;
+            if (isCompletingSigner && workflow.recipients && workflow.recipients.length > 0) {
+                if (setUploadProgress) {
+                    setUploadProgress(70);
+                    setStatusMessage && setStatusMessage("Encrypting for recipients...");
+                }
+                recipientKeys = {};
+                for (const r of workflow.recipients) {
+                    const pubKey = r.user?.encryption_public_key;
+                    if (!pubKey) continue;
+
+                    try {
+                        // ML-KEM wrap of the file key for this recipient.
+                        recipientKeys[r.user_address] = JSON.stringify(await encryptPQC(fileKey, pubKey));
+                    } catch (encErr) {
+                        console.error(`Failed to encrypt for recipient ${r.user_address}`, encErr);
+                        // Continue? Or fail? If we fail, workflow can't complete.
+                        // Better to warn but continue, or fail to ensure integrity.
+                        // Failsafe: Let's fail hard so we know something is wrong.
+                        throw new Error(`Failed to encrypt for recipient ${r.user?.username || r.user_address}: ${encErr.message}`);
+                    }
+                }
+            }
+
+            if (setUploadProgress) {
+                setUploadProgress(85);
+                setStatusMessage && setStatusMessage("Submitting...");
+            }
+
+            const signRes = await fetch(`${API_ENDPOINTS.SECRETS.LIST}/../multisig/workflow/${workflow.id}/sign`, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': `Bearer ${token}`
+                },
+                body: JSON.stringify({
+                    signature,
+                    recipient_keys: recipientKeys
+                })
+            });
+
+            if (signRes.ok) {
+                const updatedWf = await signRes.json();
+                onUpdate(updatedWf);
+                if (setUploadProgress) {
+                    setUploadProgress(100);
+                    setTimeout(() => {
+                        setUploadProgress(0);
+                        setStatusMessage && setStatusMessage('');
+                    }, 500);
+                }
+                // Don't close, let them see success
+            } else {
+                const err = await signRes.json();
+                throw new Error(err.detail || "Failed to submit signature");
+            }
+
+        } catch (e) {
+            console.error("Signing failed", e);
+            setError(e.message);
+            if (setUploadProgress) {
+                setUploadProgress(0);
+                setStatusMessage && setStatusMessage('');
+            }
+        } finally {
+            setIsSigning(false);
+        }
+    };
+
+    const handleReject = async () => {
+        if (!window.confirm("Reject this workflow? This blocks it permanently — the secret will not be released.")) return;
+        setError('');
+        setIsRejecting(true);
+        try {
+            const res = await fetch(`${API_ENDPOINTS.SECRETS.LIST}/../multisig/workflow/${workflow.id}/reject`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+                body: JSON.stringify({})
+            });
+            if (res.ok) {
+                onUpdate(await res.json());
+            } else {
+                const err = await res.json();
+                throw new Error(err.detail || "Failed to reject workflow");
+            }
+        } catch (e) {
+            console.error("Reject failed", e);
+            setError(e.message);
+        } finally {
+            setIsRejecting(false);
+        }
+    };
+
+    const handleDelete = async () => {
+        if (!window.confirm("Delete this workflow and its secret? This cannot be undone.")) return;
+        setError('');
+        setIsDeleting(true);
+        try {
+            const res = await fetch(`${API_ENDPOINTS.SECRETS.LIST}/../multisig/workflow/${workflow.id}`, {
+                method: 'DELETE',
+                headers: { 'Authorization': `Bearer ${token}` }
+            });
+            if (res.status === 204) {
+                onDelete ? onDelete(workflow.id) : onClose();
+            } else {
+                const err = await res.json();
+                throw new Error(err.detail || "Failed to delete workflow");
+            }
+        } catch (e) {
+            console.error("Delete failed", e);
+            setError(e.message);
+        } finally {
+            setIsDeleting(false);
+        }
+    };
+
+    const renderContent = () => {
+        if (!decryptedContent) return null;
+
+        const isFile = decryptedContent?.type === 'file' && decryptedContent?.content;
+        const isMultiFile = decryptedContent?.type === 'files' && decryptedContent?.items;
+
+        return (
+            <div className="mt-4 p-4 bg-slate-50 dark:bg-slate-900 rounded-lg border border-slate-200 dark:border-slate-700">
+                <div className="flex justify-between items-start mb-2">
+                    <h5 className="text-sm font-medium text-slate-500">Decrypted Content</h5>
+                    <div className="flex items-center gap-2">
+                        {(creatorSignature || workflow.signers.some(s => s.has_signed && s.signature)) && (
+                            <button
+                                onClick={handleDownloadProof}
+                                className="flex items-center gap-1 text-xs px-3 py-1 bg-purple-600 text-white rounded hover:bg-purple-500 transition-colors"
+                                title="Download cryptographic proof (all signatures + metadata)"
+                            >
+                                <ShieldCheck className="w-3 h-3" /> Download Proof
+                            </button>
+                        )}
+                    </div>
+                    {verificationStatus === 'failed' && (
+                        <div className="flex items-center gap-1 text-red-600 text-xs px-2 py-1 bg-red-100 rounded-full">
+                            <AlertTriangle className="w-3 h-3" /> Signature Invalid
+                        </div>
+                    )}
+                </div>
+
+                {isMultiFile ? (
+                    <div className="space-y-2">
+                        <div className="text-xs text-slate-500 mb-1">{decryptedContent.items.length} files</div>
+                        {decryptedContent.items.map((item, idx) => (
+                            <div key={idx} className="flex items-center gap-3 p-3 bg-white dark:bg-slate-850 rounded border border-slate-200 dark:border-slate-700">
+                                <FileText className="w-6 h-6 text-indigo-500" />
+                                <div className="flex-1 overflow-hidden">
+                                    <div className="font-medium truncate">{item.name}</div>
+                                    <div className="text-xs text-slate-500">{item.mime}</div>
+                                </div>
+                                <a
+                                    href={item.content}
+                                    download={item.name}
+                                    className="p-2 text-indigo-600 hover:bg-indigo-50 rounded"
+                                    title="Download"
+                                >
+                                    <Download className="w-5 h-5" />
+                                </a>
+                            </div>
+                        ))}
+                    </div>
+                ) : isFile ? (
+                    <div className="flex items-center gap-3 p-3 bg-white dark:bg-slate-850 rounded border border-slate-200 dark:border-slate-700">
+                        <FileText className="w-8 h-8 text-indigo-500" />
+                        <div className="flex-1 overflow-hidden">
+                            <div className="font-medium truncate">{decryptedContent.name}</div>
+                            <div className="text-xs text-slate-500">{decryptedContent.mime}</div>
+                        </div>
+                        <a
+                            href={decryptedContent.content}
+                            download={decryptedContent.name}
+                            className="p-2 text-indigo-600 hover:bg-indigo-50 rounded"
+                            title="Download"
+                        >
+                            <Download className="w-5 h-5" />
+                        </a>
+                    </div>
+                ) : (
+                    <div className="whitespace-pre-wrap font-mono text-sm">
+                        {typeof decryptedContent === 'string' ? decryptedContent : JSON.stringify(decryptedContent, null, 2)}
+                    </div>
+                )}
+            </div>
+        );
+    };
+
+    return (
+        <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+            <div className="bg-white dark:bg-slate-850 border border-slate-200 dark:border-slate-700 rounded-xl p-6 w-full max-w-lg max-h-[90vh] overflow-y-auto">
+                <div className="flex justify-between items-center mb-6">
+                    <div>
+                        <h3 className="text-xl font-semibold text-slate-900 dark:text-white">Workflow: {workflow.name}</h3>
+                        <div className="text-xs text-slate-500">ID: {workflow.id} • Created {new Date(workflow.created_at).toLocaleDateString()}</div>
+                    </div>
+                    <button onClick={onClose}><X className="w-5 h-5 text-slate-400" /></button>
+                </div>
+
+                <div className="space-y-6">
+                    {/* Status Card */}
+                    <div className={`p-4 rounded-lg border ${workflow.status === 'completed' ? 'bg-emerald-50 dark:bg-emerald-900/20 border-emerald-200 dark:border-emerald-800' : isRejected ? 'bg-red-50 dark:bg-red-900/20 border-red-200 dark:border-red-800' : 'bg-amber-50 dark:bg-amber-900/20 border-amber-200 dark:border-amber-800'}`}>
+                        <div className="flex justify-between items-center mb-2">
+                            <span className={`font-semibold ${workflow.status === 'completed' ? 'text-emerald-700 dark:text-emerald-400' : isRejected ? 'text-red-700 dark:text-red-400' : 'text-amber-700 dark:text-amber-400'}`}>
+                                {workflow.status.toUpperCase()}
+                            </span>
+                            <span className="text-sm text-slate-600 dark:text-slate-400">
+                                {completedSignatures}/{requiredSignatures} required
+                                {requiredSignatures !== totalSigners && ` (${totalSigners} signers)`}
+                            </span>
+                        </div>
+                        {isRejected ? (
+                            <div className="text-sm text-red-700 dark:text-red-400">
+                                Rejected{workflow.rejected_by ? ` by ${workflow.rejected_by.slice(0, 10)}…` : ''}. The secret was not released.
+                            </div>
+                        ) : (
+                            <div className="h-2 bg-white/50 rounded-full overflow-hidden">
+                                <div className={`h-full transition-all duration-500 ${workflow.status === 'completed' ? 'bg-emerald-500' : 'bg-amber-500'}`} style={{ width: `${progress}%` }} />
+                            </div>
+                        )}
+                    </div>
+
+                    {/* Signers List */}
+                    <div>
+                        <h4 className="text-sm font-medium text-slate-500 mb-3 uppercase tracking-wider">Signers</h4>
+                        <div className="space-y-2">
+                            {(() => {
+                                // Prepare Signers List with Virtual Creator
+                                let displayedSigners = [...workflow.signers];
+                                // Always show Creator if not in list (Implicitly signed)
+                                if (!displayedSigners.find(s => s.user_address === workflow.owner_address)) {
+                                    displayedSigners.unshift({
+                                        user_address: workflow.owner_address,
+                                        user: workflow.owner,
+                                        has_signed: true,
+                                        signature: creatorSignature, // Will be null until decrypted
+                                        signed_at: workflow.created_at,
+                                        isCreator: true
+                                    });
+                                }
+                                return displayedSigners.map(s => (
+                                    <div key={s.user_address} className="flex items-center justify-between p-3 bg-slate-50 dark:bg-slate-750/50 rounded-lg border border-slate-100 dark:border-slate-700">
+                                        <div className="flex items-center gap-3">
+                                            <div className={`w-2 h-2 rounded-full ${s.has_signed ? 'bg-emerald-500' : 'bg-slate-300'}`} />
+                                            <div>
+                                                <div className="font-medium text-slate-900 dark:text-slate-200 flex items-center gap-2">
+                                                    {s.user?.username || s.user_address.substring(0, 12)}
+                                                    {s.user_address === user.address && <span className="text-xs bg-slate-200 dark:bg-slate-700 px-1.5 py-0.5 rounded text-slate-500">You</span>}
+                                                </div>
+                                                {s.has_signed && (
+                                                    <div className="text-xs text-slate-500 flex items-center gap-2 mt-0.5">
+                                                        <span className="flex items-center gap-1">
+                                                            <Check className="w-3 h-3" /> Signed
+                                                        </span>
+                                                        <span className="text-slate-400">•</span>
+                                                        <span>{new Date(s.signed_at).toLocaleDateString()}</span>
+                                                    </div>
+                                                )}
+                                            </div>
+                                        </div>
+                                        {/* Verification Badge */}
+                                        {s.has_signed && decryptedContent && (
+                                            <SignerVerificationBadge
+                                                signer={s}
+                                                verifyTarget={s.isCreator
+                                                    ? { kind: 'content', content: creatorSignedContent }
+                                                    : {
+                                                        kind: 'approval',
+                                                        workflowId: workflow.id,
+                                                        secretId: workflow.secret_id,
+                                                        encryptedData: workflow.secret?.encrypted_data,
+                                                    }}
+                                            />
+                                        )}
+                                    </div>
+                                ));
+                            })()}
+                        </div>
+                    </div>
+
+                    {/* Recipients List */}
+                    < div >
+                        <h4 className="text-sm font-medium text-slate-500 mb-3 uppercase tracking-wider">Recipients</h4>
+                        <div className="space-y-2">
+                            {workflow.recipients.map(r => (
+                                <div key={r.user_address} className="flex items-center justify-between p-2 rounded hover:bg-slate-50 dark:hover:bg-slate-700">
+                                    <div className="flex items-center gap-3">
+                                        <User className="w-4 h-4 text-slate-400" />
+                                        <div className="text-sm text-slate-900 dark:text-slate-200">
+                                            {r.user?.username || r.user_address.substring(0, 8)}
+                                        </div>
+                                    </div>
+                                    {workflow.status === 'completed' ? (
+                                        <span className="text-xs px-2 py-1 bg-emerald-100 text-emerald-700 rounded-full">Access Granted</span>
+                                    ) : (
+                                        <span className="text-xs px-2 py-1 bg-slate-100 text-slate-500 rounded-full">Pending</span>
+                                    )}
+                                </div>
+                            ))}
+                        </div>
+                    </div >
+
+                    {/* View/Decrypt Section */}
+                    {
+                        canView && !decryptedContent && (
+                            <button
+                                onClick={fetchAndDecrypt}
+                                className="w-full border border-slate-300 dark:border-slate-600 hover:bg-slate-50 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-300 py-2 rounded-lg flex items-center justify-center gap-2"
+                            >
+                                <Eye className="w-4 h-4" /> View Secret Content
+                            </button>
+                        )
+                    }
+
+                    {decryptedContent && (
+                        <div className="space-y-2">
+                            <div className="flex justify-end">
+                                <button
+                                    onClick={() => { setDecryptedContent(null); setRawDecryptedContent(null); }}
+                                    className="text-xs text-slate-500 hover:text-amber-500 transition-colors flex items-center gap-1"
+                                    title="Hide decrypted content"
+                                >
+                                    <EyeOff className="w-3.5 h-3.5" /> Hide content
+                                </button>
+                            </div>
+                            {renderContent()}
+                        </div>
+                    )}
+
+                    {/* Actions */}
+                    {
+                        error && (
+                            <div className="p-3 bg-red-50 text-red-600 rounded-lg text-sm flex items-center gap-2">
+                                <AlertTriangle className="w-4 h-4" /> {error}
+                            </div>
+                        )
+                    }
+
+                    {
+                        isSigner && !hasSigned && workflow.status === 'pending' && (
+                            <div className="flex gap-3">
+                                <button
+                                    onClick={handleSign}
+                                    disabled={isSigning || isRejecting}
+                                    className="flex-1 bg-indigo-600 hover:bg-indigo-500 text-white py-3 rounded-lg font-medium flex items-center justify-center gap-2 disabled:opacity-50"
+                                >
+                                    {isSigning ? 'Signing...' : (
+                                        <>
+                                            <Shield className="w-4 h-4" /> Sign Workflow
+                                        </>
+                                    )}
+                                </button>
+                                <button
+                                    onClick={handleReject}
+                                    disabled={isSigning || isRejecting}
+                                    className="px-4 border border-red-300 dark:border-red-800 text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-900/20 py-3 rounded-lg font-medium flex items-center justify-center gap-2 disabled:opacity-50"
+                                >
+                                    {isRejecting ? 'Rejecting...' : 'Reject'}
+                                </button>
+                            </div>
+                        )
+                    }
+
+                    {
+                        isOwner && isRejected && (
+                            <button
+                                onClick={handleDelete}
+                                disabled={isDeleting}
+                                className="w-full bg-red-600 hover:bg-red-500 text-white py-3 rounded-lg font-medium flex items-center justify-center gap-2 disabled:opacity-50"
+                            >
+                                {isDeleting ? 'Deleting...' : 'Delete Workflow'}
+                            </button>
+                        )
+                    }
+
+                    {
+                        (!isSigner || hasSigned || workflow.status !== 'pending') && (
+                            <button
+                                onClick={onClose}
+                                className="w-full border border-slate-300 dark:border-slate-600 hover:bg-slate-50 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-300 py-3 rounded-lg font-medium transition-colors"
+                            >
+                                Close
+                            </button>
+                        )
+                    }
+                </div >
+            </div >
+        </div >
+    );
+}

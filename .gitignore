@@ -1,0 +1,44 @@
+# Backend
+backend/__pycache__/
+backend/*.pyc
+backend/.pytest_cache/
+backend/sql_app.db
+backend/safelog.db
+backend/.venv/
+backend/venv/
+
+# Node (root-level PM2 install and any nested node_modules)
+node_modules/
+# Anchor to repo root only — the root package.json/lock is a throwaway PM2
+# install. Per-project manifests (frontend/, trustkeys/, packages/*) MUST be
+# tracked, so do NOT ignore nested package.json/package-lock.json.
+/package.json
+/package-lock.json
+
+# Frontend
+frontend/dist/
+frontend/.vite/
+
+# IDE
+.vscode/
+.idea/
+.claude/launch.json
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Env files
+.env
+.env.local
+
+# Local audit / scratch docs (not tracked)
+.tempdoc/
+TRANSVERSAL_AUDIT_2026-06-12.md
+
+# Local audit venv (liboqs) — never commit
+backend/.venv-audit/
+.venv-audit/

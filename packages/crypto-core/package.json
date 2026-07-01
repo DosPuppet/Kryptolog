@@ -1,0 +1,24 @@
+{
+  "name": "@kryptolog/crypto-core",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Single source of truth for Kryptolog client-side PQC crypto (ML-KEM-768 + ML-DSA-44), shared by the SPA and the TrustKeys extension.",
+  "main": "src/index.js",
+  "module": "src/index.js",
+  "exports": {
+    ".": "./src/index.js"
+  },
+  "files": [
+    "src"
+  ],
+  "scripts": {
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@noble/post-quantum": "^0.6.1"
+  },
+  "devDependencies": {
+    "vitest": "^4.0.18"
+  }
+}
