@@ -12,19 +12,20 @@ Crypto runs on audited, standards-based libraries: [`@noble/post-quantum`](https
 kryptolog/
 ├── backend/            Python FastAPI API (in-process ML-DSA via liboqs)
 ├── frontend/           React 19 SPA (Vite + TailwindCSS 4)
-├── trustkeys/          Chrome/Brave extension (MV3, React 18)
-└── docker-compose.yml  Local PostgreSQL 16 for dev + tests
+├── trustkeys/          Chrome/Brave extension (MV3, React 18) — PQC key custodian
+├── packages/
+│   └── crypto-core/    Shared crypto package — single source of truth for every
+│                       wire/storage primitive (consumed by SPA + extension)
+└── docker-compose.yml  Local PostgreSQL 16 + Redis 7 for dev + tests
 ```
 
-The application runs **2 processes locally** — a FastAPI REST API and a Vite dev server for the frontend — plus a **PostgreSQL 16** database (one `docker compose up -d postgres` away, or any instance you point `DATABASE_URL` at). ML-DSA login-challenge verification happens in-process inside the backend (session JWTs are HS256) — there is no separate crypto service.
-
 ```
-┌─────────────────────────────┐
-│         Frontend            │
-│   React 19 + Vite + Router  │
-│   ML-KEM-768 + ML-DSA-44    │
-│   localhost:5173             │
-└──────────┬──────────────────┘
+┌─────────────────────────────┐      ┌─────────────────────────────┐
+│         Frontend            │      │     TrustKeys (MV3 ext)     │
+│   React 19 + Vite + Router  │◄────►│   holds the private keys    │
+│   localhost:5173            │ win. │   window.trustkeys API      │
+└──────────┬──────────────────┘ tk   └─────────────────────────────┘
+           │        both consume @kryptolog/crypto-core
            │ REST + WebSocket
 ┌──────────▼──────────────────┐
 │       Backend API           │
@@ -32,13 +33,16 @@ The application runs **2 processes locally** — a FastAPI REST API and a Vite d
 │   PyJWT HS256 tokens        │
 │   liboqs ML-DSA-44 verify   │
 │   localhost:8000            │
-└──────────┬──────────────────┘
-           │
-    ┌──────▼──────┐
-    │ PostgreSQL  │
-    │  kryptolog  │
-    └─────────────┘
+└─────┬──────────────────┬────┘
+      │                  │ (optional, enables multi-worker)
+┌─────▼─────────┐   ┌────▼──────────────────────────┐
+│ PostgreSQL 16 │   │ Redis 7                       │
+│ kryptolog +   │   │ shared rate limits +          │
+│ kryptolog_test│   │ WebSocket fan-out & presence  │
+└───────────────┘   └───────────────────────────────┘
 ```
+
+Two app processes run locally — the FastAPI API and the Vite dev server — on top of a **PostgreSQL 16** database. **Redis is optional but recommended**: without it the backend must stay a **single process** (rate limits, the WebSocket registry, and presence live in process memory); with `REDIS_URL` set, those move to Redis (pub/sub fan-out for WebSocket delivery) and multiple workers/instances are safe. ML-DSA login-challenge verification happens in-process inside the backend (session JWTs are HS256) — there is no separate crypto service.
 
 ---
 
@@ -56,6 +60,7 @@ The application runs **2 processes locally** — a FastAPI REST API and a Vite d
 | **Multisig Workflows** | Configurable **N-of-M approval quorum** — an approval workflow, not a cryptographic threshold: every listed signer already holds the secret, but it is withheld from the **destination recipient** until any N of the M signers approve (N = M gives classic N-of-N). The completing approval re-wraps the key for the recipient; signing closes once the quorum is met; any signer can **reject** to block the workflow, after which the owner can **delete** it. |
 | **E2EE Messenger** | Post-quantum end-to-end encryption: per-message ML-KEM-768 → AES-256-GCM, **per-message ML-DSA-44 signatures verified client-side** (authorship is proven, not asserted by the server), zero-knowledge relay (server stores/forwards only ciphertext). PQC auth only. |
 | **Group Channels** | Multi-user encrypted group chat with owner/admin/member roles; **session key rotates on membership change** (removed members can't read future messages). |
+| **Peer Key Verification** | Contacts' encryption keys carry a **self-signed attestation** (signed by their identity key) verified client-side before anything is encrypted to them — a lying key directory fails verification. Safety-number fingerprints cover the out-of-band identity check, and a TOFU store flags key changes. |
 | **Push Notifications** | Web Push API (VAPID) for real-time alerts |
 | **Hardened Local Vault** | AES-256-GCM + PBKDF2-SHA-512 (600k iterations) for browser-stored keys |
 | **Device Key Transfer** | Move keys to another device via a one-time QR / transfer code (encrypted relay, single-use, ~10 min TTL) or a passphrase-encrypted `.kvault` backup file. The decryption secret never reaches the server. |
@@ -64,11 +69,18 @@ The application runs **2 processes locally** — a FastAPI REST API and a Vite d
 ### A note on the messenger's security properties
 
 The messenger uses **hybrid encryption** (an ML-KEM-768 encapsulation per session, used to
-wrap a fresh AES-256-GCM session key), a **zero-knowledge server** that only ever sees
-ciphertext, and — as of the 2026-06 audit follow-ups — **per-message ML-DSA-44 signatures**:
-every DM and group message is signed by the sender and **verified client-side** against the
-sender's public key, so authorship is *proven*, not merely asserted by the server (a malicious
-server can't forge or re-attribute a message). The UI flags any message whose signature fails.
+wrap a fresh AES-256-GCM session key), a **content-blind server** that only ever sees
+ciphertext, and **per-message ML-DSA-44 signatures**: every DM and group message is signed by
+the sender and **verified client-side** against the sender's public key, so authorship is
+*proven*, not merely asserted by the server. The UI flags any message whose signature fails.
+
+**Key-directory trust**: the server is the directory for contacts' encryption keys, so it is
+the natural place for a key-substitution attack. Three client-side defenses stack against it:
+(1) every identity **self-signs its own ML-KEM key** (attestation) and clients verify that
+binding before wrapping anything to the key — a substituted key fails cryptographically;
+(2) **safety numbers** let two users compare fingerprints out of band to confirm the identity
+itself; (3) a local **TOFU store** flags any key change since last contact. First contact with
+an unattested legacy account still trusts the directory.
 
 **Group forward secrecy on membership change**: the group session key is rotated when a member
 is added or removed, so a removed member cannot read future messages and an added member cannot
@@ -76,82 +88,77 @@ read prior history.
 
 It is still **not** a full ratcheting protocol: within a session, messages are encrypted under a
 long-term-key-derived session key, so it does **not** yet provide per-message **forward secrecy**
-or **post-compromise security** against compromise of a long-term private key. 
-## Prerequisites
+or **post-compromise security** against compromise of a long-term private key.
 
-| Tool | Version | Notes |
-|------|---------|-------|
-| **Python** | 3.10+ | Backend API |
-| **PostgreSQL** | 16 | Backend database. Easiest: `docker compose up -d postgres` at the repo root; or point `DATABASE_URL` at an existing instance. |
-| **CMake + C compiler** | Latest | Required to build `liboqs` (the backend's PQC library). `pip install cmake` works; any system `gcc`/`clang` is fine. |
-| **Node.js** | 22.x | Frontend + extension build |
-| **npm** | 10.x | Comes with Node.js |
-| **Chrome / Brave** | Latest | Required for TrustKeys extension |
+**Metadata**: "zero-knowledge" means content-blind, not metadata-blind. The server sees who
+talks to whom and when, group membership, and unread state — and currently also **plaintext
+entry titles** (secret/document/group names). Treat titles as non-sensitive for now (encrypting
+them is on the roadmap).
 
 ---
 
 ## Installation
 
+### Prerequisites
+
+| Tool | Version | Notes |
+|------|---------|-------|
+| **Python** | 3.10+ | Backend API |
+| **Docker** | Any recent | Easiest way to run PostgreSQL + Redis locally (`docker compose`). Not needed if you point the backend at external instances. |
+| **CMake + C compiler** | Latest | Required to build `liboqs` (the backend's PQC library). `pip install cmake` works; any system `gcc`/`clang` is fine. |
+| **Node.js** | 22.x | Frontend + extension build |
+| **npm** | 10.x | Comes with Node.js |
+| **Chrome / Brave** | Latest | Required for TrustKeys extension |
+
 ### 1. Clone the repository
 
 ```bash
-git clone https://github.com/yourusername/kryptolog.git
-cd kryptolog
+git clone https://github.com/DosPuppet/Kryptolog.git
+cd Kryptolog
 ```
 
-### 2. Backend setup
-
-#### Database (PostgreSQL)
+### 2. Infrastructure (PostgreSQL + Redis)
 
 ```bash
-# From the repo root — starts Postgres 16 on localhost:5432 and creates the
-# kryptolog + kryptolog_test databases (matches the default DATABASE_URL).
-docker compose up -d postgres
+# Starts Postgres 16 on :5432 (creates the kryptolog + kryptolog_test databases)
+# and Redis 7 on :6379 — matching the defaults in backend/.env.example.
+docker compose up -d postgres redis
 ```
 
-To use an external Postgres instead, set `DATABASE_URL` in `backend/.env`
-(see `.env.example`). Migrations run automatically at backend startup.
+Using external instances instead? Set `DATABASE_URL` (and `REDIS_URL`) in
+`backend/.env` — see [Configuration](#configuration). Schema migrations run
+automatically at backend startup; Redis is optional (single-process mode
+without it).
+
+### 3. Backend
 
 ```bash
 cd backend
-cp .env.example .env
-```
+cp .env.example .env       # defaults match the compose services
 
-#### Python dependencies
-
-```bash
-# Option A: Using the project's virtualenv (recommended)
+# Python dependencies — use the project venv (recommended)
 python3 -m venv ../.venv
 source ../.venv/bin/activate
-pip install -r requirements.txt   # builds liboqs C library — needs cmake + a compiler
-
-# Option B: Global install
-pip3 install -r requirements.txt
+pip install -r requirements.txt   # builds liboqs (C) — needs cmake + a compiler
 ```
 
 > `liboqs-python` compiles the `liboqs` C library on first install/import. If it
 > fails, ensure `cmake` is on your PATH (`pip install cmake`) and a C compiler is
 > available.
 
-#### Generate the JWT signing secret
-
-The backend signs access tokens with HS256 (PyJWT) using a symmetric secret —
-the JWT is server-issued and server-verified only, so no keypair is needed.
-Generate one and paste the line into `backend/.env`:
+Generate the JWT signing secret (HS256 — server-issued, server-verified, no
+keypair needed) and paste the printed line into `backend/.env`:
 
 ```bash
 python generate_server_keys.py
 # -> KRYPTOLOG_JWT_SECRET=...   (treat like any production secret)
 ```
 
-If unset the backend falls back to an **ephemeral** secret — fine for a quick
-local run, but every JWT becomes invalid on restart. (liboqs/ML-DSA-44 is still
-required server-side to verify client login challenges, regardless.)
+If unset, the backend falls back to an **ephemeral** secret — fine for a quick
+local run, but every JWT becomes invalid on restart. Required in production.
 
-#### (Optional) Restrict signups with invite codes
-
-By default anyone can register a new identity. To gate it, set
-`KRYPTOLOG_REQUIRE_INVITE=true` in `backend/.env` and seed some codes:
+**Optional — invite-gated signups:** set `KRYPTOLOG_REQUIRE_INVITE=true` in
+`backend/.env` and seed codes:
 
 ```bash
 python generate_invites.py              # 1 single-use code
@@ -163,34 +170,15 @@ New users paste a code on the **Create / Import vault** screen. The gate only
 applies to account *creation* — existing users keep logging in normally, and an
 invalid/expired code returns a generic error (no enumeration).
 
-#### Database initialization
-
-With Postgres running (step above), the schema is created automatically on
-first backend startup via Alembic migrations. No manual steps needed.
-
-If you prefer to initialize it explicitly:
-
-```bash
-# Apply all migrations (targets DATABASE_URL, or the local compose Postgres by default)
-source ../.venv/bin/activate
-alembic upgrade head
-```
-
-### 3. Frontend setup
+### 4. Frontend
 
 ```bash
 cd ../frontend
-
-# Configure environment
-cp .env.example .env
-# Default values work for local development:
-#   VITE_API_BASE_URL=http://localhost:8000
-
-# Install dependencies
+cp .env.example .env   # defaults work for local dev (VITE_API_BASE_URL=http://localhost:8000)
 npm install
 ```
 
-### 4. TrustKeys extension (optional — recommended for secure key custody)
+### 5. TrustKeys extension (optional — recommended for secure key custody)
 
 > See [trustkeys/README.md](trustkeys/README.md) for full extension documentation (architecture, Web API reference, key management).
 
@@ -209,57 +197,33 @@ Then load in Chrome/Brave:
 
 ## Running the Application
 
-The recommended way to run the entire Kryptolog ecosystem (FastAPI Backend and Vite Frontend) is using the unified PM2 script.
-
-### Unified Startup (Recommended)
-
-1. Ensure you have your `.env` configured in the `backend/` directory.
-2. Run the unified startup script from the project root:
+### Unified startup (recommended)
 
 ```bash
 ./start_all.sh
 ```
 
-This script will automatically:
-- Install PM2 globally if missing.
-- Start the local Postgres container (`docker compose up -d postgres`) and wait
-  for it to be healthy — skipped when `DATABASE_URL` points at an external DB
-  or Docker isn't installed.
-- Install any missing `npm` dependencies for the frontend.
-- Build the frontend for production preview (`npm run build`).
-- Launch both services in the background using PM2.
+The script starts the compose Postgres + Redis (skipped for external
+`DATABASE_URL` / missing Docker), installs PM2 and frontend dependencies if
+needed, builds the frontend for preview, and launches both services under PM2.
 
-**Managing the Ecosystem:**
-- **View status:** `pm2 status`
-- **View all logs:** `pm2 logs`
-- **Monitor resources:** `pm2 monit`
-- **Stop everything:** `pm2 stop all`
+Manage with: `pm2 status` · `pm2 logs` · `pm2 monit` · `pm2 stop all`.
+The app is served at `http://localhost:5173/`.
 
-The frontend will be available at: `http://localhost:5173/`
+### Manual startup (development)
 
-### Manual Startup (Development)
-
-If you prefer to run the services in isolated terminals for active development:
-
-**Terminal 0 — Database (once)**
 ```bash
-docker compose up -d postgres
+# Terminal 0 — infrastructure (once)
+docker compose up -d postgres redis
+
+# Terminal 1 — backend (uvicorn with hot-reload)
+cd backend && ./run_dev.sh
+
+# Terminal 2 — frontend (Vite dev server)
+cd frontend && npm run dev
 ```
 
-**Terminal 1 — Backend**
-```bash
-cd backend
-./run_dev.sh
-```
-*(Runs `uvicorn` with hot-reload. ML-DSA login-challenge verification is in-process — no sidecar to start.)*
-
-**Terminal 2 — Frontend**
-```bash
-cd frontend
-npm run dev
-```
-
-### URL Routes
+### URL routes
 
 | Route | Description |
 |-------|-------------|
@@ -271,92 +235,19 @@ npm run dev
 
 ---
 
-## Running Tests
+## Configuration
 
-### Backend (pytest)
+Two `.env` files, one per service. Copy each `.env.example` to `.env` before
+starting; the defaults are tuned for local development with the compose
+services.
 
-The suite runs against a real PostgreSQL database — the `kryptolog_test` DB
-created by `docker compose up -d postgres` (override with `TEST_DATABASE_URL`).
-It creates and drops all tables around every test, so never point it at a
-database you care about.
-
-```bash
-cd backend
-source ../.venv/bin/activate
-pip install -r requirements-dev.txt   # test-only deps (pytest); runtime deps stay in requirements.txt
-python3 -m pytest tests/ -v
-```
-
-Currently: **162 tests** covering auth, secrets, file chunks, messenger, multisig (including N-of-M quorum, reject, and delete), groups, users, notifications, rate-limit storage, and the PQC gate (`tests/test_pqc.py`).
-
-The PQC gate (`backend/tests/test_pqc.py`) proves ML-DSA-44 interop between `liboqs`
-(server) and `@noble/post-quantum` (clients) using the shared fixture
-`tests/fixtures/pqc_interop.json`, plus FIPS size conformance and the (classical
-HS256) JWT issue/verify/tamper/expiry paths.
-
-### Frontend (vitest)
-
-```bash
-cd frontend
-npx vitest run src/test/pqc.test.js   # the PQC interop gate (9 tests)
-```
-
-`src/test/pqc.test.js` covers ML-KEM-768 wrap/unwrap round-trips, ML-DSA-44
-sign/verify + tamper rejection, the liboqs→noble interop fixture, and a
-deterministic seeded-keygen byte-pin.
-
----
-
-## Database Migrations (Alembic)
-
-Schema changes are managed with Alembic. The backend automatically runs `alembic upgrade head` on startup.
-
-### Creating a new migration
-
-After modifying `models.py`:
-
-```bash
-cd backend
-source ../.venv/bin/activate
-
-# Auto-generate migration from model diff
-alembic revision --autogenerate -m "describe your change"
-
-# Review the generated file in alembic/versions/
-# Then apply it
-alembic upgrade head
-```
-
-### Other useful commands
-
-```bash
-# Check current migration state
-alembic current
-
-# Show migration history
-alembic history
-
-# Downgrade one step
-alembic downgrade -1
-```
-
----
-
-## Environment Variables
-
-The app reads two `.env` files, one per service. Copy each `.env.example` to
-`.env` and fill it in **before** starting the app:
-
-- **`backend/.env`** — server config: the database URL, deployment mode, the
-  HS256 JWT signing secret (mandatory in production), CORS origins,
-  trusted-proxy IPs, and the VAPID *private* key for sending Web Push. Holds
-  the app's secrets — never commit it.
-- **`frontend/.env`** — build-time config baked into the SPA by Vite: the backend
-  API URL and the VAPID *public* key. Only `VITE_`-prefixed values are exposed to
-  the browser; put nothing secret here.
-
-Defaults are tuned for local development, so for a localhost run you can copy both
-examples unchanged (push notifications stay off until VAPID keys are set).
+- **`backend/.env`** — server config: database + Redis URLs, deployment mode,
+  the HS256 JWT signing secret (mandatory in production), CORS origins,
+  trusted-proxy IPs, and the VAPID *private* key for Web Push. Holds the app's
+  secrets — never commit it.
+- **`frontend/.env`** — build-time config baked into the SPA by Vite: the
+  backend API URL and the VAPID *public* key. Only `VITE_`-prefixed values are
+  exposed to the browser; put nothing secret here.
 
 ### Backend (`backend/.env`)
 
@@ -364,13 +255,13 @@ examples unchanged (push notifications stay off until VAPID keys are set).
 |----------|----------|---------|-------------|
 | `DATABASE_URL` | No | local compose Postgres | SQLAlchemy database URL. Default `postgresql+psycopg://kryptolog:kryptolog@localhost:5432/kryptolog` matches `docker compose up -d postgres`. Point at any Postgres instance; `sqlite:///./sql_app.db` still works if you must. |
 | `TEST_DATABASE_URL` | No | local compose test DB | Database the pytest suite targets (default `...localhost:5432/kryptolog_test`, auto-created by the compose init script). The suite creates/drops all tables around every test — never point it at real data. |
+| `REDIS_URL` | No | – | Redis connection URL (`redis://localhost:6379/0` with the compose service). When set, **two** state stores move to Redis: rate limits (durable, shared) and the WebSocket fan-out + presence (pub/sub) — which is what makes multiple workers/instances safe. Unset ⇒ in-memory, single process only. |
+| `RATELIMIT_STORAGE_URI` | No | `memory://` | Explicit rate-limit storage URI (overrides `REDIS_URL` for the limiter only). |
 | `KRYPTOLOG_ENV` | No | `development` | Set to `production` to fail closed: the backend refuses to start unless the JWT secret below is configured. |
-| `KRYPTOLOG_JWT_SECRET` | Prod: **yes** | – | HS256 JWT signing secret (hex). From `generate_server_keys.py`. Forges JWTs if leaked — treat as a production secret. Required when `KRYPTOLOG_ENV=production`; unset in dev ⇒ ephemeral secret, JWTs reset on restart. |
+| `KRYPTOLOG_JWT_SECRET` | Prod: **yes** | – | HS256 JWT signing secret (hex). From `generate_server_keys.py`. Forges JWTs if leaked — treat as a production secret. Unset in dev ⇒ ephemeral secret, JWTs reset on restart. |
 | `KRYPTOLOG_REQUIRE_INVITE` | No | `false` | Access filter. When `true`, registering a **new** identity at first login requires a valid invite code (existing users unaffected). Seed codes with `python generate_invites.py`. |
 | `ALLOWED_ORIGINS` | No | `http://localhost:5173` | Comma-separated CORS origins |
 | `TRUSTED_PROXY_IPS` | No | `127.0.0.1` | Comma-separated trusted reverse-proxy IPs. Rate limiting resolves the real client IP from `X-Real-IP`/`X-Forwarded-For` only when the direct peer is listed here (prevents header spoofing). |
-| `REDIS_URL` | No | – | Redis connection URL. When set, **two** state stores move to Redis: rate limits (durable across restarts, shared across processes) and the WebSocket fan-out + presence (pub/sub, so events reach a user's sockets on any worker). This is what makes multiple workers/instances safe — see the deployment note below. `docker compose up -d postgres redis` provides one locally. |
-| `RATELIMIT_STORAGE_URI` | No | `memory://` | Explicit rate-limit storage URI (overrides `REDIS_URL`). Unset ⇒ in-memory: per-process and reset on restart. See the single-process note below. |
 | `VAPID_PUBLIC_KEY` | No | – | Web Push VAPID public key (required for push notifications) |
 | `VAPID_PRIVATE_KEY` | No | – | Web Push VAPID private key |
 | `VAPID_SUBJECT` | No | `mailto:admin@kryptolog.io` | Web Push VAPID subject (contact email/URL) |
@@ -395,6 +286,68 @@ examples unchanged (push notifications stay off until VAPID keys are set).
 
 ---
 
+## Running Tests
+
+### Backend (pytest)
+
+The suite runs against a real PostgreSQL database — the `kryptolog_test` DB
+created by the compose init script (override with `TEST_DATABASE_URL`). It
+creates and drops all tables around every test, so never point it at a
+database you care about. Redis is **not** required (WebSocket fan-out tests use
+fakeredis locally; CI also runs them against a real Redis via `TEST_REDIS_URL`).
+
+```bash
+cd backend
+source ../.venv/bin/activate
+pip install -r requirements-dev.txt   # test-only deps; runtime deps stay in requirements.txt
+python3 -m pytest tests/ -v
+```
+
+Coverage spans auth, secrets, file chunks, messenger, multisig (including
+N-of-M quorum, reject, and delete), groups, users, notifications, key
+attestations, rate-limit storage, WebSocket fan-out/presence, and the PQC gate.
+
+The PQC gate (`backend/tests/test_pqc.py`) proves ML-DSA-44 interop between `liboqs`
+(server) and `@noble/post-quantum` (clients) using the shared fixture
+`tests/fixtures/pqc_interop.json`, plus FIPS size conformance and the (classical
+HS256) JWT issue/verify/tamper/expiry paths.
+
+### Frontend (vitest) & crypto-core
+
+```bash
+cd frontend && npx vitest run          # SPA unit tests (incl. the PQC interop gate)
+cd packages/crypto-core && npm test    # byte-compat golden vectors + version guard
+```
+
+`src/test/pqc.test.js` covers ML-KEM-768 wrap/unwrap round-trips, ML-DSA-44
+sign/verify + tamper rejection, the liboqs→noble interop fixture, and a
+deterministic seeded-keygen byte-pin. `crypto-core`'s suite pins the wire/storage
+formats both apps share.
+
+---
+
+## Database Migrations (Alembic)
+
+Schema changes are managed with Alembic. The backend automatically runs
+`alembic upgrade head` on startup (targeting `DATABASE_URL`).
+
+```bash
+cd backend
+source ../.venv/bin/activate
+
+# After modifying models.py: auto-generate a migration from the model diff
+alembic revision --autogenerate -m "describe your change"
+# Review the generated file in alembic/versions/, then apply it
+alembic upgrade head
+
+# Useful commands
+alembic current      # current migration state
+alembic history      # migration history
+alembic downgrade -1 # step back one revision
+```
+
+---
+
 ## Tech Stack
 
 ### Backend
@@ -403,12 +356,13 @@ examples unchanged (push notifications stay off until VAPID keys are set).
 |-----------|------------|
 | Web framework | FastAPI ≥0.128 |
 | ORM | SQLAlchemy ≥2.0.46 |
-| Database | PostgreSQL 16 (psycopg 3; `docker compose up -d postgres` for local dev, `DATABASE_URL` to override) |
+| Database | PostgreSQL 16 (psycopg 3); `DATABASE_URL` to override |
+| Shared state (optional) | Redis 7 — rate limits + WebSocket fan-out/presence (`REDIS_URL`) |
 | Migrations | Alembic ≥1.13 |
 | HTTP client | httpx ≥0.27 |
 | Validation | Pydantic ≥2.12 |
 | ASGI server | uvicorn ≥0.40 |
-| Rate limiting | slowapi 0.1.9 — in-memory by default; set `REDIS_URL` for durable, shared limits (see [Environment Variables](#environment-variables)) |
+| Rate limiting | slowapi 0.1.9 — in-memory by default; Redis-backed when `REDIS_URL` is set |
 | Post-quantum crypto | liboqs-python (ML-DSA-44, FIPS 204) — in-process, verifies client login challenges |
 | JWT | PyJWT 2.10 — HS256 (server-issued, server-verified) |
 
@@ -421,7 +375,7 @@ examples unchanged (push notifications stay off until VAPID keys are set).
 | Routing | react-router-dom 7 |
 | Styling | TailwindCSS 4 |
 | Icons | lucide-react |
-| PQC crypto | @noble/post-quantum (ML-KEM-768 + ML-DSA-44) |
+| PQC crypto | @kryptolog/crypto-core (@noble/post-quantum: ML-KEM-768 + ML-DSA-44) |
 | QR (key transfer) | qrcode |
 
 ### TrustKeys Extension
@@ -430,7 +384,7 @@ examples unchanged (push notifications stay off until VAPID keys are set).
 |-----------|------------|
 | UI | React 18, Manifest V3 |
 | Build | Vite + @crxjs/vite-plugin |
-| PQC | @noble/post-quantum (ML-KEM-768 + ML-DSA-44) |
+| PQC | @kryptolog/crypto-core (@noble/post-quantum: ML-KEM-768 + ML-DSA-44) |
 | Vault | AES-256-GCM encrypted storage |
 
 ---
@@ -439,7 +393,7 @@ examples unchanged (push notifications stay off until VAPID keys are set).
 
 ### Nginx configuration
 
-JWTs are now compact HS256 tokens, so the Authorization header is small. But login/approval requests still carry PQC material (ML-DSA-44 public keys ~2.6 KB hex and ~4.8 KB signatures) in the request **body**, and file uploads are chunked — so keep generous body limits (and somewhat larger header buffers as a safety margin):
+JWTs are compact HS256 tokens, so the Authorization header is small. But login/approval requests still carry PQC material (ML-DSA-44 public keys ~2.6 KB hex and ~4.8 KB signatures) in the request **body**, and file uploads are chunked — so keep generous body limits (and somewhat larger header buffers as a safety margin):
 
 ```nginx
 http {
@@ -466,6 +420,9 @@ cd frontend
 npm run build
 # Output in dist/ — serve with Nginx or any static file server
 ```
+
+See also the **deployment note** under [Configuration](#configuration): one
+backend process without Redis; any number with `REDIS_URL` set.
 
 ---
 
@@ -542,10 +499,3 @@ up for background message alerts to work.
 > - **Always back up your keys regularly** (Manage Vault → Transfer / Back up → encrypted `.kvault` file)
 > - To move to a new device, use Manage Vault → Transfer / Back up → Send to another device (QR / one-time code)
 > - For maximum security, use the TrustKeys Extension
-
----
-
-
-
-
-
