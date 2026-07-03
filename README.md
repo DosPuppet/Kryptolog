@@ -369,22 +369,21 @@ examples unchanged (push notifications stay off until VAPID keys are set).
 | `KRYPTOLOG_REQUIRE_INVITE` | No | `false` | Access filter. When `true`, registering a **new** identity at first login requires a valid invite code (existing users unaffected). Seed codes with `python generate_invites.py`. |
 | `ALLOWED_ORIGINS` | No | `http://localhost:5173` | Comma-separated CORS origins |
 | `TRUSTED_PROXY_IPS` | No | `127.0.0.1` | Comma-separated trusted reverse-proxy IPs. Rate limiting resolves the real client IP from `X-Real-IP`/`X-Forwarded-For` only when the direct peer is listed here (prevents header spoofing). |
-| `REDIS_URL` | No | – | Redis connection URL. When set, rate limits are stored in Redis (durable across restarts, shared across processes) instead of in-memory. Reused as the limiter store unless `RATELIMIT_STORAGE_URI` is also set. |
+| `REDIS_URL` | No | – | Redis connection URL. When set, **two** state stores move to Redis: rate limits (durable across restarts, shared across processes) and the WebSocket fan-out + presence (pub/sub, so events reach a user's sockets on any worker). This is what makes multiple workers/instances safe — see the deployment note below. `docker compose up -d postgres redis` provides one locally. |
 | `RATELIMIT_STORAGE_URI` | No | `memory://` | Explicit rate-limit storage URI (overrides `REDIS_URL`). Unset ⇒ in-memory: per-process and reset on restart. See the single-process note below. |
 | `VAPID_PUBLIC_KEY` | No | – | Web Push VAPID public key (required for push notifications) |
 | `VAPID_PRIVATE_KEY` | No | – | Web Push VAPID private key |
 | `VAPID_SUBJECT` | No | `mailto:admin@kryptolog.io` | Web Push VAPID subject (contact email/URL) |
 
-> **Deployment note — the backend runs as a single process.** The rate limiter
-> (when no `REDIS_URL` is set), the WebSocket connection registry, and presence
-> state are held in process memory. Running multiple workers/instances would
-> multiply effective rate limits and drop real-time messages delivered by another
-> instance. Keep pm2 `instances: 1` and run uvicorn **without** `--workers`.
-> The database is already Postgres (concurrent-writer safe), so scaling out
-> needs the remaining two pieces: (1) Redis-backed rate limits (`REDIS_URL`,
-> already supported) and (2) a shared WebSocket fan-out (e.g. Redis pub/sub).
-> Setting `REDIS_URL` is worthwhile even on a single node so login throttles
-> survive restarts.
+> **Deployment note — multi-process needs `REDIS_URL`.** Without it, the rate
+> limiter, WebSocket connection registry, and presence state live in process
+> memory: running multiple workers/instances would multiply effective rate
+> limits and drop real-time messages held by another instance — keep pm2
+> `instances: 1` and run uvicorn **without** `--workers`. **With `REDIS_URL`
+> set**, rate limits move to Redis and WebSocket delivery/presence are shared
+> through Redis pub/sub, so multiple workers/instances are safe (the database
+> is Postgres, concurrent-writer safe). Setting `REDIS_URL` is worthwhile even
+> on a single node so login throttles survive restarts.
 
 ### Frontend (`frontend/.env`)
 

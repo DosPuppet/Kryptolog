@@ -6,11 +6,11 @@ module.exports = {
       args: 'main:app --host 0.0.0.0 --port 8000 --h11-max-incomplete-event-size 65536',
       cwd: './backend',
       interpreter: 'python3',
-      // MUST stay 1 (and uvicorn must run without --workers). The rate limiter,
-      // WebSocket connection registry, and presence state are in-process; running
-      // multiple instances multiplies effective rate limits and drops real-time
-      // messages delivered by another instance. See audit F-3 — adding instances
-      // requires Redis-backed limits + a shared WebSocket fan-out first.
+      // Keep 1 unless REDIS_URL is set. Without Redis the rate limiter, WebSocket
+      // registry, and presence are in-process: multiple instances multiply
+      // effective rate limits and drop real-time messages held by another
+      // instance (audit F-3). With REDIS_URL set, limits and WS fan-out/presence
+      // are shared through Redis and scaling instances is safe.
       instances: 1,
       autorestart: true,
       watch: false,

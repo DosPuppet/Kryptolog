@@ -1,3 +1,5 @@
+from contextlib import asynccontextmanager
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from database import engine
@@ -19,7 +21,16 @@ from fastapi import Request
 
 # ── App & Middleware (initialised FIRST so CORS always works) ───
 
-app = FastAPI()
+@asynccontextmanager
+async def _lifespan(app: FastAPI):
+    # Shared WebSocket fan-out + presence (Redis pub/sub, audit P0). No-op
+    # without REDIS_URL — the manager stays in single-process local mode.
+    from websocket_manager import manager as ws_manager
+    await ws_manager.startup()
+    yield
+    await ws_manager.shutdown()
+
+app = FastAPI(lifespan=_lifespan)
 app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 

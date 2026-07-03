@@ -36,12 +36,13 @@ echo "Environment initialized."
 
 # 3. Ensure PostgreSQL is up (the backend runs its Alembic migrations at startup)
 # Default DATABASE_URL targets the docker-compose Postgres on localhost:5432.
+# Redis (shared rate limits + WS fan-out, optional) is started alongside it.
 DB_URL="${DATABASE_URL:-postgresql+psycopg://kryptolog:kryptolog@localhost:5432/kryptolog}"
 if [[ "$DB_URL" != *"localhost"* && "$DB_URL" != *"127.0.0.1"* ]]; then
     echo "DATABASE_URL points at an external database — skipping local Postgres startup."
 elif command -v docker &> /dev/null; then
-    echo "Starting PostgreSQL (docker compose)..."
-    docker compose up -d postgres
+    echo "Starting PostgreSQL + Redis (docker compose)..."
+    docker compose up -d postgres redis
     echo -n "Waiting for Postgres to be healthy"
     PG_STATUS=""
     for _ in $(seq 1 30); do

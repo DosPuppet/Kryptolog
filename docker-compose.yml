@@ -1,9 +1,13 @@
-# Local Postgres for the Kryptolog backend, matching the default DATABASE_URL
-# in backend/database.py. Start with:
-#   docker compose up -d postgres
-# First start also creates the `kryptolog_test` database (init script below).
-# If your volume predates that script, create it once by hand:
-#   docker compose exec postgres createdb -U kryptolog kryptolog_test
+# Local infrastructure for the Kryptolog backend:
+#   • postgres — matches the default DATABASE_URL in backend/database.py.
+#     First start also creates the `kryptolog_test` database (init script
+#     below); if your volume predates that script, create it once by hand:
+#       docker compose exec postgres createdb -U kryptolog kryptolog_test
+#   • redis — shared rate-limit storage + WebSocket fan-out/presence
+#     (enabled by REDIS_URL, see backend/.env.example). State is transient
+#     by design (throttle counters, presence TTL keys) — no volume.
+# Start with:
+#   docker compose up -d postgres redis
 
 services:
   postgres:
@@ -19,6 +23,16 @@ services:
       - ./scripts/postgres-init:/docker-entrypoint-initdb.d:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U kryptolog -d kryptolog"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  redis:
+    image: redis:7
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
       interval: 5s
       timeout: 3s
       retries: 10

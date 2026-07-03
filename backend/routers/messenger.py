@@ -223,17 +223,17 @@ async def websocket_endpoint(websocket: WebSocket):
                 try:
                     msg = json.loads(raw)
                     if msg.get("type") == "APP_FOCUSED":
-                        manager.set_focused(websocket)
+                        await manager.set_focused(websocket)
                     elif msg.get("type") == "APP_BLURRED":
-                        manager.set_blurred(websocket)
+                        await manager.set_blurred(websocket)
                 except (json.JSONDecodeError, AttributeError):
                     pass
         except WebSocketDisconnect:
-            manager.disconnect(websocket, user_address)
-            
+            await manager.disconnect(websocket, user_address)
+
     except WebSocketDisconnect:
         # Disconnected before authentication completed
-        manager.disconnect(websocket, None)
+        await manager.disconnect(websocket, None)
     except Exception as e:
         logger.warning("WS error: %s", e)
         # Only try to close if not already closed
