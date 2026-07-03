@@ -10,12 +10,13 @@ Crypto runs on audited, standards-based libraries: [`@noble/post-quantum`](https
 
 ```
 kryptolog/
-├── backend/          Python FastAPI API (in-process ML-DSA via liboqs)
-├── frontend/         React 19 SPA (Vite + TailwindCSS 4)
-└── trustkeys/        Chrome/Brave extension (MV3, React 18)
+├── backend/            Python FastAPI API (in-process ML-DSA via liboqs)
+├── frontend/           React 19 SPA (Vite + TailwindCSS 4)
+├── trustkeys/          Chrome/Brave extension (MV3, React 18)
+└── docker-compose.yml  Local PostgreSQL 16 for dev + tests
 ```
 
-The application runs **2 processes locally**: a FastAPI REST API and a Vite dev server for the frontend. ML-DSA login-challenge verification happens in-process inside the backend (session JWTs are HS256) — there is no separate crypto service.
+The application runs **2 processes locally** — a FastAPI REST API and a Vite dev server for the frontend — plus a **PostgreSQL 16** database (one `docker compose up -d postgres` away, or any instance you point `DATABASE_URL` at). ML-DSA login-challenge verification happens in-process inside the backend (session JWTs are HS256) — there is no separate crypto service.
 
 ```
 ┌─────────────────────────────┐
@@ -164,12 +165,13 @@ invalid/expired code returns a generic error (no enumeration).
 
 #### Database initialization
 
-The database is created automatically on first startup via Alembic migrations. No manual steps needed.
+With Postgres running (step above), the schema is created automatically on
+first backend startup via Alembic migrations. No manual steps needed.
 
 If you prefer to initialize it explicitly:
 
 ```bash
-# Apply all migrations (creates tables if DB doesn't exist)
+# Apply all migrations (targets DATABASE_URL, or the local compose Postgres by default)
 source ../.venv/bin/activate
 alembic upgrade head
 ```
@@ -220,6 +222,9 @@ The recommended way to run the entire Kryptolog ecosystem (FastAPI Backend and V
 
 This script will automatically:
 - Install PM2 globally if missing.
+- Start the local Postgres container (`docker compose up -d postgres`) and wait
+  for it to be healthy — skipped when `DATABASE_URL` points at an external DB
+  or Docker isn't installed.
 - Install any missing `npm` dependencies for the frontend.
 - Build the frontend for production preview (`npm run build`).
 - Launch both services in the background using PM2.
@@ -235,6 +240,11 @@ The frontend will be available at: `http://localhost:5173/`
 ### Manual Startup (Development)
 
 If you prefer to run the services in isolated terminals for active development:
+
+**Terminal 0 — Database (once)**
+```bash
+docker compose up -d postgres
+```
 
 **Terminal 1 — Backend**
 ```bash
@@ -337,9 +347,10 @@ alembic downgrade -1
 The app reads two `.env` files, one per service. Copy each `.env.example` to
 `.env` and fill it in **before** starting the app:
 
-- **`backend/.env`** — server config: deployment mode, the HS256 JWT signing
-  secret (mandatory in production), CORS origins, trusted-proxy IPs, and the VAPID
-  *private* key for sending Web Push. Holds the app's secrets — never commit it.
+- **`backend/.env`** — server config: the database URL, deployment mode, the
+  HS256 JWT signing secret (mandatory in production), CORS origins,
+  trusted-proxy IPs, and the VAPID *private* key for sending Web Push. Holds
+  the app's secrets — never commit it.
 - **`frontend/.env`** — build-time config baked into the SPA by Vite: the backend
   API URL and the VAPID *public* key. Only `VITE_`-prefixed values are exposed to
   the browser; put nothing secret here.
@@ -351,6 +362,8 @@ examples unchanged (push notifications stay off until VAPID keys are set).
 
 | Variable | Required | Default | Description |
 |----------|----------|---------|-------------|
+| `DATABASE_URL` | No | local compose Postgres | SQLAlchemy database URL. Default `postgresql+psycopg://kryptolog:kryptolog@localhost:5432/kryptolog` matches `docker compose up -d postgres`. Point at any Postgres instance; `sqlite:///./sql_app.db` still works if you must. |
+| `TEST_DATABASE_URL` | No | local compose test DB | Database the pytest suite targets (default `...localhost:5432/kryptolog_test`, auto-created by the compose init script). The suite creates/drops all tables around every test — never point it at real data. |
 | `KRYPTOLOG_ENV` | No | `development` | Set to `production` to fail closed: the backend refuses to start unless the JWT secret below is configured. |
 | `KRYPTOLOG_JWT_SECRET` | Prod: **yes** | – | HS256 JWT signing secret (hex). From `generate_server_keys.py`. Forges JWTs if leaked — treat as a production secret. Required when `KRYPTOLOG_ENV=production`; unset in dev ⇒ ephemeral secret, JWTs reset on restart. |
 | `KRYPTOLOG_REQUIRE_INVITE` | No | `false` | Access filter. When `true`, registering a **new** identity at first login requires a valid invite code (existing users unaffected). Seed codes with `python generate_invites.py`. |
@@ -366,9 +379,10 @@ examples unchanged (push notifications stay off until VAPID keys are set).
 > (when no `REDIS_URL` is set), the WebSocket connection registry, and presence
 > state are held in process memory. Running multiple workers/instances would
 > multiply effective rate limits and drop real-time messages delivered by another
-> instance. Keep pm2 `instances: 1` and run uvicorn **without** `--workers`. To
-> scale out you need, in order: (1) Redis-backed rate limits (`REDIS_URL`, already
-> supported), (2) Postgres, and (3) a shared WebSocket fan-out (e.g. Redis pub/sub).
+> instance. Keep pm2 `instances: 1` and run uvicorn **without** `--workers`.
+> The database is already Postgres (concurrent-writer safe), so scaling out
+> needs the remaining two pieces: (1) Redis-backed rate limits (`REDIS_URL`,
+> already supported) and (2) a shared WebSocket fan-out (e.g. Redis pub/sub).
 > Setting `REDIS_URL` is worthwhile even on a single node so login throttles
 > survive restarts.
 
