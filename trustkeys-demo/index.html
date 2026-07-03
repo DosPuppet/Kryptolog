@@ -241,6 +241,7 @@
             <button onclick="doConnect()" class="success">connect()</button>
             <button onclick="doIsConnected()">isConnected()</button>
             <button onclick="doGetAccount()">getAccount()</button>
+            <button onclick="doGetKeyAttestation()">getKeyAttestation()</button>
         </div>
 
         <div id="detectionOutput" class="output" style="margin-top:12px;">Waiting...</div>
@@ -251,12 +252,12 @@
 
             <div class="grid" style="margin-top:8px;">
                 <div>
-                    <label>Dilithium Public Key (signing)</label>
-                    <div id="dilithiumKey" class="output"></div>
+                    <label>ML-DSA Public Key (signing)</label>
+                    <div id="mldsaKey" class="output"></div>
                 </div>
                 <div>
-                    <label>Kyber Public Key (encryption)</label>
-                    <div id="kyberKey" class="output"></div>
+                    <label>ML-KEM Public Key (encryption)</label>
+                    <div id="mlkemKey" class="output"></div>
                 </div>
             </div>
         </div>
@@ -265,9 +266,10 @@
     <div class="grid">
         <!-- ─── Signing & Verification ──────────────────────────── -->
         <div class="card">
-            <h2>Sign & Verify <span class="tag tag-sign">dilithium</span></h2>
+            <h2>Sign & Verify <span class="tag tag-sign">ML-DSA</span></h2>
             <p class="note">
-                <span class="api-method">sign(message)</span> &rarr; Dilithium signature (hex)<br>
+                <span class="api-method">sign(message)</span> &rarr; ML-DSA signature (hex) with popup<br>
+                <span class="api-method">signMessage(message)</span> &rarr; ML-DSA signature (hex) silent if authorized (message context only)<br>
                 <span class="api-method">verify(message, signature, publicKey)</span> &rarr; boolean
             </p>
 
@@ -275,7 +277,8 @@
             <textarea id="signInput" rows="2">Hello, Quantum World!</textarea>
 
             <div class="inline-buttons">
-                <button onclick="doSign()">Sign Message</button>
+                <button onclick="doSign()">Sign Message (popup)</button>
+                <button onclick="doSignMessage()">Sign Message (silent)</button>
                 <button onclick="doVerify()" class="success">Verify Signature</button>
             </div>
 
@@ -287,7 +290,7 @@
 
         <!-- ─── Encrypt & Decrypt ───────────────────────────────── -->
         <div class="card">
-            <h2>Encrypt & Decrypt <span class="tag tag-encrypt">kyber + AES</span></h2>
+            <h2>Encrypt & Decrypt <span class="tag tag-encrypt">ML-KEM + AES</span></h2>
             <p class="note">
                 <span class="api-method">encrypt(message, [publicKey])</span> &rarr; ciphertext<br>
                 <span class="api-method">decrypt(ciphertext)</span> &rarr; plaintext
@@ -296,7 +299,7 @@
             <label>Message to Encrypt</label>
             <textarea id="encryptInput" rows="2">Top Secret Data</textarea>
 
-            <label>Recipient Kyber Public Key <span style="color:#64748b;">(blank = self)</span></label>
+            <label>Recipient ML-KEM Public Key <span style="color:#64748b;">(blank = self)</span></label>
             <input type="text" id="encryptRecipientKey" placeholder="Leave empty to encrypt for yourself">
 
             <div class="inline-buttons">
@@ -315,7 +318,7 @@
         <div class="card">
             <h2>Session Key Management <span class="tag tag-session">symmetric</span></h2>
             <p class="note">
-                Generate symmetric keys and wrap/unwrap them with Kyber.<br>
+                Generate symmetric keys and wrap/unwrap them with ML-KEM.<br>
                 Used for E2EE where the session key encrypts data and is itself encrypted per-recipient.
             </p>
 
@@ -329,7 +332,7 @@
             <hr>
 
             <label>Public Key to Wrap For <span style="color:#64748b;">(blank = own key)</span></label>
-            <input type="text" id="wrapPublicKey" placeholder="Kyber public key hex...">
+            <input type="text" id="wrapPublicKey" placeholder="ML-KEM public key hex...">
 
             <div class="inline-buttons">
                 <button onclick="doWrapSessionKey()">wrapSessionKey()</button>
@@ -359,6 +362,25 @@
             </div>
 
             <div id="batchUnwrapResult" class="output"></div>
+        </div>
+
+        <!-- ─── Batch Decrypt ───────────────────────────────────── -->
+        <div class="card">
+            <h2>Batch Decrypt <span class="tag tag-encrypt">ML-KEM + AES</span></h2>
+            <p class="note">
+                <span class="api-method">decryptMany(items[])</span><br>
+                Decrypt multiple encrypted messages/payloads in a single user-approval step (used for E2EE titles).
+            </p>
+
+            <label>Ciphertexts JSON Array (e.g. [ {"kem": "...", "iv": "...", "content": "..."}, ... ])</label>
+            <textarea id="batchCiphertexts" rows="4" placeholder='Paste ciphertexts JSON array here, e.g. [ { "kem": "...", "iv": "...", "content": "..." } ]'></textarea>
+
+            <div class="inline-buttons">
+                <button onclick="doBatchDecrypt()">Decrypt All</button>
+                <button onclick="populateBatchDecryptFromSingle()">Copy from Encrypt output</button>
+            </div>
+
+            <div id="batchDecryptResult" class="output"></div>
         </div>
     </div>
 
@@ -465,12 +487,27 @@
                 }
                 document.getElementById('accountInfo').style.display = 'block';
                 document.getElementById('accountName').textContent = account.name;
-                document.getElementById('kyberKey').textContent = account.kyberPublicKey;
-                document.getElementById('dilithiumKey').textContent = account.dilithiumPublicKey;
-                log(`getAccount() OK — name: "${account.name}", dilithium key: ${account.dilithiumPublicKey.slice(0, 32)}...`, 'success');
+                const mlkem = account.mlkemPublicKey || account.kyberPublicKey;
+                const mldsa = account.mldsaPublicKey || account.dilithiumPublicKey;
+                document.getElementById('mlkemKey').textContent = mlkem;
+                document.getElementById('mldsaKey').textContent = mldsa;
+                log(`getAccount() OK — name: "${account.name}", ML-DSA key: ${(mldsa || '').slice(0, 32)}...`, 'success');
                 showResult('detectionOutput', `Active account: ${account.name}`);
             } catch (e) {
                 log(`getAccount() error: ${e.message}`, 'error');
+                showResult('detectionOutput', e.message, true);
+            }
+        }
+
+        async function doGetKeyAttestation() {
+            try {
+                checkAPI();
+                log('Calling getKeyAttestation()...');
+                const attestation = await window.trustkeys.getKeyAttestation();
+                log('getKeyAttestation() OK', 'success');
+                showResult('detectionOutput', `ML-KEM Key Attestation Signature (hex):\n${attestation}`);
+            } catch (e) {
+                log(`getKeyAttestation() error: ${e.message}`, 'error');
                 showResult('detectionOutput', e.message, true);
             }
         }
@@ -492,12 +529,42 @@
             }
         }
 
+        async function doSignMessage() {
+            try {
+                checkAPI();
+                const rawInput = document.getElementById('signInput').value;
+                if (!rawInput) { alert('Enter a message to sign'); return; }
+
+                // The extension enforces that messages signed silently via signMessage()
+                // MUST start with the MESSAGE_SIGNING_PREFIX context.
+                const prefix = "Kryptolog Signed Message v1\ncontext=message\n";
+                let message = rawInput;
+                if (!message.startsWith(prefix)) {
+                    message = prefix + message;
+                    log(`Prepending required message context prefix...`);
+                }
+
+                log(`Calling signMessage("${message.slice(0, 40).replace(/\n/g, '\\n')}${message.length > 40 ? '...' : ''}")...`);
+                const signature = await window.trustkeys.signMessage(message);
+                document.getElementById('signatureOutput').value = signature;
+
+                // Keep the input value in sync if we modified it
+                document.getElementById('signInput').value = message;
+
+                log(`signMessage() OK — ${signature.length} hex chars`, 'success');
+                showResult('verifyOutput', `Signature produced (${signature.length / 2} bytes)`);
+            } catch (e) {
+                log(`signMessage() error: ${e.message}`, 'error');
+                showResult('verifyOutput', e.message, true);
+            }
+        }
+
         async function doVerify() {
             try {
                 checkAPI();
                 const message = document.getElementById('signInput').value;
                 const signature = document.getElementById('signatureOutput').value;
-                const publicKey = document.getElementById('dilithiumKey').textContent;
+                const publicKey = document.getElementById('mldsaKey').textContent;
                 if (!message || !signature || !publicKey) {
                     alert('Need message, signature, and public key. Sign a message first, then get your account.');
                     return;
@@ -583,9 +650,9 @@
 
                 let publicKey = document.getElementById('wrapPublicKey').value.trim();
                 if (!publicKey) {
-                    publicKey = document.getElementById('kyberKey').textContent;
+                    publicKey = document.getElementById('mlkemKey').textContent;
                     if (!publicKey) { alert('Get your account first, or enter a public key'); return; }
-                    log('No wrap key specified — using own Kyber public key');
+                    log('No wrap key specified — using own ML-KEM public key');
                 }
 
                 log('Calling wrapSessionKey(sessionKey, publicKey)...');
@@ -649,6 +716,46 @@
             } catch (e) {
                 log(`unwrapManySessionKeys() error: ${e.message}`, 'error');
                 showResult('batchUnwrapResult', e.message, true);
+            }
+        }
+
+        // ─── Batch Decrypt ──────────────────────────────────────
+        function populateBatchDecryptFromSingle() {
+            const wrapped = document.getElementById('ciphertextOutput').value.trim();
+            if (!wrapped) { alert('No ciphertext to copy'); return; }
+            try {
+                const parsed = JSON.parse(wrapped);
+                document.getElementById('batchCiphertexts').value = JSON.stringify([parsed], null, 2);
+                log('Copied ciphertext to batch decrypt input');
+            } catch (e) {
+                alert('Invalid ciphertext JSON: ' + e.message);
+            }
+        }
+
+        async function doBatchDecrypt() {
+            try {
+                checkAPI();
+                const raw = document.getElementById('batchCiphertexts').value.trim();
+                if (!raw) { alert('Enter a JSON array of ciphertexts'); return; }
+
+                let items;
+                try {
+                    items = JSON.parse(raw);
+                    if (!Array.isArray(items)) {
+                        throw new Error("Input must be a JSON array");
+                    }
+                } catch (e) {
+                    throw new Error("Invalid JSON: " + e.message);
+                }
+
+                log(`Calling decryptMany(${items.length} items)...`);
+                const results = await window.trustkeys.decryptMany(items);
+                const summary = results.map((r, i) => `[${i}] ${r === null ? 'FAILED' : r}`).join('\n');
+                log(`decryptMany() OK — ${results.filter(r => r !== null).length}/${items.length} succeeded`, 'success');
+                showResult('batchDecryptResult', summary);
+            } catch (e) {
+                log(`decryptMany() error: ${e.message}`, 'error');
+                showResult('batchDecryptResult', e.message, true);
             }
         }
 
