@@ -67,7 +67,7 @@ describe('golden constants (wire/storage format contract)', () => {
 
 describe('randomized envelope round-trips', () => {
     it('KEM message envelope: encrypt -> decrypt', async () => {
-        const { publicKey, privateKey } = await core.generateKyberKeyPair();
+        const { publicKey, privateKey } = await core.generateMlKemKeyPair();
         const env = await core.encryptMessage('secret payload', publicKey);
         expect(env).toHaveProperty('kem');
         expect(env).toHaveProperty('iv');
@@ -76,7 +76,7 @@ describe('randomized envelope round-trips', () => {
     });
 
     it('session-key wrap -> unwrap, then encrypt/decrypt under it', async () => {
-        const { publicKey, privateKey } = await core.generateKyberKeyPair();
+        const { publicKey, privateKey } = await core.generateMlKemKeyPair();
         const sessionKey = await core.generateSessionKey();
         const wrapped = await core.wrapSessionKey(sessionKey, publicKey);
         expect(wrapped).toHaveProperty('encKey');
@@ -87,7 +87,7 @@ describe('randomized envelope round-trips', () => {
     });
 
     it('unwrapSessionKey still accepts the legacy {ct} field name', async () => {
-        const { publicKey, privateKey } = await core.generateKyberKeyPair();
+        const { publicKey, privateKey } = await core.generateMlKemKeyPair();
         const sessionKey = await core.generateSessionKey();
         const { kem, iv, encKey } = await core.wrapSessionKey(sessionKey, publicKey);
         const legacy = { kem, iv, ct: encKey }; // pre-standardization shape
@@ -149,8 +149,45 @@ describe('ML-DSA server-interop guard (FIPS 204 byte encoding)', () => {
     });
 });
 
+describe('account field-name compat (v1.2.0: kyber/dilithium -> mlkem/mldsa)', () => {
+    it('maps a legacy account to the new field names and drops the old ones', () => {
+        const legacy = {
+            id: 'x', name: 'A',
+            kyber: { publicKey: 'k_pub', privateKey: 'k_priv' },
+            dilithium: { publicKey: 'd_pub', privateKey: 'd_priv' },
+            createdAt: 1,
+        };
+        const out = core.normalizeAccount(legacy);
+        expect(out.mlkem).toEqual({ publicKey: 'k_pub', privateKey: 'k_priv' });
+        expect(out.mldsa).toEqual({ publicKey: 'd_pub', privateKey: 'd_priv' });
+        expect(out.kyber).toBeUndefined();
+        expect(out.dilithium).toBeUndefined();
+        expect(out.id).toBe('x');
+        expect(out.name).toBe('A');
+    });
+
+    it('is idempotent — an already-current account is returned unchanged', () => {
+        const current = {
+            id: 'x', name: 'A',
+            mlkem: { publicKey: 'k_pub', privateKey: 'k_priv' },
+            mldsa: { publicKey: 'd_pub', privateKey: 'd_priv' },
+        };
+        expect(core.normalizeAccount(current)).toEqual(current);
+    });
+
+    it('prefers new fields when both are present', () => {
+        const mixed = {
+            mlkem: { publicKey: 'new_k' }, kyber: { publicKey: 'old_k' },
+            mldsa: { publicKey: 'new_d' }, dilithium: { publicKey: 'old_d' },
+        };
+        const out = core.normalizeAccount(mixed);
+        expect(out.mlkem).toEqual({ publicKey: 'new_k' });
+        expect(out.mldsa).toEqual({ publicKey: 'new_d' });
+    });
+});
+
 describe('single-source / version guard', () => {
     it('exports a version both app builds can assert against', () => {
-        expect(core.CRYPTO_CORE_VERSION).toBe('1.1.0');
+        expect(core.CRYPTO_CORE_VERSION).toBe('1.2.0');
     });
 });

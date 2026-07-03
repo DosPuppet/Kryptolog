@@ -38,6 +38,7 @@ Thumbs.db
 # Local audit / scratch docs (not tracked)
 .tempdoc/
 TRANSVERSAL_AUDIT_2026-06-12.md
+AUDIT_2026-07-03.md
 
 # Local audit venv (liboqs) — never commit
 backend/.venv-audit/

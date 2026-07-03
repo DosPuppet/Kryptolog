@@ -25,8 +25,8 @@ import {
   generateSessionKey,
   wrapSessionKey,
   unwrapSessionKey,
-  generateKyberKeyPair,
-  generateDilithiumKeyPair,
+  generateMlKemKeyPair,
+  generateMlDsaKeyPair,
   toHex,
   domainSeparate,
   SIGNING_CONTEXT,
@@ -38,13 +38,13 @@ const fromHexLocal = (h) => new Uint8Array(Buffer.from(h, 'hex'));
 
 describe('FIPS size conformance', () => {
   it('ML-KEM-768 keys are 1184 / 2400 bytes', async () => {
-    const { publicKey, privateKey } = await generateKyberKeyPair();
+    const { publicKey, privateKey } = await generateMlKemKeyPair();
     expect(fromHexLocal(publicKey).length).toBe(1184);
     expect(fromHexLocal(privateKey).length).toBe(2400);
   });
 
   it('ML-DSA-44 keys are 1312 / 2560 bytes', async () => {
-    const { publicKey, privateKey } = await generateDilithiumKeyPair();
+    const { publicKey, privateKey } = await generateMlDsaKeyPair();
     expect(fromHexLocal(publicKey).length).toBe(1312);
     expect(fromHexLocal(privateKey).length).toBe(2560);
   });
@@ -52,7 +52,7 @@ describe('FIPS size conformance', () => {
 
 describe('ML-DSA-44 sign/verify', () => {
   it('round-trips and rejects tampering', async () => {
-    const { publicKey, privateKey } = await generateDilithiumKeyPair();
+    const { publicKey, privateKey } = await generateMlDsaKeyPair();
     const msg = 'Sign in to Kryptolog with nonce: 0123456789abcdef';
     const sig = await signMessagePQC(msg, privateKey);
     expect(fromHexLocal(sig).length).toBe(2420);
@@ -76,7 +76,7 @@ describe('ML-DSA-44 sign/verify', () => {
 
 describe('ML-KEM-768 hybrid envelope round-trips', () => {
   it('encryptMessagePQC -> decryptMessagePQC', async () => {
-    const { publicKey, privateKey } = await generateKyberKeyPair();
+    const { publicKey, privateKey } = await generateMlKemKeyPair();
     const plaintext = 'hello post-quantum world 🛡️';
     const env = await encryptMessagePQC(plaintext, publicKey);
     expect(fromHexLocal(env.kem).length).toBe(1088); // ML-KEM-768 ciphertext
@@ -84,7 +84,7 @@ describe('ML-KEM-768 hybrid envelope round-trips', () => {
   });
 
   it('wrapSessionKey -> unwrapSessionKey', async () => {
-    const { publicKey, privateKey } = await generateKyberKeyPair();
+    const { publicKey, privateKey } = await generateMlKemKeyPair();
     const sessionKey = await generateSessionKey();
     const wrapped = await wrapSessionKey(sessionKey, publicKey);
     const unwrapped = await unwrapSessionKey(wrapped, privateKey);
@@ -103,7 +103,7 @@ describe('domain separation (audit H1)', () => {
   });
 
   it('a content-domain signature does NOT verify as a login challenge', async () => {
-    const { publicKey, privateKey } = await generateDilithiumKeyPair();
+    const { publicKey, privateKey } = await generateMlDsaKeyPair();
     // Attacker coerces the victim into approving content that equals a login body.
     const loginBody = 'Sign in to Kryptolog with nonce: 0123456789abcdef\nEncryption key: kem';
     const contentSig = await signMessagePQC(
@@ -140,7 +140,7 @@ describe('multisig ciphertext-bound approval (audit M1)', () => {
   });
 
   it('signs sha256(ciphertext) and verifies; rejects a different ciphertext', async () => {
-    const { publicKey, privateKey } = await generateDilithiumKeyPair();
+    const { publicKey, privateKey } = await generateMlDsaKeyPair();
     const ciphertext = JSON.stringify({ iv: 'aa', ciphertext: 'deadbeef' });
     const msg = multisigApprovalMessage(3, 9, await sha256Hex(ciphertext));
     const sig = await signMessagePQC(msg, privateKey);

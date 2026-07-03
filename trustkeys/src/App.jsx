@@ -677,21 +677,21 @@ const Dashboard = () => {
           <div className="key-section">
             <div className="key-header">
               <span>ML-KEM (Kyber)</span>
-              <button onClick={() => copyToClipboard(activeAccount.kyberPublicKey, 'kyber')} className={copyFeedback === 'kyber' ? 'copied' : ''}>
-                {copyFeedback === 'kyber' ? 'COPIED' : 'COPY'}
+              <button onClick={() => copyToClipboard(activeAccount.mlkemPublicKey, 'mlkem')} className={copyFeedback === 'mlkem' ? 'copied' : ''}>
+                {copyFeedback === 'mlkem' ? 'COPIED' : 'COPY'}
               </button>
             </div>
-            <div className="key-box">{activeAccount.kyberPublicKey}</div>
+            <div className="key-box">{activeAccount.mlkemPublicKey}</div>
           </div>
 
           <div className="key-section">
             <div className="key-header">
               <span>ML-DSA (Dilithium)</span>
-              <button onClick={() => copyToClipboard(activeAccount.dilithiumPublicKey, 'dilithium')} className={copyFeedback === 'dilithium' ? 'copied' : ''}>
-                {copyFeedback === 'dilithium' ? 'COPIED' : 'COPY'}
+              <button onClick={() => copyToClipboard(activeAccount.mldsaPublicKey, 'mldsa')} className={copyFeedback === 'mldsa' ? 'copied' : ''}>
+                {copyFeedback === 'mldsa' ? 'COPIED' : 'COPY'}
               </button>
             </div>
-            <div className="key-box">{activeAccount.dilithiumPublicKey}</div>
+            <div className="key-box">{activeAccount.mldsaPublicKey}</div>
           </div>
         </div>
       ) : (

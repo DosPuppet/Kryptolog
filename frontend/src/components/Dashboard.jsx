@@ -27,7 +27,7 @@ import DashboardSidebar from './DashboardSidebar';
 export default function Dashboard({ view = 'secrets' }) {
     const { user, authType, logout, token } = useAuth();
     const { theme, toggleTheme } = useTheme();
-    const { hasLocalVault, isExtensionAvailable, kyberKey, pqcAccount } = usePQC();
+    const { hasLocalVault, isExtensionAvailable, mlkemKey, pqcAccount } = usePQC();
 
     // Global Progress State
     const [globalProgress, setGlobalProgress] = useState(0);
@@ -39,7 +39,7 @@ export default function Dashboard({ view = 'secrets' }) {
     };
 
     // Derived Logic — PQC identity (ML-KEM encryption key + ML-DSA account id).
-    const encryptionPublicKey = kyberKey;
+    const encryptionPublicKey = mlkemKey;
     const currentDisplayAccount = pqcAccount;
 
     const handleLogout = async () => {

@@ -19,8 +19,8 @@ import PasswordModal from '../components/PasswordModal';
 
 export const PQCProvider = ({ children }) => {
     const { login: authLogin, logout: authLogout } = useAuth();
-    const [pqcAccount, setPqcAccount] = useState(null); // Dilithium Public Key
-    const [kyberKey, setKyberKey] = useState(null);
+    const [pqcAccount, setPqcAccount] = useState(null); // ML-DSA public key
+    const [mlkemKey, setMlkemKey] = useState(null);
     const [isExtensionAvailable, setIsExtensionAvailable] = useState(false);
     const [hasLocalVault, setHasLocalVault] = useState(false);
 
@@ -51,7 +51,7 @@ export const PQCProvider = ({ children }) => {
     useEffect(() => {
         if (authType !== 'trustkeys') {
             setPqcAccount(null);
-            setKyberKey(null);
+            setMlkemKey(null);
             vaultService.clearKeyCache();
         }
     }, [authType]);
@@ -165,11 +165,13 @@ export const PQCProvider = ({ children }) => {
         }
 
         const tkAccount = await window.trustkeys.getAccount();
-        const accountId = tkAccount.dilithiumPublicKey;
-        const encryptionKey = tkAccount.kyberPublicKey;
+        // Accept the current field names, falling back to the legacy ones so a
+        // newer SPA still works with an older installed TrustKeys build.
+        const accountId = tkAccount.mldsaPublicKey || tkAccount.dilithiumPublicKey;
+        const encryptionKey = tkAccount.mlkemPublicKey || tkAccount.kyberPublicKey;
 
         setPqcAccount(accountId);
-        setKyberKey(encryptionKey);
+        setMlkemKey(encryptionKey);
 
         // inviteCode is only consulted server-side when this is a new identity and
         // invites are required (audit §5); harmless otherwise.
@@ -181,11 +183,11 @@ export const PQCProvider = ({ children }) => {
         if (!success) throw new Error("Incorrect password");
 
         const account = vaultService.getActiveAccount();
-        const accountId = account.dilithium.publicKey;
-        const encryptionKey = account.kyber.publicKey;
+        const accountId = account.mldsa.publicKey;
+        const encryptionKey = account.mlkem.publicKey;
 
         setPqcAccount(accountId);
-        setKyberKey(encryptionKey);
+        setMlkemKey(encryptionKey);
 
         // Pass known password
         return performServerLogin(accountId, encryptionKey, (msg) => vaultService.sign(msg, password), account.name);
@@ -193,13 +195,13 @@ export const PQCProvider = ({ children }) => {
 
     const createLocalVault = async (name, password, inviteCode = null) => {
         const account = await vaultService.setup(name, password);
-        const accountId = account.dilithium.publicKey;
-        const encryptionKey = account.kyber.publicKey;
+        const accountId = account.mldsa.publicKey;
+        const encryptionKey = account.mlkem.publicKey;
 
         setHasLocalVault(true);
 
         setPqcAccount(accountId);
-        setKyberKey(encryptionKey);
+        setMlkemKey(encryptionKey);
 
         return performServerLogin(accountId, encryptionKey, (msg) => vaultService.sign(msg, password), name, inviteCode);
     };
@@ -207,12 +209,12 @@ export const PQCProvider = ({ children }) => {
     const importLocalVault = async (json, password, inviteCode = null) => {
         // Create a new local vault from an exported backup, then log in with it.
         const account = await vaultService.importNewVault(json, password);
-        const accountId = account.dilithium.publicKey;
-        const encryptionKey = account.kyber.publicKey;
+        const accountId = account.mldsa.publicKey;
+        const encryptionKey = account.mlkem.publicKey;
 
         setHasLocalVault(true);
         setPqcAccount(accountId);
-        setKyberKey(encryptionKey);
+        setMlkemKey(encryptionKey);
 
         return performServerLogin(accountId, encryptionKey, (msg) => vaultService.sign(msg, password), account.name, inviteCode);
     };
@@ -230,12 +232,12 @@ export const PQCProvider = ({ children }) => {
     // create a local vault under a NEW device password, then log in.
     const receiveVault = async (blobString, transferPassphrase, newLocalPassword, inviteCode = null) => {
         const account = await vaultService.importEncryptedBlob(blobString, transferPassphrase, newLocalPassword);
-        const accountId = account.dilithium.publicKey;
-        const encryptionKey = account.kyber.publicKey;
+        const accountId = account.mldsa.publicKey;
+        const encryptionKey = account.mlkem.publicKey;
 
         setHasLocalVault(true);
         setPqcAccount(accountId);
-        setKyberKey(encryptionKey);
+        setMlkemKey(encryptionKey);
 
         return performServerLogin(accountId, encryptionKey, (msg) => vaultService.sign(msg, newLocalPassword), account.name, inviteCode);
     };
@@ -285,16 +287,16 @@ export const PQCProvider = ({ children }) => {
 
     const encrypt = async (content, publicKey) => {
         if (isExtensionAvailable && window.trustkeys) {
-            return await window.trustkeys.encrypt(content, publicKey || kyberKey);
+            return await window.trustkeys.encrypt(content, publicKey || mlkemKey);
         } else {
             // Fallback: use the in-process library when a target key is supplied
             // (e.g. encrypting for a contact before the local vault is unlocked).
             if (!publicKey && vaultService.isLocked) {
-                // If no public key provided AND vault locked (no kyberKey), we can't encrypt
+                // If no public key provided AND vault locked (no mlkemKey), we can't encrypt
                 throw new Error("PQC Provider not ready (Locked or Missing)");
             }
 
-            const targetKey = publicKey || kyberKey;
+            const targetKey = publicKey || mlkemKey;
             if (!targetKey) throw new Error("No encryption key available");
 
             const { encryptMessagePQC } = await import('../utils/crypto');
@@ -375,11 +377,11 @@ export const PQCProvider = ({ children }) => {
         const password = await requestPassword("Enter password to switch account:");
         const account = await vaultService.switchAccount(id, password);
 
-        const accountId = account.dilithium.publicKey;
-        const encryptionKey = account.kyber.publicKey;
+        const accountId = account.mldsa.publicKey;
+        const encryptionKey = account.mlkem.publicKey;
 
         setPqcAccount(accountId);
-        setKyberKey(encryptionKey);
+        setMlkemKey(encryptionKey);
 
         authLogout();
         // explicit logout forces user to re-login with new identity attempt
@@ -394,8 +396,8 @@ export const PQCProvider = ({ children }) => {
 
         const current = vaultService.getActiveAccount();
         if (current) {
-            setPqcAccount(current.dilithium.publicKey);
-            setKyberKey(current.kyber.publicKey);
+            setPqcAccount(current.mldsa.publicKey);
+            setMlkemKey(current.mlkem.publicKey);
         }
     };
 
@@ -425,7 +427,7 @@ export const PQCProvider = ({ children }) => {
     return (
         <PQCContext.Provider value={{
             pqcAccount,
-            kyberKey,
+            mlkemKey,
             isExtensionAvailable,
             hasLocalVault,
             loginTrustKeys,
@@ -466,11 +468,11 @@ export const PQCProvider = ({ children }) => {
                 if (!success) throw new Error("Biometric Unlock Failed");
 
                 const account = vaultService.getActiveAccount();
-                const accountId = account.dilithium.publicKey;
-                const encryptionKey = account.kyber.publicKey;
+                const accountId = account.mldsa.publicKey;
+                const encryptionKey = account.mlkem.publicKey;
 
                 setPqcAccount(accountId);
-                setKyberKey(encryptionKey);
+                setMlkemKey(encryptionKey);
 
                 // performServerLogin needs a signing function, and vaultService.sign
                 // requires the vault password. Recover it via the same biometric

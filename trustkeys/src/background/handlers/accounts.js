@@ -1,4 +1,4 @@
-import { generateAccount, decryptVault, encryptVault } from '../../utils/crypto.js';
+import { generateAccount, decryptVault, encryptVault, normalizeAccount } from '../../utils/crypto.js';
 import { state, getSessionPassword } from '../state.js';
 import { saveVault } from '../utils.js';
 
@@ -43,8 +43,8 @@ export const getActiveAccount = (checkOrigin) => {
 
     return {
         name: account.name,
-        kyberPublicKey: account.kyber.publicKey,
-        dilithiumPublicKey: account.dilithium.publicKey
+        mlkemPublicKey: account.mlkem.publicKey,
+        mldsaPublicKey: account.mldsa.publicKey
     };
 };
 
@@ -119,6 +119,9 @@ export const importVault = async (vaultObj, password, passphrase) => {
     if (!decryptedImport.accounts || !Array.isArray(decryptedImport.accounts)) {
         throw new Error("Invalid vault data: missing accounts");
     }
+
+    // Accept legacy kyber/dilithium backups by normalizing to mlkem/mldsa.
+    decryptedImport.accounts = decryptedImport.accounts.map(normalizeAccount);
 
     // MERGE logic: Keep existing, add new ones if ID doesn't exist
     if (!state.vault) {
