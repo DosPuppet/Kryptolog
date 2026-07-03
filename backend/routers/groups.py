@@ -77,12 +77,13 @@ async def create_group(
                 "channel": schemas.GroupChannelResponse.model_validate(channel)
             }, addr)
             
-            # Push Notification
+            # Push Notification. Generic body: channel names are E2EE blobs the
+            # server can't read (audit M-3) — and MUST not try to display.
             notify_user_push(
                 db,
                 addr,
                 title="New Group",
-                body=f"You have been added to a new group: {channel.name}",
+                body="You have been added to a new group",
                 data={"type": "group_joined", "channel_id": channel.id}
             )
 
@@ -223,10 +224,11 @@ async def send_group_message(
         
         # Push Notification (Skip sender)
         if member.user_address != current_user.address:
+            # Generic title: the channel name is an E2EE blob (audit M-3).
             notify_user_push(
                 db,
                 member.user_address,
-                title=f"Group: {channel.name}",
+                title="Group message",
                 body=f"{sender_name}: Sent a secure message",
                 data={"type": "group", "channel_id": channel.id}
             )
@@ -530,9 +532,12 @@ async def update_group(
     if not channel:
         raise HTTPException(status_code=404, detail="Group not found")
 
+    # Owner/admin (was owner-only): with E2EE names (audit M-3), whoever ADDS a
+    # member must also re-wrap the name blob for them via this endpoint — and
+    # adding is an owner/admin capability.
     caller_member = next((m for m in channel.members if m.user_address == current_user.address), None)
-    if not caller_member or caller_member.role != "owner":
-        raise HTTPException(status_code=403, detail="Only the owner can rename the group")
+    if not caller_member or caller_member.role not in ("owner", "admin"):
+        raise HTTPException(status_code=403, detail="Only owners/admins can rename the group")
 
     channel.name = data.name.strip()
     db.add(channel)

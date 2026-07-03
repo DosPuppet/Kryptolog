@@ -3,6 +3,7 @@ import { useAuth } from './AuthContext';
 import { usePQC } from './PQCContext';
 import API_ENDPOINTS from '../config';
 import { encryptWithSessionKey, decryptWithSessionKey, messageSigningBody, verifySignaturePQC } from '../utils/crypto';
+import { encryptGroupName, decryptGroupName, groupNameWrapFor, isEncryptedTitle, LOCKED_TITLE } from '../utils/titles';
 import { assertSafeRecipient, attestationStatus } from '../services/trustedKeys';
 import { toast } from '../utils/toast';
 
@@ -70,6 +71,10 @@ export const MessengerProvider = ({ children }) => {
     const [activeGroupConversation, setActiveGroupConversation] = useState(null);
     const activeGroupConversationRef = useRef(null);
     useEffect(() => { activeGroupConversationRef.current = activeGroupConversation; }, [activeGroupConversation]);
+
+    // Group-name keys (audit M-3: encrypted channel names). Keyed by my wrap's
+    // JSON so re-fetches never re-prompt; unresolved wraps decrypt in ONE batch.
+    const groupNameKeyCache = useRef({});
 
     // Event Listeners (e.g. for Dashboard to refresh secrets)
     const [lastEvent, setLastEvent] = useState(null);
@@ -662,13 +667,56 @@ export const MessengerProvider = ({ children }) => {
 
     // ── Group Channel Functions ─────────────────────────────────────
 
+    // Decrypt an encrypted channel name (audit M-3) with my wrapped name-key,
+    // resolving uncached wraps in ONE batch unwrap. Legacy plaintext passes
+    // through; undecryptable names render a locked placeholder.
+    const resolveChannelName = async (channel, batchCache = null) => {
+        const name = channel?.name;
+        if (!isEncryptedTitle(name)) return name ?? '';
+        const wrap = groupNameWrapFor(name, user.address);
+        if (!wrap) return LOCKED_TITLE;
+        const cacheKey = JSON.stringify(wrap);
+        let key = (batchCache ?? groupNameKeyCache.current)[cacheKey];
+        if (key === undefined) {
+            try {
+                key = (await unwrapManySessionKeys([wrap]))[0] || null;
+            } catch { key = null; }
+            groupNameKeyCache.current[cacheKey] = key;
+        }
+        const plain = await decryptGroupName(name, key);
+        return plain ?? LOCKED_TITLE;
+    };
+
+    const resolveGroupNames = async (groups) => {
+        // Batch-unwrap every uncached name-key first (one extension approval).
+        const pending = [];
+        for (const g of groups) {
+            const wrap = isEncryptedTitle(g.channel?.name) ? groupNameWrapFor(g.channel.name, user.address) : null;
+            if (wrap && !(JSON.stringify(wrap) in groupNameKeyCache.current)) pending.push(wrap);
+        }
+        if (pending.length > 0) {
+            try {
+                const keys = await unwrapManySessionKeys(pending);
+                pending.forEach((w, i) => { groupNameKeyCache.current[JSON.stringify(w)] = keys[i] || null; });
+            } catch (e) {
+                console.error("Group name key batch unwrap failed", e);
+                pending.forEach((w) => { groupNameKeyCache.current[JSON.stringify(w)] = null; });
+            }
+        }
+        return Promise.all(groups.map(async (g) => ({
+            ...g,
+            channel: { ...g.channel, display_name: await resolveChannelName(g.channel) },
+        })));
+    };
+
     const fetchGroupConversations = async () => {
         try {
             const data = await api(`${API_ENDPOINTS.GROUPS.LIST}`);
+            const withNames = await resolveGroupNames(data);
             setGroupConversations(prev => {
                 const unreadMap = {};
                 prev.forEach(g => { unreadMap[g.channel.id] = g.unread_count || 0; });
-                return data.map(newGroup => ({
+                return withNames.map(newGroup => ({
                     ...newGroup,
                     unread_count: unreadMap[newGroup.channel.id] || 0
                 }));
@@ -676,13 +724,30 @@ export const MessengerProvider = ({ children }) => {
         } catch (e) { console.error("Fetch groups failed", e); }
     };
 
-    const createGroup = async (name, memberAddresses) => {
+    // Build the encrypted name blob for the given member set (audit M-3).
+    // Always mints a FRESH name key, so members removed before a rename can
+    // never read the new name. Attestation-gated like message-key wraps.
+    const buildGroupNameBlob = async (plainName, memberUsers) => {
+        const me = { address: user.address, encryption_public_key: user?.encryption_public_key || mlkemKey };
+        const targets = [me];
+        for (const m of memberUsers) {
+            if (m.address.toLowerCase() === me.address.toLowerCase()) continue;
+            await assertSafeRecipient(m); // throws on an invalid attestation
+            targets.push(m);
+        }
+        return encryptGroupName(plainName, targets);
+    };
+
+    const createGroup = async (name, members) => {
+        // members: full user objects ({address, encryption_public_key, ...}).
+        // The name is E2EE for the initial member set — the server never sees it.
+        const encName = await buildGroupNameBlob(name, members);
         const channel = await api(`${API_ENDPOINTS.GROUPS.CREATE}`, {
             method: 'POST',
-            body: JSON.stringify({ name, member_addresses: memberAddresses })
+            body: JSON.stringify({ name: encName, member_addresses: members.map(m => m.address) })
         });
         fetchGroupConversations();
-        return channel;
+        return { ...channel, display_name: name };
     };
 
     const addGroupMember = async (channelId, userAddress) => {
@@ -701,6 +766,32 @@ export const MessengerProvider = ({ children }) => {
             });
         }
         invalidateGroupSession(channelId);
+
+        // Encrypted channel name (audit M-3): re-wrap it so the NEW member can
+        // read it too. The adder (owner/admin) knows the plaintext and every
+        // member key; removal needs no rebuild — the next rename's fresh key
+        // already excludes ex-members.
+        try {
+            const chan = activeGroupConversationRef.current?.channel;
+            if (chan && chan.id === channelId && isEncryptedTitle(chan.name)) {
+                const plain = await resolveChannelName(chan);
+                if (plain && plain !== LOCKED_TITLE) {
+                    const memberUsers = [
+                        ...chan.members.map(m => ({ address: m.user_address, ...m.user })),
+                        { address: result.user_address, ...result.user },
+                    ];
+                    const encName = await buildGroupNameBlob(plain, memberUsers);
+                    await api(`${API_ENDPOINTS.GROUPS.DETAILS(channelId)}`, {
+                        method: 'PUT',
+                        body: JSON.stringify({ name: encName })
+                    });
+                }
+            }
+        } catch (e) {
+            // Non-fatal: the member is in and can read messages; the name shows
+            // locked for them until the next rename/re-add re-wraps it.
+            console.error("Re-wrapping group name for new member failed", e);
+        }
         return result;
     };
 
@@ -743,6 +834,20 @@ export const MessengerProvider = ({ children }) => {
         });
     };
 
+    // Rename with an E2EE name (audit M-3): fresh key wrapped for the CURRENT
+    // member set only — ex-members can't read names chosen after they left.
+    const renameGroup = async (channel, newName) => {
+        const memberUsers = channel.members.map(m => ({ address: m.user_address, ...m.user }));
+        const encName = await buildGroupNameBlob(newName, memberUsers);
+        const updated = await updateGroup(channel.id, { name: encName });
+        setActiveGroupConversation(prev => {
+            if (!prev || prev.channel.id !== channel.id) return prev;
+            return { ...prev, channel: { ...prev.channel, name: encName, display_name: newName } };
+        });
+        fetchGroupConversations();
+        return updated;
+    };
+
     const loadGroupConversation = async (channel) => {
         setActiveGroupConversation({ channel, messages: [] });
         setMessagesLoading(true);
@@ -755,6 +860,7 @@ export const MessengerProvider = ({ children }) => {
             let fullChannel = channel;
             try {
                 fullChannel = await api(`${API_ENDPOINTS.GROUPS.GET(channel.id)}`);
+                fullChannel.display_name = await resolveChannelName(fullChannel);
             } catch { /* best-effort: failure is non-fatal */ }
 
             const rawMsgs = await api(`${API_ENDPOINTS.GROUPS.HISTORY(channel.id)}`, {
@@ -923,6 +1029,7 @@ export const MessengerProvider = ({ children }) => {
             removeGroupMember,
             updateGroupMemberRole,
             updateGroup,
+            renameGroup,
         }}>
             {children}
         </MessengerContext.Provider>

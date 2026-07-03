@@ -154,7 +154,7 @@ const ConversationList = ({ conversations, activeConversation, onSelect, onNewCh
                                         <div className="flex-1 overflow-hidden">
                                             <div className="flex justify-between items-center mb-0.5">
                                                 <span className={`font-semibold truncate text-sm ${isActiveGroup ? 'text-white' : 'text-slate-900 dark:text-white'}`}>
-                                                    {g.channel.name}
+                                                    {g.channel.display_name ?? g.channel.name}
                                                 </span>
                                                 {g.last_message && (
                                                     <span className={`text-[10px] ${isActiveGroup ? 'text-indigo-200' : 'text-slate-400'}`}>

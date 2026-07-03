@@ -1,19 +1,26 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { useAuth } from '../context/AuthContext';
 import { usePQC } from '../context/PQCContext';
 import API_ENDPOINTS from '../config';
 import { generateSymmetricKey, encryptSymmetric, decryptSymmetric, domainSeparate, SIGNING_CONTEXT } from '../utils/crypto';
+import { encryptSecretTitle, decryptSecretTitle, isEncryptedTitle, LOCKED_TITLE } from '../utils/titles';
 import { uploadChunkedFile, downloadChunkedFile, uploadMultipleChunkedFiles, downloadFileByRange, CHUNK_SIZE } from '../utils/fileChunks';
 
 export function useSecrets(authType, encryptionPublicKey, pqcAccount, options = {}) {
     const { token } = useAuth();
-    const { encrypt: encryptPQC, decrypt: decryptPQC, sign: signPQC } = usePQC();
+    const { encrypt: encryptPQC, decrypt: decryptPQC, decryptMany: decryptManyPQC, sign: signPQC } = usePQC();
     const { onProgress } = options;
 
     const [secrets, setSecrets] = useState([]);
     const [sharedSecrets, setSharedSecrets] = useState([]);
     const [loading, setLoading] = useState(true);
     const [decryptedSecrets, setDecryptedSecrets] = useState({});
+
+    // Per-item AES key cache (audit M-3: encrypted titles). Keyed by the
+    // owner's/grantee's encrypted_key blob so re-fetches and re-renders never
+    // re-prompt: keys learned at create/decrypt time are primed here, and the
+    // list-level batch decrypt fills the rest with ONE approval.
+    const fileKeyCache = useRef({});
 
     // Load secrets once authenticated. The fetchers close only over the
     // current token, so token is the only meaningful trigger.
@@ -29,6 +36,39 @@ export function useSecrets(authType, encryptionPublicKey, pqcAccount, options = 
         if (onProgress) onProgress(percent, msg);
     };
 
+    // Resolve display names for encrypted titles (audit M-3). Items whose
+    // fileKey isn't cached yet are batch-decrypted in ONE approval; items we
+    // can't decrypt render a locked placeholder instead of ciphertext.
+    // `getName`/`getKeyBlob` abstract over own secrets vs. shared grants.
+    const resolveTitles = async (items, getName, getKeyBlob) => {
+        const pending = [];
+        for (const it of items) {
+            const blob = getKeyBlob(it);
+            if (isEncryptedTitle(getName(it)) && blob && !(blob in fileKeyCache.current)) {
+                pending.push(blob);
+            }
+        }
+        if (pending.length > 0) {
+            try {
+                const keys = await decryptManyPQC(pending.map(b => JSON.parse(b)));
+                pending.forEach((blob, i) => {
+                    const k = keys[i];
+                    fileKeyCache.current[blob] = (k && !String(k).startsWith('Error')) ? k : null;
+                });
+            } catch (e) {
+                console.error("Title key batch decrypt failed", e);
+                pending.forEach((blob) => { fileKeyCache.current[blob] = null; });
+            }
+        }
+        return Promise.all(items.map(async (it) => {
+            const name = getName(it);
+            if (!isEncryptedTitle(name)) return { ...it, display_name: name };
+            const key = fileKeyCache.current[getKeyBlob(it)];
+            const plain = key ? await decryptSecretTitle(name, key) : null;
+            return { ...it, display_name: plain ?? LOCKED_TITLE };
+        }));
+    };
+
     const fetchSecrets = async () => {
         try {
             const res = await fetch(API_ENDPOINTS.SECRETS.LIST, {
@@ -36,7 +76,7 @@ export function useSecrets(authType, encryptionPublicKey, pqcAccount, options = 
             });
             if (res.ok) {
                 const data = await res.json();
-                setSecrets(data);
+                setSecrets(await resolveTitles(data, s => s.name, s => s.encrypted_key));
             }
         } catch (error) {
             console.error("Failed to fetch secrets", error);
@@ -52,7 +92,8 @@ export function useSecrets(authType, encryptionPublicKey, pqcAccount, options = 
             });
             if (res.ok) {
                 const data = await res.json();
-                setSharedSecrets(data);
+                // Grant objects: the title lives on grant.secret, the wrap on the grant.
+                setSharedSecrets(await resolveTitles(data, g => g.secret?.name, g => g.encrypted_key));
             }
         } catch (error) {
             console.error("Failed to fetch shared secrets", error);
@@ -81,6 +122,7 @@ export function useSecrets(authType, encryptionPublicKey, pqcAccount, options = 
 
             // 1. Decrypt AES Key
             const fileKey = await secureDecrypt(encKeyBlob);
+            fileKeyCache.current[encKeyBlob] = fileKey; // future title renders are free
 
             // 2. Decrypt Content
             reportProgress(50, 'Decrypting Content...');
@@ -331,8 +373,12 @@ export function useSecrets(authType, encryptionPublicKey, pqcAccount, options = 
             // 4. Encrypt AES Key for Owner (Me) — ML-KEM wrap.
             reportProgress(50, 'Encrypting Key...');
             const encryptedKeyForMe = JSON.stringify(await encryptPQC(fileKey, encryptionPublicKey));
+            // Prime the title-key cache: this fetch's re-render needs no prompt.
+            fileKeyCache.current[encryptedKeyForMe] = fileKey;
 
-            // 5. Send to API (creates the secret record)
+            // 5. Send to API (creates the secret record). The name is encrypted
+            //    under the item's own key (audit M-3) — the server never sees it,
+            //    and anyone with access to the item (grantees) can decrypt it.
             reportProgress(60, 'Creating secret...');
             const res = await fetch(API_ENDPOINTS.SECRETS.CREATE, {
                 method: 'POST',
@@ -341,7 +387,7 @@ export function useSecrets(authType, encryptionPublicKey, pqcAccount, options = 
                     'Authorization': `Bearer ${token}`
                 },
                 body: JSON.stringify({
-                    name,
+                    name: await encryptSecretTitle(name, fileKey),
                     type: secretType,
                     encrypted_data: encryptedDataStr,
                     encrypted_key: encryptedKeyForMe

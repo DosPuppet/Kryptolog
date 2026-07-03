@@ -314,6 +314,42 @@ class TestGroupAdmin:
         resp = client.get(f"/groups/{channel_id}", headers=auth_header(token1))
         assert resp.json()["name"] == "New Name"
 
+    def test_rename_permissions_owner_admin_only(self, client, user1, user2, user3):
+        """Renames carry the re-wrapped E2EE name blob (audit M-3): whoever can
+        ADD members (owner/admin) must be able to rename; plain members cannot."""
+        token1, u1 = user1
+        token2, u2 = user2
+        token3, u3 = user3
+        cid = client.post("/groups", json={
+            "name": "Perms", "member_addresses": [u2["address"], u3["address"]],
+        }, headers=auth_header(token1)).json()["id"]
+
+        # Plain member: rejected.
+        resp = client.put(f"/groups/{cid}", json={"name": "member-rename"},
+                          headers=auth_header(token2))
+        assert resp.status_code == 403
+
+        # Promoted to admin: allowed (needed to re-wrap the name on member add).
+        promote = client.put(f"/groups/{cid}/members/{u2['address']}/role",
+                             json={"role": "admin"}, headers=auth_header(token1))
+        assert promote.status_code == 200
+        resp = client.put(f"/groups/{cid}", json={"name": "admin-rename"},
+                          headers=auth_header(token2))
+        assert resp.status_code == 200
+        assert resp.json()["name"] == "admin-rename"
+
+    def test_name_blob_roundtrips_opaquely(self, client, user1, user2):
+        """The server stores E2EE name blobs verbatim — no parsing, no trimming
+        surprises — and serves them back to members."""
+        token1, _ = user1
+        _, u2 = user2
+        blob = "encg1:" + '{"ct": {"iv": "00", "content": "aa"}, "keys": {"x": {"kem": "bb", "iv": "01", "encKey": "cc"}}}'
+        cid = client.post("/groups", json={
+            "name": blob, "member_addresses": [u2["address"]],
+        }, headers=auth_header(token1)).json()["id"]
+        got = client.get(f"/groups/{cid}", headers=auth_header(token1)).json()
+        assert got["name"] == blob
+
 
 class TestOwnerLeave:
     """Q-1: the owner leaving must never orphan the channel — ownership is

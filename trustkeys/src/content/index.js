@@ -93,6 +93,10 @@ window.addEventListener('message', async (event) => {
                 const unwrapManyRes = await callBackground('UNWRAP_MANY_SESSION_KEYS', { wrappedKeys: payload.wrappedKeys });
                 result = unwrapManyRes.sessionKeys;
                 break;
+            case 'TRUSTKEYS_DECRYPT_MANY':
+                const decManyRes = await callBackground('DECRYPT_MANY', { items: payload.items });
+                result = decManyRes.results;
+                break;
             default:
                 return; // Ignore unknown types
         }

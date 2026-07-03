@@ -102,7 +102,7 @@ const SecretDetailsModal = ({ isOpen, onClose, secret }) => {
                 <div className="p-6 overflow-y-auto flex-1">
                     <div className="mb-6">
                         <h4 className="text-sm font-medium text-slate-500 uppercase mb-1">Secret Name</h4>
-                        <p className="text-lg font-semibold text-slate-900 dark:text-white">{secret?.name}</p>
+                        <p className="text-lg font-semibold text-slate-900 dark:text-white">{secret?.display_name ?? secret?.name}</p>
                     </div>
 
                     <h4 className="text-sm font-medium text-slate-500 uppercase mb-3 flex items-center gap-2">

@@ -27,8 +27,10 @@ const SecretList = ({ secrets, sharedSecrets = [], decryptedSecrets, onDecrypt, 
         return sorted;
     }, [sortBy]);
 
-    const sortedSecrets = useMemo(() => sortItems(secrets, (s, f) => s[f] || ''), [secrets, sortItems]);
-    const sortedShared = useMemo(() => sortItems(sharedSecrets, (g, f) => g.secret?.[f] || ''), [sharedSecrets, sortItems]);
+    // Sort by the DECRYPTED title when there is one (audit M-3) — sorting the
+    // ciphertext would shuffle items arbitrarily.
+    const sortedSecrets = useMemo(() => sortItems(secrets, (s, f) => (f === 'name' ? (s.display_name ?? s.name) : s[f]) || ''), [secrets, sortItems]);
+    const sortedShared = useMemo(() => sortItems(sharedSecrets, (g, f) => (f === 'name' ? (g.display_name ?? g.secret?.name) : g.secret?.[f]) || ''), [sharedSecrets, sortItems]);
 
     if (loading) {
         return (
@@ -121,7 +123,9 @@ const SecretList = ({ secrets, sharedSecrets = [], decryptedSecrets, onDecrypt, 
                                     ...grant.secret,
                                     id: grant.secret.id,
                                     isShared: true,
-                                    encrypted_key: grant.encrypted_key
+                                    encrypted_key: grant.encrypted_key,
+                                    // Decrypted title lives on the grant (audit M-3)
+                                    display_name: grant.display_name
                                 }}
                                 decryptedContent={decryptedSecrets[`shared_${grant.id}`]}
                                 onDecrypt={() => onDecrypt(grant, true)}

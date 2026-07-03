@@ -159,7 +159,8 @@ async def share_secret(request: Request, grant: schemas.AccessGrantCreate, curre
         db,
         grant.grantee_address.lower(),
         title="Secret Shared",
-        body=f"{sender_name} shared a secure secret with you: {secret.name}",
+        # Generic body: secret titles are E2EE blobs the server can't read (M-3).
+        body=f"{sender_name} shared a secure secret with you",
         data={"type": "secret_shared", "secret_id": secret.id}
     )
 

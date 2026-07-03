@@ -4,6 +4,7 @@ import { useAuth } from '../context/AuthContext';
 import { usePQC } from '../context/PQCContext';
 import { generateSymmetricKey, encryptSymmetric, domainSeparate, SIGNING_CONTEXT } from '../utils/crypto';
 import { assertSafeRecipient } from '../services/trustedKeys';
+import { encryptSecretTitle } from '../utils/titles';
 import API_ENDPOINTS from '../config';
 import { uploadChunkedFile, uploadMultipleChunkedFiles, CHUNK_SIZE } from '../utils/fileChunks';
 import { toast } from '../utils/toast';
@@ -250,9 +251,13 @@ export default function MultisigCreateModal({ isOpen, onClose, onCreated }) {
 
             setProgress(80);
             const payload = {
+                // The workflow label stays readable — it's the coordination handle
+                // every party (incl. pre-completion recipients) must see in lists.
                 name: name,
                 secret_data: {
-                    name: name,
+                    // The SECRET's title is E2EE under its fileKey (audit M-3):
+                    // owner/signers/recipients decrypt it via their key wraps.
+                    name: await encryptSecretTitle(name, fileKey),
                     type: secretType,
                     encrypted_data: encryptedDataStr, // The AES encrypted content
                     encrypted_key: encryptedKeyForMe  // The AES Key encrypted for ME

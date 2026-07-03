@@ -241,7 +241,7 @@ const SecretItem = ({ secret, decryptedContent, onDecrypt, onLock, onDelete, onS
                     </div>
                     <div className="flex-1 min-w-0">
                         <div className="flex items-center gap-2">
-                            <span className="font-semibold text-slate-900 dark:text-white truncate">{secret.name}</span>
+                            <span className="font-semibold text-slate-900 dark:text-white truncate">{secret.display_name ?? secret.name}</span>
                             <span className={`text-xs px-1.5 py-0.5 rounded ${typeColor} font-medium`}>
                                 {secret.type.replace('_', ' ')}
                             </span>
@@ -298,7 +298,7 @@ const SecretItem = ({ secret, decryptedContent, onDecrypt, onLock, onDelete, onS
                                 </div>
                                 <div className="flex items-center gap-2">
                                     <button
-                                        onClick={() => handleDownloadProof(secret.name, signedPayload)}
+                                        onClick={() => handleDownloadProof(secret.display_name ?? secret.name, signedPayload)}
                                         className="text-xs px-2 py-1 bg-purple-600 text-white rounded hover:bg-purple-500 transition-colors flex items-center gap-1"
                                     >
                                         <ShieldCheck className="w-3 h-3" /> Proof
@@ -365,7 +365,7 @@ const SecretItem = ({ secret, decryptedContent, onDecrypt, onLock, onDelete, onS
                                 <Lock className="w-5 h-5" />}
                     </div>
                     <div>
-                        <h3 className="font-bold text-slate-900 dark:text-white">{secret.name}</h3>
+                        <h3 className="font-bold text-slate-900 dark:text-white">{secret.display_name ?? secret.name}</h3>
                         <p className="text-xs text-slate-500 capitalize">{secret.type.replace('_', ' ')}</p>
                     </div>
                 </div>
@@ -402,7 +402,7 @@ const SecretItem = ({ secret, decryptedContent, onDecrypt, onLock, onDelete, onS
                             </div>
                             <div className="flex items-center gap-2">
                                 <button
-                                    onClick={() => handleDownloadProof(secret.name, signedPayload)}
+                                    onClick={() => handleDownloadProof(secret.display_name ?? secret.name, signedPayload)}
                                     className="text-xs px-3 py-1 bg-purple-600 text-white rounded hover:bg-purple-500 transition-colors flex items-center gap-1"
                                     title="Download cryptographic proof (signature + metadata)"
                                 >

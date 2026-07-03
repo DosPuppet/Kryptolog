@@ -56,7 +56,9 @@ const CreateGroupModal = ({ isOpen, onClose, onCreate }) => {
         if (!groupName.trim() || selectedMembers.length === 0) return;
         setCreating(true);
         try {
-            await onCreate(groupName.trim(), selectedMembers.map(m => m.address));
+            // Full user objects: the context needs members' encryption keys to
+            // wrap the E2EE channel name for them (audit M-3).
+            await onCreate(groupName.trim(), selectedMembers);
             onClose();
         } catch (e) {
             toast.error("Failed to create group: " + e.message);

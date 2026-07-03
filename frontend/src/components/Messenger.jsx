@@ -57,8 +57,8 @@ export default function Messenger() {
         loadConversation(user);
     };
 
-    const handleCreateGroup = async (name, memberAddresses) => {
-        const channel = await createGroup(name, memberAddresses);
+    const handleCreateGroup = async (name, members) => {
+        const channel = await createGroup(name, members);
         if (channel) {
             setActiveConversation(null);
             loadGroupConversation(channel);

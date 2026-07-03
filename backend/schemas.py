@@ -25,7 +25,9 @@ class UserResponse(UserBase):
     model_config = ConfigDict(from_attributes=True)
 
 class SecretBase(BaseModel):
-    name: str = Field(..., max_length=200)
+    # Encrypted title blob (audit M-3): marker + AES-GCM envelope JSON. Legacy
+    # plaintext names remain valid (they're just short strings).
+    name: str = Field(..., max_length=10_000)
     type: str = Field("standard") # 'standard' | 'signed_document'
     # 500KB limit for SecretBase.encrypted_data. Large files use FileChunks.
     encrypted_data: str = Field(..., max_length=500_000)
@@ -211,7 +213,9 @@ class HistoryRequest(BaseModel):
 # ── Group Channels ──────────────────────────────────────────────
 
 class GroupChannelCreate(BaseModel):
-    name: str = Field(..., min_length=1, max_length=100)
+    # Names are E2EE blobs (audit M-3): a per-member key-wrap map, so the cap
+    # scales with group size (~2.3KB/member) rather than title length.
+    name: str = Field(..., min_length=1, max_length=500_000)
     member_addresses: List[str] = Field(..., min_length=1)
 
 class GroupMemberResponse(BaseModel):
@@ -262,7 +266,8 @@ class GroupMemberRoleUpdate(BaseModel):
     role: str
 
 class GroupUpdate(BaseModel):
-    name: str = Field(..., max_length=20000)
+    # E2EE name blob — same sizing rationale as GroupChannelCreate.name.
+    name: str = Field(..., max_length=500_000)
 
 class Token(BaseModel):
     access_token: str

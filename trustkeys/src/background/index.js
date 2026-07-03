@@ -295,6 +295,10 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
                     await crypto.handleUnwrapManySessionKeysAsync(request, sender, sendResponse);
                     break;
                 }
+                case 'DECRYPT_MANY': {
+                    await crypto.handleDecryptManyAsync(request, sender, sendResponse);
+                    break;
+                }
             }
         } catch (error) {
             console.error('Background error:', error);

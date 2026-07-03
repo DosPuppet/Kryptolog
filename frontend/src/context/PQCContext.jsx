@@ -369,7 +369,13 @@ export const PQCProvider = ({ children }) => {
 
     const decryptMany = async (encryptedObjects) => {
         if (isExtensionAvailable && window.trustkeys) {
-            // Extension sequential fallback (or assume potential future batch support)
+            // Batch API: ONE approval popup for the whole set (audit M-3 —
+            // encrypted titles need every item's key on list render).
+            if (window.trustkeys.decryptMany) {
+                const results = await window.trustkeys.decryptMany(encryptedObjects);
+                return results.map(r => r === null ? "Error: Decryption Failed" : r);
+            }
+            // Older extension: sequential fallback (one popup per item).
             const results = [];
             for (const obj of encryptedObjects) {
                 try {

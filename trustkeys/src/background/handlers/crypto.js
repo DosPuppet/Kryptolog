@@ -178,6 +178,45 @@ export const handleUnwrapSessionKeyAsync = async (request, sender, sendResponse)
     await launchPopup('decrypt', { requestId: reqId });
 };
 
+// Batch decrypt of PQC envelopes ({kem, iv, content}) — ONE approval popup for
+// the whole set instead of one per item. Added for encrypted entry titles
+// (audit M-3): the dashboard needs every item's wrapped key decrypted to show
+// names, which would otherwise cost N popups per visit.
+export const handleDecryptManyAsync = async (request, sender, sendResponse) => {
+    if (state.isLocked) throw new Error("Locked");
+    const checkOrigin = getSenderOrigin(sender);
+    if (!checkOrigin || !state.vault.permissions[checkOrigin]) throw new Error("Site not connected");
+
+    const reqId = Math.random().toString(36).substr(2, 9);
+    state.pendingRequests.set(reqId, {
+        resolve: async () => {
+            const account = state.vault.accounts.find(a => a.id === state.vault.activeAccountId);
+            if (!account) return sendResponse({ success: false, error: "No active account" });
+
+            try {
+                const items = request.items;
+                if (!Array.isArray(items)) throw new Error("Invalid input");
+
+                const privKey = account.mlkem.privateKey;
+                const results = await Promise.all(items.map(async (blob) => {
+                    try {
+                        return await decryptMessage(blob, privKey);
+                    } catch (e) { return null; } // per-item failure -> null, not batch failure
+                }));
+                sendResponse({ success: true, results });
+            } catch (e) {
+                console.error("TrustKeys: Batch decrypt failed", e);
+                sendResponse({ success: false, error: "Batch decrypt failed: " + e.message });
+            }
+        },
+        reject: (err) => sendResponse({ success: false, error: err || "Rejected" }),
+        type: 'DECRYPT',
+        data: { origin: checkOrigin, count: request.items?.length }
+    });
+
+    await launchPopup('decrypt', { requestId: reqId });
+};
+
 // Batch Unwrap
 export const handleUnwrapManySessionKeysAsync = async (request, sender, sendResponse) => {
     if (state.isLocked) throw new Error("Locked");

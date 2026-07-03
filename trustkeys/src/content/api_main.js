@@ -67,6 +67,11 @@ window.trustkeys = {
     },
     unwrapManySessionKeys: async (wrappedKeys) => {
         return window.postMessagePromise({ type: 'TRUSTKEYS_UNWRAP_MANY_SESSION_KEYS', wrappedKeys });
+    },
+    // Batch PQC-envelope decrypt — one approval popup for the whole set (used
+    // for encrypted entry titles, audit M-3). Per-item failures return null.
+    decryptMany: async (items) => {
+        return window.postMessagePromise({ type: 'TRUSTKEYS_DECRYPT_MANY', items });
     }
 };
 

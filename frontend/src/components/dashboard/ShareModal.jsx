@@ -128,7 +128,7 @@ const ShareModal = ({ isOpen, onClose, secret, onShare }) => {
         <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 p-4">
             <div className="bg-white dark:bg-slate-850 border border-slate-200 dark:border-slate-700 rounded-xl p-6 w-full max-w-md animate-in fade-in zoom-in-95 flex flex-col max-h-[85vh]">
                 <div className="flex justify-between items-center mb-6 shrink-0">
-                    <h3 className="text-xl font-semibold text-slate-900 dark:text-white">Share "{secret?.name}"</h3>
+                    <h3 className="text-xl font-semibold text-slate-900 dark:text-white">Share "{secret?.display_name ?? secret?.name}"</h3>
                     <button onClick={onClose} className="text-slate-400 hover:text-slate-900 dark:hover:text-white transition-colors">
                         <X className="w-5 h-5" />
                     </button>

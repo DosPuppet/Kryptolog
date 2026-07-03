@@ -9,7 +9,7 @@ import { confirmDialog } from '../../utils/confirm';
 
 const GroupChatArea = ({ activeGroupConversation, onBack, onSend, loadingMessages, sending, onDecrypt }) => {
     const { user } = useAuth();
-    const { addGroupMember, removeGroupMember, updateGroupMemberRole, updateGroup } = useMessengerContext();
+    const { addGroupMember, removeGroupMember, updateGroupMemberRole, renameGroup } = useMessengerContext();
     const [inputText, setInputText] = useState('');
     const [showMembers, setShowMembers] = useState(false);
     const [isAddMemberModalOpen, setIsAddMemberModalOpen] = useState(false);
@@ -27,7 +27,7 @@ const GroupChatArea = ({ activeGroupConversation, onBack, onSend, loadingMessage
     const activeChannel = activeGroupConversation?.channel;
     if (activeChannel && activeChannel !== trackedChannel) {
         setTrackedChannel(activeChannel);
-        setEditNameValue(activeChannel.name);
+        setEditNameValue(activeChannel.display_name ?? activeChannel.name);
     }
 
     const handleSend = (e) => {
@@ -94,15 +94,17 @@ const GroupChatArea = ({ activeGroupConversation, onBack, onSend, loadingMessage
     };
 
     const handleRename = async () => {
-        if (!editNameValue.trim() || editNameValue === channel.name) {
+        if (!editNameValue.trim() || editNameValue === (channel.display_name ?? channel.name)) {
             setIsEditingName(false);
             return;
         }
         try {
-            await updateGroup(channel.id, { name: editNameValue });
+            // E2EE name (audit M-3): the context encrypts it for the current
+            // member set — the server only ever stores the blob.
+            await renameGroup(channel, editNameValue.trim());
             setIsEditingName(false);
         } catch (e) {
-            toast.error("Failed to rename group");
+            toast.error("Failed to rename group: " + e.message);
         }
     };
 
@@ -164,7 +166,7 @@ const GroupChatArea = ({ activeGroupConversation, onBack, onSend, loadingMessage
                         </div>
                     ) : (
                         <div className="group flex items-center gap-2">
-                            <h3 className="font-bold text-slate-900 dark:text-white truncate">{channel.name}</h3>
+                            <h3 className="font-bold text-slate-900 dark:text-white truncate">{channel.display_name ?? channel.name}</h3>
                             {isOwner && (
                                 <button onClick={() => setIsEditingName(true)} className="opacity-0 group-hover:opacity-100 p-1 text-slate-400 hover:text-indigo-500 transition-all">
                                     <Edit2 className="w-3 h-3" />

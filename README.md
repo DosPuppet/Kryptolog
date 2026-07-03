@@ -52,7 +52,7 @@ Two app processes run locally — the FastAPI API and the Vite dev server — on
 |---------|-------------|
 | **Post-Quantum Authentication** | TrustKeys / local-vault ML-DSA-44 login-challenge signatures; the server then issues an HS256 session JWT |
 | **Post-Quantum Cryptography** | ML-KEM-768 (FIPS 203) + ML-DSA-44 (FIPS 204), via `@noble/post-quantum` (clients) and `liboqs` (server) |
-| **Secret Vault** | E2EE secrets with hybrid encryption (ML-KEM-768 KEM + AES-GCM) |
+| **Secret Vault** | E2EE secrets with hybrid encryption (ML-KEM-768 KEM + AES-GCM) — **including entry titles** (the server stores only ciphertext names) |
 | **File Vault** | Chunked encrypted file upload/download (up to 50 MB) |
 | **Secure Sharing** | Re-wrap session keys for any recipient (ML-KEM-768) |
 | **Timebomb Access** | Share secrets with self-destruct timers (ephemeral grants) |
@@ -90,10 +90,13 @@ It is still **not** a full ratcheting protocol: within a session, messages are e
 long-term-key-derived session key, so it does **not** yet provide per-message **forward secrecy**
 or **post-compromise security** against compromise of a long-term private key.
 
-**Metadata**: "zero-knowledge" means content-blind, not metadata-blind. The server sees who
-talks to whom and when, group membership, and unread state — and currently also **plaintext
-entry titles** (secret/document/group names). Treat titles as non-sensitive for now (encrypting
-them is on the roadmap).
+**Metadata**: "zero-knowledge" means content-blind, not metadata-blind. **Entry titles are
+E2EE** — secret names travel encrypted under the item's own key (so exactly the people with
+access to an item can read its name) and group channel names under a per-member-wrapped key
+(rebuilt with a fresh key on rename, so ex-members can't read names chosen after they left);
+push notification bodies are generic so the server never needs a readable title. What the
+server still sees: the social graph (who talks to whom, when), group membership, and unread
+state.
 
 ---
 
