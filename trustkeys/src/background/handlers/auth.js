@@ -1,4 +1,4 @@
-import { fromHex, deriveKey, decryptVaultWithKey } from '../../utils/crypto.js';
+import { fromHex, deriveKey, decryptVaultWithKey, normalizeAccount } from '../../utils/crypto.js';
 import { state, setSessionPassword } from '../state.js';
 import { saveVault } from '../utils.js';
 
@@ -24,6 +24,11 @@ export const unlock = async (password) => {
         state.vault = await decryptVaultWithKey(vaultData, key); // throws on wrong password
         state.derivedKey = key;
         state.vaultSalt = salt;
+        // Migration: map legacy kyber/dilithium account fields to mlkem/mldsa
+        // (compat, crypto-core v1.2.0) so older vaults keep opening.
+        if (Array.isArray(state.vault.accounts)) {
+            state.vault.accounts = state.vault.accounts.map(normalizeAccount);
+        }
         // Migration: Ensure permissions + per-site capability objects exist
         if (!state.vault.permissions) state.vault.permissions = {};
         if (!state.vault.autoSignSites) state.vault.autoSignSites = {};

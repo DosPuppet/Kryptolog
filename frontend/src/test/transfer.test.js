@@ -26,7 +26,7 @@ describe('device key transfer helpers', () => {
     });
 
     it('encrypted vault blob round-trips with the transfer passphrase', async () => {
-        const vault = { accounts: [{ id: 'a', name: 'A', kyber: { privateKey: 'ab' }, dilithium: { privateKey: 'cd' } }], activeAccountId: 'a' };
+        const vault = { accounts: [{ id: 'a', name: 'A', mlkem: { privateKey: 'ab' }, mldsa: { privateKey: 'cd' } }], activeAccountId: 'a' };
         const pass = generateTransferCode();
         const blob = await encryptVault(vault, pass);
         // Server-relayed/serialized form.

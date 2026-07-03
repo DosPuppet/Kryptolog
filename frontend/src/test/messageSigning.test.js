@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import {
-    generateDilithiumKeyPair,
+    generateMlDsaKeyPair,
     signMessagePQC,
     verifySignaturePQC,
     messageSigningBody,
@@ -22,14 +22,14 @@ describe('message signing (S1)', () => {
     });
 
     it('a sender signature verifies against the sender public key', async () => {
-        const { publicKey, privateKey } = await generateDilithiumKeyPair();
+        const { publicKey, privateKey } = await generateMlDsaKeyPair();
         const body = messageSigningBody({ from: publicKey, conv: 'recipient', sid: 'sid1', ct: 'deadbeef' });
         const sig = await signMessagePQC(body, privateKey);
         expect(await verifySignaturePQC(body, sig, publicKey)).toBe(true);
     });
 
     it('verification fails if the ciphertext is tampered (re-attribution/forgery)', async () => {
-        const { publicKey, privateKey } = await generateDilithiumKeyPair();
+        const { publicKey, privateKey } = await generateMlDsaKeyPair();
         const body = messageSigningBody({ from: publicKey, conv: 'recipient', sid: 'sid1', ct: 'deadbeef' });
         const sig = await signMessagePQC(body, privateKey);
         const tampered = messageSigningBody({ from: publicKey, conv: 'recipient', sid: 'sid1', ct: 'deadbe00' });
@@ -41,7 +41,7 @@ describe('message signing (S1)', () => {
         // string. Regression for the ct-binding bug: previously the object coerced
         // to the constant "[object Object]", so any ciphertext verified under one
         // signature. The signed bytes must commit to the actual ciphertext.
-        const { publicKey, privateKey } = await generateDilithiumKeyPair();
+        const { publicKey, privateKey } = await generateMlDsaKeyPair();
         const ct = { iv: 'aabbccdd', content: '0011223344' };
         const body = messageSigningBody({ from: publicKey, conv: 'recipient', sid: 'sid1', ct });
         const sig = await signMessagePQC(body, privateKey);
@@ -52,8 +52,8 @@ describe('message signing (S1)', () => {
     });
 
     it("verification fails against a different sender's key (server can't forge as Alice)", async () => {
-        const alice = await generateDilithiumKeyPair();
-        const mallory = await generateDilithiumKeyPair();
+        const alice = await generateMlDsaKeyPair();
+        const mallory = await generateMlDsaKeyPair();
         const body = messageSigningBody({ from: alice.publicKey, conv: 'r', sid: 's', ct: 'cc' });
         const sig = await signMessagePQC(body, alice.privateKey);
         // Server swaps the claimed author to Mallory's key → signature no longer verifies.
@@ -61,7 +61,7 @@ describe('message signing (S1)', () => {
     });
 
     it('a message signature cannot be replayed as a login signature (domain separation)', async () => {
-        const { publicKey, privateKey } = await generateDilithiumKeyPair();
+        const { publicKey, privateKey } = await generateMlDsaKeyPair();
         const ct = 'abcd';
         const body = messageSigningBody({ from: publicKey, conv: 'r', sid: 's', ct });
         const sig = await signMessagePQC(body, publicKey ? privateKey : privateKey);
@@ -86,7 +86,7 @@ describe('group message channel binding (F-1)', () => {
     };
 
     it('verifies a group message delivered under the channel it was signed for', async () => {
-        const { publicKey, privateKey } = await generateDilithiumKeyPair();
+        const { publicKey, privateKey } = await generateMlDsaKeyPair();
         const sid = 's1', ct = 'deadbeef';
         const sig = await signGroupMessage(privateKey, publicKey, channelA, sid, ct);
         const msg = { sender_address: publicKey.toLowerCase(), channel_id: channelA };
@@ -95,7 +95,7 @@ describe('group message channel binding (F-1)', () => {
     });
 
     it('rejects a message re-homed into another channel (server cannot move a signed message)', async () => {
-        const { publicKey, privateKey } = await generateDilithiumKeyPair();
+        const { publicKey, privateKey } = await generateMlDsaKeyPair();
         const sid = 's1', ct = 'deadbeef';
         const sig = await signGroupMessage(privateKey, publicKey, channelA, sid, ct);
         // Malicious server serves the channel-A message inside channel B's history.
@@ -105,7 +105,7 @@ describe('group message channel binding (F-1)', () => {
     });
 
     it('rejects even when the server also rewrites gid to match the new channel', async () => {
-        const { publicKey, privateKey } = await generateDilithiumKeyPair();
+        const { publicKey, privateKey } = await generateMlDsaKeyPair();
         const sid = 's1', ct = 'deadbeef';
         const sig = await signGroupMessage(privateKey, publicKey, channelA, sid, ct);
         // gid rewritten to B too — conv now binds to channel_id, so the sig (over

@@ -14,8 +14,8 @@
 export * from '@kryptolog/crypto-core';
 
 import {
-    generateKyberKeyPair,
-    generateDilithiumKeyPair,
+    generateMlKemKeyPair,
+    generateMlDsaKeyPair,
 } from '@kryptolog/crypto-core';
 
 // PQC-suffixed aliases for the SPA's call sites (see note above).
@@ -27,14 +27,14 @@ export {
 } from '@kryptolog/crypto-core';
 
 export const generateAccount = async (name) => {
-    const kyber = await generateKyberKeyPair();
-    const dilithium = await generateDilithiumKeyPair();
+    const mlkem = await generateMlKemKeyPair();
+    const mldsa = await generateMlDsaKeyPair();
 
     return {
-        id: dilithium.publicKey, // Use Public Key as ID for consistency
+        id: mldsa.publicKey, // Use Public Key as ID for consistency
         name,
-        kyber,
-        dilithium,
+        mlkem,
+        mldsa,
         createdAt: Date.now(),
     };
 };

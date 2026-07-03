@@ -48,7 +48,7 @@ export const useMessengerContext = () => {
 
 export const MessengerProvider = ({ children }) => {
     const { user, token } = useAuth();
-    const { generateSessionKey, wrapSessionKey, unwrapSessionKey, unwrapManySessionKeys, kyberKey, signMessage } = usePQC();
+    const { generateSessionKey, wrapSessionKey, unwrapSessionKey, unwrapManySessionKeys, mlkemKey, signMessage } = usePQC();
 
     const [conversations, setConversations] = useState([]);
     const [activeConversation, setActiveConversation] = useState(null); // { user, messages: [] }
@@ -596,7 +596,7 @@ export const MessengerProvider = ({ children }) => {
                 sid = crypto.randomUUID();
                 sKey = await generateSessionKey();
                 const wRecip = await wrapSessionKey(sKey, recipientKey);
-                const myKey = user?.encryption_public_key || kyberKey;
+                const myKey = user?.encryption_public_key || mlkemKey;
                 const wSender = myKey ? await wrapSessionKey(sKey, myKey) : null;
                 keyPayload = { recip: wRecip, sender: wSender };
                 setSessionKeys(prev => ({ ...prev, [sid]: sKey }));

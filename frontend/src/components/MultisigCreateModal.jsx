@@ -9,7 +9,7 @@ import { toast } from '../utils/toast';
 
 export default function MultisigCreateModal({ isOpen, onClose, onCreated }) {
     const { user, token } = useAuth();
-    const { pqcAccount, encrypt: encryptPQC, kyberKey, sign: signPQC } = usePQC(); // PQC Hook
+    const { pqcAccount, encrypt: encryptPQC, mlkemKey, sign: signPQC } = usePQC(); // PQC Hook
 
     // Step 0: Secret Content
     // Step 1: Add Signers
@@ -217,7 +217,7 @@ export default function MultisigCreateModal({ isOpen, onClose, onCreated }) {
 
             // 3. Encrypt AES Key for Creator (Me)
             setProgress(20);
-            const encryptionPublicKey = kyberKey;
+            const encryptionPublicKey = mlkemKey;
             const encryptedKeyForMe = await secureEncrypt(fileKey, encryptionPublicKey);
 
             // 4. Encrypt AES Key for Signers

@@ -23,7 +23,11 @@ import { ml_dsa44 } from '@noble/post-quantum/ml-dsa.js';
 // 1.1.0: messageSigningBody now binds the actual ciphertext (the AES-GCM
 //        envelope object is serialized canonically instead of coercing to the
 //        constant "[object Object]"), so message signatures change.
-export const CRYPTO_CORE_VERSION = '1.1.0';
+// 1.2.0: account keypair fields renamed to their FIPS names — kyber → mlkem
+//        (ML-KEM-768), dilithium → mldsa (ML-DSA-44). New vaults/backups write
+//        the new fields; normalizeAccount() maps legacy fields on load so older
+//        vaults and exported backups still open.
+export const CRYPTO_CORE_VERSION = '1.2.0';
 
 // Helper: Uint8Array/Array <-> Hex. Deliberately Buffer-free so this package
 // stays a pure, runtime-agnostic ESM module (Node, browser SPA, MV3 extension)
@@ -143,8 +147,7 @@ export const generateTransferCode = () => {
 // --- PQC Implementations ---
 
 // ML-KEM-768 keypair (encryption / key encapsulation).
-// Name kept as "Kyber" for storage-schema and call-site stability.
-export const generateKyberKeyPair = async () => {
+export const generateMlKemKeyPair = async () => {
     try {
         const { publicKey, secretKey } = ml_kem768.keygen();
         return {
@@ -157,8 +160,8 @@ export const generateKyberKeyPair = async () => {
     }
 };
 
-// ML-DSA-44 keypair (signing). Name kept as "Dilithium" for stability.
-export const generateDilithiumKeyPair = async () => {
+// ML-DSA-44 keypair (signing).
+export const generateMlDsaKeyPair = async () => {
     try {
         const { publicKey, secretKey } = ml_dsa44.keygen();
         return {
@@ -169,6 +172,23 @@ export const generateDilithiumKeyPair = async () => {
         console.error("ML-DSA keygen failed", e);
         throw e;
     }
+};
+
+// Normalize a stored account to the current field names (compat, v1.2.0).
+// Older vaults and exported backups store an identity's keypairs under
+// `kyber`/`dilithium` — the pre-standardization names for ML-KEM / ML-DSA. Map
+// them to the current `mlkem`/`mldsa` fields on load/import so old data still
+// opens; new writes always use the new names. Idempotent, and legacy fields are
+// dropped from the result so a subsequent save re-persists only the new shape.
+export const normalizeAccount = (account) => {
+    if (!account || typeof account !== 'object') return account;
+    if (!account.kyber && !account.dilithium) return account; // already current
+    const { kyber, dilithium, ...rest } = account;
+    return {
+        ...rest,
+        mlkem: account.mlkem || kyber,
+        mldsa: account.mldsa || dilithium,
+    };
 };
 
 // ML-DSA-44 detached signature over the UTF-8 message bytes.

@@ -1,4 +1,4 @@
-import { encryptVault, decryptVault, encryptVaultWithKey, decryptVaultWithKey, deriveKey, fromHex, generateAccount, signMessagePQC, decryptMessagePQC, unwrapSessionKey, generateSessionKey, wrapSessionKey } from '../utils/crypto';
+import { encryptVault, decryptVault, encryptVaultWithKey, decryptVaultWithKey, deriveKey, fromHex, generateAccount, signMessagePQC, decryptMessagePQC, unwrapSessionKey, generateSessionKey, wrapSessionKey, normalizeAccount } from '../utils/crypto';
 
 class VaultService {
     constructor() {
@@ -67,12 +67,12 @@ class VaultService {
     _sanitize(account) {
         return {
             ...account,
-            dilithium: {
-                publicKey: account.dilithium.publicKey
+            mldsa: {
+                publicKey: account.mldsa.publicKey
                 // privateKey is REMOVED
             },
-            kyber: {
-                publicKey: account.kyber.publicKey
+            mlkem: {
+                publicKey: account.mlkem.publicKey
                 // privateKey is REMOVED
             }
         };
@@ -91,7 +91,7 @@ class VaultService {
             try {
                 const vault = await decryptVaultWithKey(encrypted, this._cachedKey);
                 this._touchCache();
-                return vault;
+                return this._normalizeVault(vault);
             } catch {
                 this.clearKeyCache(); // stale cache — fall through to password
             }
@@ -103,6 +103,17 @@ class VaultService {
         const key = await deriveKey(password, salt);
         const vault = await decryptVaultWithKey(encrypted, key);
         this._cacheKey(key, salt);
+        return this._normalizeVault(vault);
+    }
+
+    // Map legacy kyber/dilithium account fields to mlkem/mldsa on load (compat,
+    // crypto-core v1.2.0). Applied wherever a vault is decrypted from storage or
+    // an import, so all downstream code sees only the current field names; the
+    // next _save() then re-persists the normalized shape.
+    _normalizeVault(vault) {
+        if (vault && Array.isArray(vault.accounts)) {
+            vault.accounts = vault.accounts.map(normalizeAccount);
+        }
         return vault;
     }
 
@@ -174,21 +185,24 @@ class VaultService {
         if (!data.accounts || !Array.isArray(data.accounts) || data.accounts.length === 0) {
             throw new Error("Invalid vault file: no accounts found");
         }
-        for (const acc of data.accounts) {
-            if (!acc?.dilithium?.publicKey || !acc?.dilithium?.privateKey ||
-                !acc?.kyber?.publicKey || !acc?.kyber?.privateKey) {
+        // Accept both the current (mlkem/mldsa) and legacy (kyber/dilithium)
+        // field names from exported backups, then normalize to the new shape.
+        const accounts = data.accounts.map(normalizeAccount);
+        for (const acc of accounts) {
+            if (!acc?.mldsa?.publicKey || !acc?.mldsa?.privateKey ||
+                !acc?.mlkem?.publicKey || !acc?.mlkem?.privateKey) {
                 throw new Error("Invalid vault file: accounts are missing key material");
             }
             // Normalize id to the ML-DSA public key (matches setup/import conventions).
-            acc.id = acc.dilithium.publicKey;
+            acc.id = acc.mldsa.publicKey;
         }
 
         const activeAccountId = (data.activeAccountId &&
-            data.accounts.some(a => a.id === data.activeAccountId))
+            accounts.some(a => a.id === data.activeAccountId))
             ? data.activeAccountId
-            : data.accounts[0].id;
+            : accounts[0].id;
 
-        const fullVault = { accounts: data.accounts, activeAccountId };
+        const fullVault = { accounts, activeAccountId };
 
         // Encrypt + persist under the new password, then expose sanitized in memory.
         await this._save(fullVault, password);
@@ -213,8 +227,8 @@ class VaultService {
             const salt = fromHex(encrypted.salt);
             const key = await deriveKey(password, salt);
 
-            // 2. Decrypt with derived key
-            const fullVault = await decryptVaultWithKey(encrypted, key);
+            // 2. Decrypt with derived key (normalize legacy field names on load)
+            const fullVault = this._normalizeVault(await decryptVaultWithKey(encrypted, key));
 
             // 3. Cache the derived key
             this._cacheKey(key, salt);
@@ -258,7 +272,7 @@ class VaultService {
             const fullVault = await this._getFullVault(password);
             const account = fullVault.accounts.find(a => a.id === fullVault.activeAccountId);
             if (!account) throw new Error("Active account not found in vault");
-            this._signingKey = account.dilithium.privateKey;
+            this._signingKey = account.mldsa.privateKey;
         }
         return signMessagePQC(body, this._signingKey);
     }
@@ -277,8 +291,8 @@ class VaultService {
             isActive: a.id === this.vault.activeAccountId,
             createdAt: a.createdAt,
             // Public keys are available if needed for UI, but no private keys
-            dilithiumPublicKey: a.dilithium.publicKey,
-            kyberPublicKey: a.kyber.publicKey
+            mldsaPublicKey: a.mldsa.publicKey,
+            mlkemPublicKey: a.mlkem.publicKey
         }));
     }
 
@@ -409,10 +423,12 @@ class VaultService {
             const fullVault = await this._getFullVault(password);
 
             let addedCount = 0;
-            for (const acc of data.accounts) {
+            for (const rawAcc of data.accounts) {
+                // Accept legacy kyber/dilithium backups, then normalize.
+                const acc = normalizeAccount(rawAcc);
                 // FORCE ID normalization
-                if (acc.dilithium && acc.dilithium.publicKey) {
-                    acc.id = acc.dilithium.publicKey;
+                if (acc.mldsa && acc.mldsa.publicKey) {
+                    acc.id = acc.mldsa.publicKey;
                 }
 
                 const existingIndex = fullVault.accounts.findIndex(existing => existing.id === acc.id);
@@ -449,7 +465,7 @@ class VaultService {
         if (!account) throw new Error("Active account not found in vault");
 
         // 2. USE KEY
-        const signature = await signMessagePQC(message, account.dilithium.privateKey);
+        const signature = await signMessagePQC(message, account.mldsa.privateKey);
 
         // 3. DISCARD (fullVault goes out of scope)
         return signature;
@@ -465,7 +481,7 @@ class VaultService {
         if (!account) throw new Error("Active account not found in vault");
 
         // 2. USE KEY
-        const plaintext = await decryptMessagePQC(encryptedData, account.kyber.privateKey);
+        const plaintext = await decryptMessagePQC(encryptedData, account.mlkem.privateKey);
 
         // 3. DISCARD
         return plaintext;
@@ -484,7 +500,7 @@ class VaultService {
         // We catch errors per message so one failure doesn't break all
         return await Promise.all(encryptedItems.map(async (item) => {
             try {
-                return await decryptMessagePQC(item, account.kyber.privateKey);
+                return await decryptMessagePQC(item, account.mlkem.privateKey);
             } catch (e) {
                 console.error("Failed to decrypt message:", e);
                 return "Error: Decryption Failed";
@@ -513,7 +529,7 @@ class VaultService {
         if (!account) throw new Error("Active account not found");
 
         // 2. Unwrap
-        return await unwrapSessionKey(wrappedKey, account.kyber.privateKey);
+        return await unwrapSessionKey(wrappedKey, account.mlkem.privateKey);
     }
 
     async unwrapManySessionKeys(wrappedKeys, password) {
@@ -524,7 +540,7 @@ class VaultService {
         const account = fullVault.accounts.find(a => a.id === fullVault.activeAccountId);
         if (!account) throw new Error("Active account not found");
 
-        const privKey = account.kyber.privateKey;
+        const privKey = account.mlkem.privateKey;
 
         // 2. Unwrap All
         // We run these in parallel since we have the key

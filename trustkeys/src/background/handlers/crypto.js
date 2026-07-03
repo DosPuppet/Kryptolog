@@ -11,7 +11,7 @@ export const handleSignAsync = async (request, sender, sendResponse) => {
         const account = state.vault.accounts.find(a => a.id === state.vault.activeAccountId);
         if (!account) throw new Error("No active account");
 
-        const signature = await signMessage(request.message, account.dilithium.privateKey);
+        const signature = await signMessage(request.message, account.mldsa.privateKey);
         sendResponse({ success: true, signature });
         return;
     }
@@ -27,7 +27,7 @@ export const handleSignAsync = async (request, sender, sendResponse) => {
         resolve: async () => {
             const account = state.vault.accounts.find(a => a.id === state.vault.activeAccountId);
             if (!account) return sendResponse({ success: false, error: "No active account" });
-            const signature = await signMessage(request.message, account.dilithium.privateKey);
+            const signature = await signMessage(request.message, account.mldsa.privateKey);
             sendResponse({ success: true, signature });
         },
         reject: (err) => sendResponse({ success: false, error: err || "Rejected" }),
@@ -72,7 +72,7 @@ export const handleSignMessage = async (request, sender, sendResponse) => {
     const account = state.vault.accounts.find(a => a.id === state.vault.activeAccountId);
     if (!account) return sendResponse({ success: false, error: "No active account" });
 
-    const signature = await signMessage(message, account.dilithium.privateKey);
+    const signature = await signMessage(message, account.mldsa.privateKey);
     sendResponse({ success: true, signature });
 };
 
@@ -91,7 +91,7 @@ export const handleEncrypt = async (request) => {
         if (state.isLocked) throw new Error("Locked");
         const account = state.vault.accounts.find(a => a.id === state.vault.activeAccountId);
         if (!account) throw new Error("No active account");
-        pubKey = account.kyber.publicKey;
+        pubKey = account.mlkem.publicKey;
     }
     const result = await encryptMessage(request.message, pubKey);
     return { success: true, result };
@@ -121,7 +121,7 @@ export const handleDecryptAsync = async (request, sender, sendResponse) => {
         resolve: async () => {
             const account = state.vault.accounts.find(a => a.id === state.vault.activeAccountId);
             if (!account) return sendResponse({ success: false, error: "No active account" });
-            const decrypted = await decryptMessage(request.data, account.kyber.privateKey);
+            const decrypted = await decryptMessage(request.data, account.mlkem.privateKey);
             sendResponse({ success: true, decrypted });
         },
         reject: (err) => sendResponse({ success: false, error: err || "Rejected" }),
@@ -144,7 +144,7 @@ export const handleUnwrapSessionKeyAsync = async (request, sender, sendResponse)
             if (!account) return sendResponse({ success: false, error: "No active account" });
 
             try {
-                const sessionKey = await unwrapSessionKey(request.wrappedKey, account.kyber.privateKey);
+                const sessionKey = await unwrapSessionKey(request.wrappedKey, account.mlkem.privateKey);
                 sendResponse({ success: true, sessionKey });
             } catch (e) {
                 console.error("TrustKeys: Unwrap failed", e);
@@ -175,7 +175,7 @@ export const handleUnwrapManySessionKeysAsync = async (request, sender, sendResp
                 const wrappedKeys = request.wrappedKeys;
                 if (!Array.isArray(wrappedKeys)) throw new Error("Invalid input");
 
-                const privKey = account.kyber.privateKey;
+                const privKey = account.mlkem.privateKey;
                 const results = await Promise.all(wrappedKeys.map(async (blob) => {
                     try {
                         return await unwrapSessionKey(blob, privKey);

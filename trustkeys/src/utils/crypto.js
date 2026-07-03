@@ -13,19 +13,19 @@
 export * from '@kryptolog/crypto-core';
 
 import {
-    generateKyberKeyPair,
-    generateDilithiumKeyPair,
+    generateMlKemKeyPair,
+    generateMlDsaKeyPair,
 } from '@kryptolog/crypto-core';
 
 export const generateAccount = async (name) => {
-    const kyber = await generateKyberKeyPair();
-    const dilithium = await generateDilithiumKeyPair();
+    const mlkem = await generateMlKemKeyPair();
+    const mldsa = await generateMlDsaKeyPair();
 
     return {
         id: crypto.randomUUID(),
         name,
-        kyber,
-        dilithium,
+        mlkem,
+        mldsa,
         createdAt: Date.now(),
     };
 };

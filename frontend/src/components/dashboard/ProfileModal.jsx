@@ -8,14 +8,14 @@ import { safetyNumber } from '../../utils/fingerprint';
 
 const ProfileModal = ({ isOpen, onClose }) => {
     const { user, setUser, token } = useAuth();
-    const { pqcAccount, kyberKey } = usePQC();
+    const { pqcAccount, mlkemKey } = usePQC();
 
     const [username, setUsername] = useState(user?.username || '');
     const [updating, setUpdating] = useState(false);
     const [error, setError] = useState('');
 
     // PQC identity (ML-KEM encryption key + ML-DSA account id).
-    const encryptionPublicKey = kyberKey;
+    const encryptionPublicKey = mlkemKey;
     const accountId = pqcAccount;
 
     // Your verifiable safety number (audit S1) — read it out to a contact so
