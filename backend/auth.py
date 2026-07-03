@@ -95,6 +95,18 @@ def _login_message(nonce: str, encryption_public_key: str | None = None) -> str:
     return _domain_separate(_CTX_LOGIN, body)
 
 
+_CTX_KEY_ATTESTATION = "key-attestation"
+
+
+def encryption_key_attestation_message(mlkem_public_key_hex: str) -> str:
+    """The self-attestation a user signs over their own ML-KEM key (audit M-1).
+    Peers verify it against the user's address (= ML-DSA public key) before
+    encrypting to that key, so the directory can't substitute a key it controls.
+    The server verifies it at login too (hygiene: never store a bad attestation).
+    Must be byte-identical to crypto-core's encryptionKeyAttestationBody()."""
+    return _domain_separate(_CTX_KEY_ATTESTATION, f"mlkem={mlkem_public_key_hex}")
+
+
 _CTX_MULTISIG = "multisig-approval"
 
 

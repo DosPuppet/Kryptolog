@@ -4,6 +4,7 @@ import { useAuth } from '../context/AuthContext';
 import { usePQC } from '../context/PQCContext';
 import API_ENDPOINTS from '../config';
 import { verifySignaturePQC, domainSeparate, SIGNING_CONTEXT, sha256Hex, multisigApprovalMessage } from '../utils/crypto';
+import { assertSafeRecipient } from '../services/trustedKeys';
 import { downloadChunkedFile, downloadFileByRange } from '../utils/fileChunks';
 
 // verifyTarget describes exactly what the signer signed:
@@ -499,6 +500,9 @@ export default function MultisigWorkflow({ workflow, onClose, onUpdate, onDelete
                     if (!pubKey) continue;
 
                     try {
+                        // Attestation gate (audit M-1): the final release is exactly
+                        // where a substituted recipient key would leak the secret.
+                        await assertSafeRecipient({ ...r.user, address: r.user_address });
                         // ML-KEM wrap of the file key for this recipient.
                         recipientKeys[r.user_address] = JSON.stringify(await encryptPQC(fileKey, pubKey));
                     } catch (encErr) {

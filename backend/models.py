@@ -22,6 +22,12 @@ class User(Base):
     # (audit S1: key-directory transparency). Lets clients surface "this contact's
     # key changed on <date>" and detect a malicious/compromised key swap.
     key_changed_at = Column(DateTime, nullable=True)
+    # Self-signed binding of encryption_public_key to this identity (audit M-1):
+    # an ML-DSA-44 signature (hex) by `address` over the domain-separated
+    # key-attestation message. Peers verify it client-side before wrapping keys
+    # to this user, so the directory can't substitute a KEM key it controls.
+    # Null = account predates attestations (clients show "unverified").
+    encryption_key_attestation = Column(Text, nullable=True)
     # Bumped on logout / revoke-all; JWTs carry the version they were minted with
     # and are rejected once it no longer matches (token revocation).
     token_version = Column(Integer, nullable=False, default=0, server_default="0")

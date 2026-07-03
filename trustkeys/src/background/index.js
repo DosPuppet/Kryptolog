@@ -254,6 +254,20 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
                     sendResponse(res);
                     break;
                 }
+                case 'GET_KEY_ATTESTATION': {
+                    // Same sender gating as GET_ACTIVE_ACCOUNT (audit M4): internal
+                    // pages pass, external callers need their authoritative origin
+                    // to be a connected site. No popup — see handler comment.
+                    const isInternal = isInternalSender(sender);
+                    const checkOrigin = isInternal ? null : getSenderOrigin(sender);
+                    if (!isInternal && !checkOrigin) {
+                        sendResponse({ success: false, error: "Unknown sender origin" });
+                        break;
+                    }
+                    const res = await crypto.handleGetKeyAttestation(request, sender, isInternal, checkOrigin);
+                    sendResponse(res);
+                    break;
+                }
                 case 'ENCRYPT': {
                     const res = await crypto.handleEncrypt(request);
                     sendResponse(res);

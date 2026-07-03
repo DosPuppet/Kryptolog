@@ -44,6 +44,10 @@ window.addEventListener('message', async (event) => {
                 const signMsgRes = await callBackground('SIGN_MESSAGE', { message: payload.message });
                 result = signMsgRes.signature;
                 break;
+            case 'TRUSTKEYS_GET_KEY_ATTESTATION':
+                const attRes = await callBackground('GET_KEY_ATTESTATION');
+                result = attRes.attestation;
+                break;
             case 'TRUSTKEYS_VERIFY':
                 const verifyRes = await callBackground('VERIFY', {
                     message: payload.message,

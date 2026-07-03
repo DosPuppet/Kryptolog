@@ -28,6 +28,7 @@ describe('golden constants (wire/storage format contract)', () => {
             CONTENT: 'content',
             MULTISIG_APPROVAL: 'multisig-approval',
             MESSAGE: 'message',
+            KEY_ATTESTATION: 'key-attestation',
         });
     });
 
@@ -186,8 +187,41 @@ describe('account field-name compat (v1.2.0: kyber/dilithium -> mlkem/mldsa)', (
     });
 });
 
+describe('encryption-key attestation (audit M-1, v1.3.0)', () => {
+    it('attestation body is byte-exact (server must build the identical string)', () => {
+        expect(core.encryptionKeyAttestationBody('aabb'))
+            .toBe('Kryptolog Signed Message v1\ncontext=key-attestation\nmlkem=aabb');
+    });
+
+    it('self-signed attestation round-trips and rejects a substituted KEM key', async () => {
+        const mldsa = await core.generateMlDsaKeyPair();
+        const mlkem = await core.generateMlKemKeyPair();
+        const evil = await core.generateMlKemKeyPair();
+
+        const att = await core.attestEncryptionKey(mlkem.publicKey, mldsa.privateKey);
+        // Peer verifies against the address (= ML-DSA public key).
+        expect(await core.verifyEncryptionKeyAttestation(mldsa.publicKey, mlkem.publicKey, att)).toBe(true);
+        // A directory that swaps in another KEM key fails verification.
+        expect(await core.verifyEncryptionKeyAttestation(mldsa.publicKey, evil.publicKey, att)).toBe(false);
+        // Wrong identity fails too.
+        const other = await core.generateMlDsaKeyPair();
+        expect(await core.verifyEncryptionKeyAttestation(other.publicKey, mlkem.publicKey, att)).toBe(false);
+        // Missing pieces fail closed.
+        expect(await core.verifyEncryptionKeyAttestation(mldsa.publicKey, mlkem.publicKey, null)).toBe(false);
+    });
+
+    it('keyFingerprint is deterministic, input-sensitive, and 12 groups of 5 digits', async () => {
+        const fp1 = await core.keyFingerprint('addr1', 'kem1');
+        const fp2 = await core.keyFingerprint('addr1', 'kem1');
+        const fp3 = await core.keyFingerprint('addr1', 'kem2');
+        expect(fp1).toBe(fp2);
+        expect(fp1).not.toBe(fp3);
+        expect(fp1).toMatch(/^\d{5}( \d{5}){11}$/);
+    });
+});
+
 describe('single-source / version guard', () => {
     it('exports a version both app builds can assert against', () => {
-        expect(core.CRYPTO_CORE_VERSION).toBe('1.2.0');
+        expect(core.CRYPTO_CORE_VERSION).toBe('1.3.0');
     });
 });

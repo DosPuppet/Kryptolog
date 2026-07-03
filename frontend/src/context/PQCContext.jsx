@@ -2,7 +2,7 @@ import { createContext, useContext, useState, useEffect } from 'react';
 import API_ENDPOINTS from '../config';
 import { useAuth } from './AuthContext';
 import { vaultService } from '../services/vault';
-import { domainSeparate, SIGNING_CONTEXT } from '../utils/crypto';
+import { domainSeparate, SIGNING_CONTEXT, encryptionKeyAttestationBody } from '../utils/crypto';
 import { toast } from '../utils/toast';
 
 const PQCContext = createContext();
@@ -106,7 +106,7 @@ export const PQCProvider = ({ children }) => {
         setModalConfig({ ...modalConfig, isOpen: false, resolve: null, reject: null });
     };
 
-    const performServerLogin = async (accountId, encryptionKey, signFn, username = null, inviteCode = null) => {
+    const performServerLogin = async (accountId, encryptionKey, signFn, username = null, inviteCode = null, attestFn = null) => {
         // 1. Get Nonce
         const nonceRes = await fetch(API_ENDPOINTS.AUTH.NONCE(accountId));
         if (!nonceRes.ok) throw new Error("Failed to fetch nonce");
@@ -121,6 +121,21 @@ export const PQCProvider = ({ children }) => {
         const message = domainSeparate(SIGNING_CONTEXT.LOGIN, body);
         const signature = await signFn(message);
 
+        // 2b. Key attestation (audit M-1): self-sign our own ML-KEM key so peers
+        //     can verify the directory's key binding against our address. Custody
+        //     paths that can't produce one (older extension) proceed without —
+        //     the account just shows as "unverified" to contacts.
+        let attestation = null;
+        if (encryptionKey) {
+            try {
+                attestation = attestFn
+                    ? await attestFn()
+                    : await signFn(encryptionKeyAttestationBody(encryptionKey));
+            } catch (e) {
+                console.warn("Key attestation unavailable, continuing without:", e);
+            }
+        }
+
         // 3. Verify on Backend
         const loginRes = await fetch(API_ENDPOINTS.AUTH.LOGIN, {
             method: 'POST',
@@ -130,6 +145,7 @@ export const PQCProvider = ({ children }) => {
                 signature,
                 nonce,
                 encryption_public_key: encryptionKey,
+                encryption_key_attestation: attestation || undefined,
                 username: username, // Send preferred username
                 // Only meaningful on first-login (server ignores it for existing
                 // identities). Collected on the create/import screens (audit §5).
@@ -175,7 +191,13 @@ export const PQCProvider = ({ children }) => {
 
         // inviteCode is only consulted server-side when this is a new identity and
         // invites are required (audit §5); harmless otherwise.
-        return performServerLogin(accountId, encryptionKey, (msg) => window.trustkeys.sign(msg), tkAccount.name, inviteCode);
+        // Attestation comes from the dedicated popup-free extension API (it signs
+        // a fixed, self-referential message — nothing site-controlled). An older
+        // extension without it logs in fine, just without an attestation.
+        const attestFn = window.trustkeys.getKeyAttestation
+            ? () => window.trustkeys.getKeyAttestation()
+            : () => null;
+        return performServerLogin(accountId, encryptionKey, (msg) => window.trustkeys.sign(msg), tkAccount.name, inviteCode, attestFn);
     };
 
     const loginLocalVault = async (password) => {

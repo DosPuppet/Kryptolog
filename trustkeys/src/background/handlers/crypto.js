@@ -1,4 +1,4 @@
-import { signMessage, encryptMessage, decryptMessage, verifySignature, generateSessionKey, wrapSessionKey, unwrapSessionKey, MESSAGE_SIGNING_PREFIX } from '../../utils/crypto.js';
+import { signMessage, encryptMessage, decryptMessage, verifySignature, generateSessionKey, wrapSessionKey, unwrapSessionKey, attestEncryptionKey, MESSAGE_SIGNING_PREFIX } from '../../utils/crypto.js';
 import { state } from '../state.js';
 import { launchPopup, isInternalSender, getSenderOrigin, isDevOrigin } from '../utils.js';
 
@@ -74,6 +74,25 @@ export const handleSignMessage = async (request, sender, sendResponse) => {
 
     const signature = await signMessage(message, account.mldsa.privateKey);
     sendResponse({ success: true, signature });
+};
+
+// Encryption-key attestation (audit M-1): the active account self-signs its
+// OWN ML-KEM public key so peers (and the server) can verify the directory's
+// key binding against the account's identity. No approval popup: the message
+// is fixed and built entirely here — the site supplies nothing — and it can
+// only ever bind this account's own keys together. Requires unlock + (for
+// external callers) a connected origin, same gate as getActiveAccount.
+export const handleGetKeyAttestation = async (request, sender, isInternal, senderOrigin) => {
+    if (state.isLocked) throw new Error("Locked");
+    if (!isInternal && (!senderOrigin || !state.vault.permissions[senderOrigin])) {
+        throw new Error("Site not connected");
+    }
+
+    const account = state.vault.accounts.find(a => a.id === state.vault.activeAccountId);
+    if (!account) throw new Error("No active account");
+
+    const attestation = await attestEncryptionKey(account.mlkem.publicKey, account.mldsa.privateKey);
+    return { success: true, attestation };
 };
 
 export const handleVerify = async (request) => {

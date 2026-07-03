@@ -49,11 +49,22 @@ def login(request: Request, login_req: schemas.LoginRequest, db: Session = Depen
 
     if not auth.verify_signature(address, login_req.nonce, login_req.signature, login_req.encryption_public_key):
         raise HTTPException(status_code=401, detail="Invalid signature")
-    
+
+    # Key attestation (audit M-1): a self-signature by `address` over its own
+    # ML-KEM key. Peers verify it client-side; the server checks it here too so
+    # an invalid one is never stored. Optional (older clients don't send it).
+    attestation = login_req.encryption_key_attestation
+    if attestation:
+        if not login_req.encryption_public_key:
+            raise HTTPException(status_code=400, detail="Attestation without an encryption key")
+        att_msg = auth.encryption_key_attestation_message(login_req.encryption_public_key)
+        if not auth.verify_message_signature(address, att_msg, attestation):
+            raise HTTPException(status_code=400, detail="Invalid encryption key attestation")
+
     # Cleanup nonce (Anti-replay)
     db.delete(nonce_entry)
     db.commit()
-    
+
     # Find or create user
     user = db.query(models.User).filter(models.User.address == address).first()
     if not user:
@@ -71,6 +82,7 @@ def login(request: Request, login_req: schemas.LoginRequest, db: Session = Depen
         user = models.User(
             address=address,
             encryption_public_key=login_req.encryption_public_key,
+            encryption_key_attestation=attestation,
             username=default_username
         )
         db.add(user)
@@ -101,9 +113,16 @@ def login(request: Request, login_req: schemas.LoginRequest, db: Session = Depen
         if user.encryption_public_key:
             user.key_changed_at = datetime.now(timezone.utc)
         user.encryption_public_key = login_req.encryption_public_key
+        # The old attestation signed the old key — never leave a stale one.
+        user.encryption_key_attestation = attestation
         db.commit()
         db.refresh(user)
     else:
+        # Backfill: an account that predates attestations (or whose earlier
+        # client didn't send one) starts attesting its unchanged key.
+        if attestation and not user.encryption_key_attestation:
+            user.encryption_key_attestation = attestation
+            db.commit()
         # Ensure we refresh even if no changes to get latest state
         db.refresh(user)
     

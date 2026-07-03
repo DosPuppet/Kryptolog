@@ -27,6 +27,12 @@ window.trustkeys = {
     sign: async (message) => {
         return window.postMessagePromise({ type: 'TRUSTKEYS_SIGN', message });
     },
+    // Self-signed binding of the active account's ML-KEM key to its identity
+    // (audit M-1). Popup-free: the signed message is fixed and self-referential —
+    // the page supplies nothing.
+    getKeyAttestation: async () => {
+        return window.postMessagePromise({ type: 'TRUSTKEYS_GET_KEY_ATTESTATION' });
+    },
     // Silent chat-message signing (audit S1): auto-signs only `message`-domain
     // payloads, so the dApp can authenticate messages without a popup per send.
     signMessage: async (message) => {

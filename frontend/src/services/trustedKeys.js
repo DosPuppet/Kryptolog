@@ -7,6 +7,8 @@
 // worthless here — a malicious server simply wouldn't send it. Stored locally,
 // never transmitted.
 
+import { verifyEncryptionKeyAttestation } from '../utils/crypto';
+
 const STORE_KEY = 'kryptolog_trusted_keys';
 
 const load = () => {
@@ -51,3 +53,38 @@ export const trustContactKey = (address, encryptionPublicKey) => {
 };
 
 export const getTrustedKey = (address) => load()[norm(address)] || null;
+
+// --- Encryption-key attestation (audit M-1) ---
+// TOFU above detects a key CHANGE; the attestation proves the key BINDING:
+// the contact self-signed their ML-KEM key with their identity (ML-DSA) key,
+// and the address IS that identity key, so verification needs no trusted
+// third party. A directory that substitutes a KEM key it controls cannot
+// forge this signature.
+
+// 'verified'   — attestation present and cryptographically valid
+// 'unattested' — no attestation (account predates the feature / old client)
+// 'invalid'    — attestation present but WRONG: treat as an active key-swap
+//                attack and refuse to encrypt to this key.
+export const attestationStatus = async (user) => {
+    if (!user?.encryption_public_key || !user?.encryption_key_attestation) return 'unattested';
+    const ok = await verifyEncryptionKeyAttestation(
+        norm(user.address),
+        user.encryption_public_key,
+        user.encryption_key_attestation,
+    );
+    return ok ? 'verified' : 'invalid';
+};
+
+// Fail-closed guard for every place we wrap a key to a contact. Throws on an
+// invalid attestation; passes 'verified' and (for compat) 'unattested'.
+export const assertSafeRecipient = async (user) => {
+    const status = await attestationStatus(user);
+    if (status === 'invalid') {
+        throw new Error(
+            `Key verification failed for ${user.username || user.address?.slice(0, 12) + '…'}: ` +
+            'their encryption key does not match their identity signature. ' +
+            'The directory may be serving a substituted key — do not send.'
+        );
+    }
+    return status;
+};

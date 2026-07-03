@@ -3,6 +3,7 @@ import { useAuth } from './AuthContext';
 import { usePQC } from './PQCContext';
 import API_ENDPOINTS from '../config';
 import { encryptWithSessionKey, decryptWithSessionKey, messageSigningBody, verifySignaturePQC } from '../utils/crypto';
+import { assertSafeRecipient, attestationStatus } from '../services/trustedKeys';
 import { toast } from '../utils/toast';
 
 // Verify a message's end-to-end signature (audit S1). Rebuilds the exact bytes
@@ -593,6 +594,9 @@ export const MessengerProvider = ({ children }) => {
             let keyPayload = null;
 
             if (!sKey) {
+                // Attestation gate (audit M-1): refuse to wrap a fresh session key
+                // to a key that FAILS its identity binding (throws on 'invalid').
+                await assertSafeRecipient(partnerUser);
                 sid = crypto.randomUUID();
                 sKey = await generateSessionKey();
                 const wRecip = await wrapSessionKey(sKey, recipientKey);
@@ -781,6 +785,15 @@ export const MessengerProvider = ({ children }) => {
                 for (const member of members) {
                     const pubKey = member.user?.encryption_public_key;
                     if (pubKey) {
+                        // Attestation gate (audit M-1): never wrap the group key to a
+                        // member whose key fails its identity binding — skipping keeps
+                        // the rest of the group working while that key can't read.
+                        const status = await attestationStatus({ ...member.user, address: member.user_address });
+                        if (status === 'invalid') {
+                            console.error(`Skipping ${member.user_address}: encryption key failed attestation`);
+                            toast.error(`Key verification failed for a member (${(member.user?.username) || member.user_address.slice(0, 12) + '…'}) — they were excluded from this message.`);
+                            continue;
+                        }
                         wrappedKeys[member.user_address] = await wrapSessionKey(sKey, pubKey);
                     }
                 }

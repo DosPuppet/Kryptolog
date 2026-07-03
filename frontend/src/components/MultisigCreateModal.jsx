@@ -3,6 +3,7 @@ import { X, Search, Plus, Trash2, Check, FileText, ArrowRight, Upload } from 'lu
 import { useAuth } from '../context/AuthContext';
 import { usePQC } from '../context/PQCContext';
 import { generateSymmetricKey, encryptSymmetric, domainSeparate, SIGNING_CONTEXT } from '../utils/crypto';
+import { assertSafeRecipient } from '../services/trustedKeys';
 import API_ENDPOINTS from '../config';
 import { uploadChunkedFile, uploadMultipleChunkedFiles, CHUNK_SIZE } from '../utils/fileChunks';
 import { toast } from '../utils/toast';
@@ -225,6 +226,9 @@ export default function MultisigCreateModal({ isOpen, onClose, onCreated }) {
             const signerKeys = {};
             for (const s of signers) {
                 if (!s.encryption_public_key) continue;
+                // Attestation gate (audit M-1): fail creation rather than wrap the
+                // secret's key to a key that fails its identity binding.
+                await assertSafeRecipient(s);
                 signerKeys[s.address] = await secureEncrypt(fileKey, s.encryption_public_key);
             }
 
@@ -240,6 +244,7 @@ export default function MultisigCreateModal({ isOpen, onClose, onCreated }) {
             const recipientKeys = {};
             for (const r of recipients) {
                 if (!r.encryption_public_key) continue;
+                await assertSafeRecipient(r); // audit M-1, same gate as signers
                 recipientKeys[r.address] = await secureEncrypt(fileKey, r.encryption_public_key);
             }
 

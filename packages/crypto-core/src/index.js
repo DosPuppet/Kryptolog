@@ -27,7 +27,11 @@ import { ml_dsa44 } from '@noble/post-quantum/ml-dsa.js';
 //        (ML-KEM-768), dilithium → mldsa (ML-DSA-44). New vaults/backups write
 //        the new fields; normalizeAccount() maps legacy fields on load so older
 //        vaults and exported backups still open.
-export const CRYPTO_CORE_VERSION = '1.2.0';
+// 1.3.0: encryption-key attestation (audit M-1) — an identity self-signs its
+//        ML-KEM key under the `key-attestation` context so peers can verify the
+//        directory's key binding offline; keyFingerprint() renders the pair as
+//        a Signal-style safety number for out-of-band comparison.
+export const CRYPTO_CORE_VERSION = '1.3.0';
 
 // Helper: Uint8Array/Array <-> Hex. Deliberately Buffer-free so this package
 // stays a pure, runtime-agnostic ESM module (Node, browser SPA, MV3 extension)
@@ -80,6 +84,7 @@ export const SIGNING_CONTEXT = Object.freeze({
     CONTENT: 'content',
     MULTISIG_APPROVAL: 'multisig-approval',
     MESSAGE: 'message',
+    KEY_ATTESTATION: 'key-attestation',
 });
 const DS_HEADER = 'Kryptolog Signed Message v1';
 export const domainSeparate = (context, body) => `${DS_HEADER}\ncontext=${context}\n${body}`;
@@ -113,6 +118,43 @@ export const sha256Hex = async (str) => {
     const bytes = new TextEncoder().encode(str);
     const digest = await crypto.subtle.digest('SHA-256', bytes);
     return toHex(new Uint8Array(digest));
+};
+
+// --- Encryption-key attestation (audit M-1) ---
+// The address IS the ML-DSA public key (self-certifying), but the ML-KEM
+// encryption key is a separate directory field the server could lie about. An
+// identity therefore SELF-SIGNS its own ML-KEM key: peers verify the signature
+// against the address before wrapping anything to that key, so a malicious
+// directory can no longer substitute a KEM key it controls. The message is
+// fixed and self-referential (never site- or peer-supplied), and the
+// `key-attestation` context keeps it disjoint from login/content/message
+// signatures. The server stores + verifies it too (backend
+// auth.encryption_key_attestation_message must stay byte-identical).
+export const encryptionKeyAttestationBody = (mlkemPublicKeyHex) =>
+    domainSeparate(SIGNING_CONTEXT.KEY_ATTESTATION, `mlkem=${mlkemPublicKeyHex}`);
+
+export const attestEncryptionKey = async (mlkemPublicKeyHex, mldsaPrivateKeyHex) =>
+    signMessage(encryptionKeyAttestationBody(mlkemPublicKeyHex), mldsaPrivateKeyHex);
+
+export const verifyEncryptionKeyAttestation = async (addressHex, mlkemPublicKeyHex, signatureHex) => {
+    if (!addressHex || !mlkemPublicKeyHex || !signatureHex) return false;
+    return verifySignature(encryptionKeyAttestationBody(mlkemPublicKeyHex), signatureHex, addressHex);
+};
+
+// Safety-number fingerprint of an identity + its encryption key, for manual
+// out-of-band comparison (both parties read the SAME number for a contact —
+// it's a digest of the contact's keys, not of the pair of participants).
+// SHA-256 over the attestation body → 60 decimal digits in 12 groups of 5,
+// Signal-style: digits are easier to read aloud / compare than hex.
+export const keyFingerprint = async (addressHex, mlkemPublicKeyHex) => {
+    const hex = await sha256Hex(`fingerprint\naddr=${addressHex}\nmlkem=${mlkemPublicKeyHex}`);
+    const groups = [];
+    for (let i = 0; i < 12; i++) {
+        // 5 hex chars (20 bits) per group → mod 100000 keeps 5 decimal digits.
+        const chunk = parseInt(hex.slice(i * 5, i * 5 + 5), 16) % 100000;
+        groups.push(String(chunk).padStart(5, '0'));
+    }
+    return groups.join(' ');
 };
 
 // Server-verifiable multisig approval message (audit M1). A signer approves a

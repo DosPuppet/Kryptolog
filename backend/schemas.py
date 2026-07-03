@@ -18,6 +18,9 @@ class UserResponse(UserBase):
     # When this identity's encryption key last changed (audit S1). Null = never
     # changed since creation. Clients use it to flag/verify key swaps.
     key_changed_at: Optional[datetime] = None
+    # Self-signed ML-KEM key attestation (audit M-1) — peers verify this against
+    # the address before encrypting to encryption_public_key.
+    encryption_key_attestation: Optional[str] = None
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -103,6 +106,9 @@ class LoginRequest(BaseModel):
     signature: str = Field(..., max_length=64_000)
     nonce: str = Field(..., max_length=200)
     encryption_public_key: Optional[str] = Field(None, max_length=20000)
+    # Self-signed attestation of encryption_public_key (audit M-1). Optional for
+    # compat with older clients; verified server-side when present.
+    encryption_key_attestation: Optional[str] = Field(None, max_length=64_000)
     username: Optional[str] = Field(None, max_length=200)
     # Access filter (audit §5): only consulted when the server requires invites
     # AND this is a brand-new identity. Ignored for existing users.
