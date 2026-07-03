@@ -1,5 +1,5 @@
 #!/bin/bash
-# Run FastAPI backend with hot-reload, excluding SQLite journal files to prevent crashes
+# Run FastAPI backend with hot-reload
 
 # Set allow origins for development (Vite default + Self)
 export ALLOWED_ORIGINS="http://localhost:5173,http://127.0.0.1:5173"
@@ -23,4 +23,4 @@ fi
 
 # Start FastAPI Backend
 echo "Starting FastAPI Backend..."
-uvicorn main:app --reload --reload-exclude "*.db" --reload-exclude "*.db-journal" --port 8000 --h11-max-incomplete-event-size 65536
+uvicorn main:app --reload --port 8000 --h11-max-incomplete-event-size 65536

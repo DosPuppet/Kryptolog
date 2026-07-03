@@ -100,6 +100,23 @@ jobs:
   backend:
     name: backend (pytest + PQC interop)
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: kryptolog
+          POSTGRES_PASSWORD: kryptolog
+          POSTGRES_DB: kryptolog
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U kryptolog -d kryptolog"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+    env:
+      DATABASE_URL: postgresql+psycopg://kryptolog:kryptolog@localhost:5432/kryptolog
+      TEST_DATABASE_URL: postgresql+psycopg://kryptolog:kryptolog@localhost:5432/kryptolog_test
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -112,6 +129,13 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y cmake gcc g++ libssl-dev ninja-build
       - name: Install Python dependencies (runtime + test)
         run: pip install -r requirements-dev.txt
+        working-directory: backend
+      - name: Create test database
+        run: psql "postgresql://kryptolog:kryptolog@localhost:5432/kryptolog" -c "CREATE DATABASE kryptolog_test OWNER kryptolog;"
+      - name: Validate migration chain on Postgres
+        # Full upgrade against a real Postgres — catches dialect-specific DDL
+        # breakage (incl. the users.address btree-index-size risk) on every push.
+        run: alembic upgrade head
         working-directory: backend
       - name: Run tests
         # A fresh venv has none of the Ethereum-era packages, so the stale

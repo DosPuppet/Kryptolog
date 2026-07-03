@@ -1,7 +1,12 @@
 # Roadmap: Migrate backend from SQLite to PostgreSQL
 
-> Status: **planned** (not started). Design of record for the SQLite → Postgres
-> cutover. See also the shared crypto/PQC context in `CLAUDE.md`.
+> Status: **implemented** (branch `postgres-migration`, 2026-07-03). All
+> verification steps below ran clean locally (migration chain up/down/up on
+> Postgres 16, 162 tests passed, app boot + real-signature login/multisig E2E);
+> CI green pending push. Postgres enforcing FKs surfaced two latent app bugs
+> that SQLite masked — invite consumption ordering and unvalidated multisig
+> participants — fixed as part of this migration (see git log). Design of
+> record for the SQLite → Postgres cutover follows.
 
 ## Context
 

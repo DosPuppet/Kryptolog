@@ -68,6 +68,18 @@ def login(request: Request, login_req: schemas.LoginRequest, db: Session = Depen
                 detail=f"Username '{default_username}' is already taken. Please choose a different one."
             )
 
+        user = models.User(
+            address=address,
+            encryption_public_key=login_req.encryption_public_key,
+            username=default_username
+        )
+        db.add(user)
+        # Flush (don't commit) so the invite's used_by FK can see the new user
+        # while keeping user creation + invite consumption a single atomic
+        # transaction: a failed consume rolls the user back, and a crash can't
+        # burn a code without creating the user.
+        db.flush()
+
         # Access filter (audit §5): a brand-new identity may only be created with a
         # valid invite code when invites are required. Consumed atomically so the
         # same code can't be over-spent. Existing users never reach this branch.
@@ -75,14 +87,9 @@ def login(request: Request, login_req: schemas.LoginRequest, db: Session = Depen
         # avoid turning this into an invite-code oracle.
         if config.invites_required():
             if not invites.consume_invite(db, login_req.invite_code, used_by=address):
+                db.rollback()
                 raise HTTPException(status_code=403, detail="A valid invite code is required to register.")
 
-        user = models.User(
-            address=address, 
-            encryption_public_key=login_req.encryption_public_key,
-            username=default_username
-        )
-        db.add(user)
         db.commit()
         db.refresh(user)
     elif login_req.encryption_public_key and user.encryption_public_key != login_req.encryption_public_key:

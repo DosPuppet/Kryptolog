@@ -65,10 +65,12 @@ def list_users(request: Request, search: str = None, only_pqc: bool = False, lim
         # Reject too-short substring searches to limit directory enumeration.
         if len(term) < MIN_SEARCH_LEN:
             return []
+        # ilike: LIKE is case-insensitive on SQLite but case-sensitive on
+        # Postgres — the directory search must match regardless of case.
         search_pattern = f"%{term.lower()}%"
         query = query.filter(
-            (models.User.address.like(search_pattern)) |
-            (models.User.username.like(search_pattern))
+            (models.User.address.ilike(search_pattern)) |
+            (models.User.username.ilike(search_pattern))
         )
 
     if only_pqc:

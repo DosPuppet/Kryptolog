@@ -22,6 +22,16 @@ target_metadata = Base.metadata
 # Alembic Config object
 config = context.config
 
+# The app's DATABASE_URL is the single source of truth — override whatever
+# placeholder alembic.ini carries so the app engine and Alembic always target
+# the same database (incl. the startup upgrade in main.py).
+from database import SQLALCHEMY_DATABASE_URL
+config.set_main_option("sqlalchemy.url", SQLALCHEMY_DATABASE_URL)
+
+# Batch mode is only needed for SQLite's limited ALTER TABLE; on Postgres it
+# must be off so migrations execute plain DDL.
+is_sqlite = SQLALCHEMY_DATABASE_URL.startswith("sqlite")
+
 # Interpret the config file for Python logging
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)
@@ -38,7 +48,7 @@ def run_migrations_offline() -> None:
         target_metadata=target_metadata,
         literal_binds=True,
         dialect_opts={"paramstyle": "named"},
-        render_as_batch=True,  # Required for SQLite ALTER TABLE support
+        render_as_batch=is_sqlite,  # SQLite-only ALTER TABLE workaround
     )
 
     with context.begin_transaction():
@@ -60,7 +70,7 @@ def run_migrations_online() -> None:
         context.configure(
             connection=connection,
             target_metadata=target_metadata,
-            render_as_batch=True,  # Required for SQLite ALTER TABLE support
+            render_as_batch=is_sqlite,  # SQLite-only ALTER TABLE workaround
         )
 
         with context.begin_transaction():

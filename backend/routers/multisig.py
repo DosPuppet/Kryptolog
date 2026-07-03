@@ -26,6 +26,21 @@ def create_multisig_workflow(request: Request, workflow: schemas.MultisigWorkflo
             detail="threshold must be between 1 and the number of signers",
         )
 
+    # 0.1 Signer/recipient rows carry an FK to users (enforced on Postgres) —
+    # reject unknown addresses up front instead of failing the insert.
+    participant_addrs = {a.lower() for a in workflow.signers} | {a.lower() for a in workflow.recipients}
+    known = {
+        addr
+        for (addr,) in db.query(models.User.address).filter(
+            models.User.address.in_(participant_addrs)
+        )
+    }
+    if participant_addrs - known:
+        raise HTTPException(
+            status_code=400,
+            detail="All signers and recipients must be registered users",
+        )
+
     # 1. Create the Secret (Owned by Creator)
     new_secret = models.Secret(
         owner_address=current_user.address,

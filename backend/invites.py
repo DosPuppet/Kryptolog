@@ -28,7 +28,11 @@ def generate_code() -> str:
 def consume_invite(db: Session, code: str, used_by: str | None) -> bool:
     """Atomically redeem one use of `code`. Returns True iff a valid, unexpired,
     not-yet-exhausted code was consumed. The guard lives in the WHERE clause, so
-    the UPDATE only ever affects a row that is still spendable."""
+    the UPDATE only ever affects a row that is still spendable.
+
+    Does NOT commit — the caller owns the transaction. `used_by` has an FK to
+    users (enforced on Postgres), so the caller must flush the new user row
+    first and commit user + invite together."""
     if not code:
         return False
 
@@ -52,7 +56,6 @@ def consume_invite(db: Session, code: str, used_by: str | None) -> bool:
             synchronize_session=False,
         )
     )
-    db.commit()
     return affected == 1
 
 

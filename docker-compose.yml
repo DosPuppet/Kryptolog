@@ -1,0 +1,27 @@
+# Local Postgres for the Kryptolog backend, matching the default DATABASE_URL
+# in backend/database.py. Start with:
+#   docker compose up -d postgres
+# First start also creates the `kryptolog_test` database (init script below).
+# If your volume predates that script, create it once by hand:
+#   docker compose exec postgres createdb -U kryptolog kryptolog_test
+
+services:
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: kryptolog
+      POSTGRES_PASSWORD: kryptolog
+      POSTGRES_DB: kryptolog
+    ports:
+      - "5432:5432"
+    volumes:
+      - kryptolog-pgdata:/var/lib/postgresql/data
+      - ./scripts/postgres-init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U kryptolog -d kryptolog"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+volumes:
+  kryptolog-pgdata:

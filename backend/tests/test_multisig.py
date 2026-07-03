@@ -1,6 +1,8 @@
 """Tests for /multisig endpoints — workflow creation, signing, completion."""
 
-from conftest import auth_header
+import pytest
+
+from conftest import auth_header, do_login, TEST_ENCRYPTION_KEY
 
 
 def _create_workflow(client, token, signer_addresses, recipient_addresses=None, threshold=None):
@@ -161,10 +163,16 @@ class TestSignWorkflow:
 RECIPIENT_ADDRESS = "recipient_" + "r" * 100
 
 
+@pytest.fixture()
+def recipient_user(client):
+    """Recipients must be registered users (FK to users, enforced on Postgres)."""
+    do_login(client, RECIPIENT_ADDRESS, TEST_ENCRYPTION_KEY, "Recipient")
+
+
 class TestRecipientKeyRelease:
     """M1: recipient keys may only be (re)written by the COMPLETING signer."""
 
-    def test_recipient_keys_rejected_on_non_final_sign(self, client, user1, user2):
+    def test_recipient_keys_rejected_on_non_final_sign(self, client, user1, user2, recipient_user):
         token1, u1 = user1
         token2, u2 = user2
         wf_id = _create_workflow(
@@ -184,7 +192,7 @@ class TestRecipientKeyRelease:
         rec = next(r for r in wf["recipients"] if r["user_address"] == RECIPIENT_ADDRESS)
         assert rec["encrypted_key"] == f"enc_key_for_{RECIPIENT_ADDRESS}"
 
-    def test_recipient_keys_accepted_on_final_sign(self, client, user1, user2):
+    def test_recipient_keys_accepted_on_final_sign(self, client, user1, user2, recipient_user):
         token1, _ = user1
         token2, u2 = user2
         wf_id = _create_workflow(
@@ -246,7 +254,7 @@ class TestThreshold:
         # ge=1 on the field → 422; an explicit <1 guard would be 400. Accept either.
         assert resp.status_code in (400, 422)
 
-    def test_completing_signer_may_release_under_threshold(self, client, user1, user2, user3):
+    def test_completing_signer_may_release_under_threshold(self, client, user1, user2, user3, recipient_user):
         """Under a 2-of-3 threshold, the 2nd (completing) signer releases keys."""
         token1, u1 = user1
         token2, u2 = user2

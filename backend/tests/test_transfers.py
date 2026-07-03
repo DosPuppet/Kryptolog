@@ -43,9 +43,10 @@ class TestClaimTransfer:
     def test_expired_transfer_is_404(self, client, db_session):
         token, _ = do_login(client, TEST_USER_ADDRESS, TEST_ENCRYPTION_KEY, "A")
         tid = client.post("/transfers", json={"ciphertext": BLOB}, headers=auth_header(token)).json()["id"]
-        # Force-expire the row.
+        # Force-expire the row. Naive UTC to match the column convention — an
+        # aware datetime gets shifted through the Postgres session timezone.
         from datetime import datetime, timezone, timedelta
         row = db_session.query(models.KeyTransfer).filter(models.KeyTransfer.id == tid).first()
-        row.expires_at = datetime.now(timezone.utc) - timedelta(minutes=1)
+        row.expires_at = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(minutes=1)
         db_session.commit()
         assert client.get(f"/transfers/{tid}").status_code == 404

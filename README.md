@@ -34,8 +34,8 @@ The application runs **2 processes locally**: a FastAPI REST API and a Vite dev 
 └──────────┬──────────────────┘
            │
     ┌──────▼──────┐
-    │   SQLite    │
-    │ sql_app.db  │
+    │ PostgreSQL  │
+    │  kryptolog  │
     └─────────────┘
 ```
 
@@ -81,6 +81,7 @@ or **post-compromise security** against compromise of a long-term private key.
 | Tool | Version | Notes |
 |------|---------|-------|
 | **Python** | 3.10+ | Backend API |
+| **PostgreSQL** | 16 | Backend database. Easiest: `docker compose up -d postgres` at the repo root; or point `DATABASE_URL` at an existing instance. |
 | **CMake + C compiler** | Latest | Required to build `liboqs` (the backend's PQC library). `pip install cmake` works; any system `gcc`/`clang` is fine. |
 | **Node.js** | 22.x | Frontend + extension build |
 | **npm** | 10.x | Comes with Node.js |
@@ -98,6 +99,17 @@ cd kryptolog
 ```
 
 ### 2. Backend setup
+
+#### Database (PostgreSQL)
+
+```bash
+# From the repo root — starts Postgres 16 on localhost:5432 and creates the
+# kryptolog + kryptolog_test databases (matches the default DATABASE_URL).
+docker compose up -d postgres
+```
+
+To use an external Postgres instead, set `DATABASE_URL` in `backend/.env`
+(see `.env.example`). Migrations run automatically at backend startup.
 
 ```bash
 cd backend
@@ -253,6 +265,11 @@ npm run dev
 
 ### Backend (pytest)
 
+The suite runs against a real PostgreSQL database — the `kryptolog_test` DB
+created by `docker compose up -d postgres` (override with `TEST_DATABASE_URL`).
+It creates and drops all tables around every test, so never point it at a
+database you care about.
+
 ```bash
 cd backend
 source ../.venv/bin/activate
@@ -373,7 +390,7 @@ examples unchanged (push notifications stay off until VAPID keys are set).
 |-----------|------------|
 | Web framework | FastAPI ≥0.128 |
 | ORM | SQLAlchemy ≥2.0.46 |
-| Database | SQLite (via `sql_app.db`) |
+| Database | PostgreSQL 16 (psycopg 3; `docker compose up -d postgres` for local dev, `DATABASE_URL` to override) |
 | Migrations | Alembic ≥1.13 |
 | HTTP client | httpx ≥0.27 |
 | Validation | Pydantic ≥2.12 |

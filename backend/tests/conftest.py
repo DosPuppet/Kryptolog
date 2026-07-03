@@ -1,10 +1,12 @@
 """
 Shared test fixtures for Kryptolog backend tests.
 
-Uses an in-memory SQLite database. PQC signing now runs in-process via liboqs
-(ML-DSA-44) — there is no sidecar to mock. We only stub the login-challenge
-check `auth.verify_signature` (tests post a placeholder client signature);
-JWT issuance and verification run for real against an ephemeral server key.
+Runs against a real PostgreSQL database (TEST_DATABASE_URL, defaulting to the
+`kryptolog_test` DB on the docker-compose Postgres). PQC signing runs
+in-process via liboqs (ML-DSA-44) — there is no sidecar to mock. We only stub
+the login-challenge check `auth.verify_signature` (tests post a placeholder
+client signature); JWT issuance and verification run for real against an
+ephemeral server key.
 """
 
 import sys, os
@@ -13,6 +15,16 @@ from unittest.mock import patch
 
 # Ensure backend root is importable
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
+
+TEST_DATABASE_URL = os.getenv(
+    "TEST_DATABASE_URL",
+    "postgresql+psycopg://kryptolog:kryptolog@localhost:5432/kryptolog_test",
+)
+
+# Must be set before importing `database`/`main`: main.py runs an Alembic
+# upgrade at import time against DATABASE_URL, which must hit the test DB —
+# never the dev database.
+os.environ["DATABASE_URL"] = TEST_DATABASE_URL
 
 # Fake VAPID keys for testing
 os.environ["VAPID_PUBLIC_KEY"] = "fake_pub"
@@ -28,16 +40,9 @@ from database import get_db
 from main import app
 
 
-# ---------- Database (in-memory, shared across a single test) ----------
+# ---------- Database (real Postgres, fresh schema per test) ----------
 
-# Use a single in-memory DB with StaticPool to share across threads
-from sqlalchemy.pool import StaticPool
-
-engine = create_engine(
-    "sqlite://",
-    connect_args={"check_same_thread": False},
-    poolclass=StaticPool,
-)
+engine = create_engine(TEST_DATABASE_URL, pool_pre_ping=True)
 TestingSessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
 
