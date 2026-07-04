@@ -738,15 +738,8 @@
                 const raw = document.getElementById('batchCiphertexts').value.trim();
                 if (!raw) { alert('Enter a JSON array of ciphertexts'); return; }
 
-                let items;
-                try {
-                    items = JSON.parse(raw);
-                    if (!Array.isArray(items)) {
-                        throw new Error("Input must be a JSON array");
-                    }
-                } catch (e) {
-                    throw new Error("Invalid JSON: " + e.message);
-                }
+                const items = JSON.parse(raw);
+                if (!Array.isArray(items)) { alert('Input must be a JSON array'); return; }
 
                 log(`Calling decryptMany(${items.length} items)...`);
                 const results = await window.trustkeys.decryptMany(items);

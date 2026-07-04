@@ -8,7 +8,7 @@ import {
     SIGNING_CONTEXT,
     domainSeparate,
 } from '../utils/crypto';
-import { verifyMessageAuthenticity } from '../context/MessengerContext';
+import { verifyMessageAuthenticity } from '../context/messenger/verifyMessage';
 
 // Audit S1: messages are signed end-to-end and verified against the sender's
 // ML-DSA public key (== sender_address).

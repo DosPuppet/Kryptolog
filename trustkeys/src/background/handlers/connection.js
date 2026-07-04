@@ -24,38 +24,6 @@ export const handleCheckConnection = (origin) => {
     return { success: true, connected: isConnected };
 };
 
-export const handleConnect = async (origin) => {
-    if (state.isLocked) {
-        await launchPopup();
-        return { success: false, error: "Locked - Please unlock extension" };
-    }
-
-    if (state.vault.permissions[origin]) {
-        return { success: true };
-    }
-
-    const reqId = Math.random().toString(36).substr(2, 9);
-
-    const promise = new Promise((resolve) => {
-        state.pendingRequests.set(reqId, {
-            resolve: () => {
-                state.vault.permissions[origin] = true;
-                saveVault(getSessionPassword());
-                resolve({ success: true });
-            },
-            reject: (err) => {
-                resolve({ success: false, error: err || "Rejected" });
-            },
-            type: 'CONNECT',
-            data: { origin }
-        });
-    });
-
-    await launchPopup('connect', { requestId: reqId, origin });
-    return promise;
-};
-
-// Refined handleConnect accepting sendResponse
 export const handleConnectAsync = async (origin, sendResponse) => {
     if (state.isLocked) {
         await launchPopup();

@@ -1,5 +1,11 @@
-import { encryptVault, decryptVault, encryptVaultWithKey, decryptVaultWithKey, deriveKey, fromHex, generateAccount, signMessagePQC, decryptMessagePQC, unwrapSessionKey, generateSessionKey, wrapSessionKey, normalizeAccount } from '../utils/crypto';
+import { encryptVault, decryptVaultWithKey, encryptVaultWithKey, deriveKey, fromHex, generateAccount, signMessagePQC, decryptMessagePQC, unwrapSessionKey, generateSessionKey, wrapSessionKey, normalizeAccount } from '../utils/crypto';
+import { backupMethods } from './vaultBackup';
+import { biometricMethods } from './vaultBiometrics';
 
+// Core key-custody service: encrypted-vault storage, derived-key session cache,
+// lock/unlock, account CRUD, and the on-demand private-key operations.
+// Backup/transfer (vaultBackup.js) and biometric unlock (vaultBiometrics.js)
+// methods are merged onto the prototype below — one singleton, one API.
 class VaultService {
     constructor() {
         this.vault = null; // Will ONLY contain sanitized accounts (No Private Keys)
@@ -165,57 +171,6 @@ class VaultService {
         return this._sanitize(account);
     }
 
-    // Create a BRAND-NEW local vault from an exported backup (.json from
-    // exportVault). Used on a clean device where no vault exists yet. The backup
-    // holds plaintext accounts; we re-encrypt them under a new local password.
-    async importNewVault(jsonString, password) {
-        if (this.hasVault()) {
-            throw new Error("A vault already exists on this device. Import accounts from Settings instead.");
-        }
-        if (!password || password.length < 6) {
-            throw new Error("Password must be at least 6 characters");
-        }
-
-        let data;
-        try {
-            data = JSON.parse(jsonString);
-        } catch {
-            throw new Error("Invalid file: not valid JSON");
-        }
-        if (!data.accounts || !Array.isArray(data.accounts) || data.accounts.length === 0) {
-            throw new Error("Invalid vault file: no accounts found");
-        }
-        // Accept both the current (mlkem/mldsa) and legacy (kyber/dilithium)
-        // field names from exported backups, then normalize to the new shape.
-        const accounts = data.accounts.map(normalizeAccount);
-        for (const acc of accounts) {
-            if (!acc?.mldsa?.publicKey || !acc?.mldsa?.privateKey ||
-                !acc?.mlkem?.publicKey || !acc?.mlkem?.privateKey) {
-                throw new Error("Invalid vault file: accounts are missing key material");
-            }
-            // Normalize id to the ML-DSA public key (matches setup/import conventions).
-            acc.id = acc.mldsa.publicKey;
-        }
-
-        const activeAccountId = (data.activeAccountId &&
-            accounts.some(a => a.id === data.activeAccountId))
-            ? data.activeAccountId
-            : accounts[0].id;
-
-        const fullVault = { accounts, activeAccountId };
-
-        // Encrypt + persist under the new password, then expose sanitized in memory.
-        await this._save(fullVault, password);
-        this.vault = {
-            accounts: fullVault.accounts.map(acc => this._sanitize(acc)),
-            activeAccountId
-        };
-        this.isLocked = false;
-
-        const active = fullVault.accounts.find(a => a.id === activeAccountId);
-        return this._sanitize(active);
-    }
-
     async unlock(password) {
         const encryptedJson = localStorage.getItem('kryptolog_vault');
         if (!encryptedJson) throw new Error("No vault found");
@@ -357,104 +312,6 @@ class VaultService {
         this.vault.accounts = this.vault.accounts.filter(a => a.id !== id);
     }
 
-    async exportVault(password) {
-        if (this.isLocked) throw new Error("Vault locked");
-        const fullVault = await this._getFullVault(password);
-        // Export plaintext (sensitive!)
-        return JSON.stringify(fullVault, null, 2);
-    }
-
-    // --- Device-to-device transfer ---
-    // Produce an ENCRYPTED vault blob (the full vault, AES-GCM under a one-time
-    // transfer passphrase). Used for both the downloadable encrypted-backup file
-    // and the server relay — the passphrase is carried out of band, never sent
-    // to the server. `vaultPassword` may be null when a derived key is cached.
-    async exportEncryptedBlob(transferPassphrase, vaultPassword) {
-        if (this.isLocked) throw new Error("Vault locked");
-        if (!transferPassphrase) throw new Error("Transfer passphrase required");
-        const fullVault = await this._getFullVault(vaultPassword);
-        const encrypted = await encryptVault(fullVault, transferPassphrase);
-        return JSON.stringify(encrypted);
-    }
-
-    // Consume an encrypted vault blob produced by exportEncryptedBlob on another
-    // device: decrypt with the transfer passphrase, then re-encrypt locally under
-    // a fresh device password. Clean-device flow (creates a new local vault).
-    async importEncryptedBlob(blobString, transferPassphrase, newLocalPassword) {
-        if (this.hasVault()) {
-            throw new Error("A vault already exists on this device. Import from the Vault Manager while signed in.");
-        }
-        if (!newLocalPassword || newLocalPassword.length < 6) {
-            throw new Error("Password must be at least 6 characters");
-        }
-        let encrypted;
-        try {
-            encrypted = JSON.parse(blobString);
-        } catch {
-            throw new Error("Invalid transfer data");
-        }
-        // Throws "Incorrect password or corrupted data" on a wrong passphrase.
-        const fullVault = await decryptVault(encrypted, transferPassphrase);
-        // Reuse the validated clean-device import (re-encrypts under the new password).
-        return this.importNewVault(JSON.stringify(fullVault), newLocalPassword);
-    }
-
-    // Merge accounts from a plaintext JSON export ({accounts:[...]}) or an
-    // encrypted .kvault backup ({salt, iv, data}). `password` is the local vault
-    // password (to decrypt/re-save this device's vault); `passphrase` is the
-    // SEPARATE backup passphrase that decrypts a .kvault file — they are distinct
-    // secrets and only one is the file's.
-    async importVault(jsonString, password, passphrase) {
-        if (this.isLocked) throw new Error("Vault locked");
-        try {
-            const parsed = JSON.parse(jsonString);
-
-            // An encrypted .kvault backup carries {salt, iv, data} and no cleartext
-            // accounts; decrypt it with its passphrase before merging.
-            let data = parsed;
-            if (parsed && parsed.salt && parsed.iv && parsed.data && !parsed.accounts) {
-                if (!passphrase) throw new Error("This is an encrypted .kvault backup — enter its passphrase");
-                data = await decryptVault(parsed, passphrase);
-            }
-
-            if (!data.accounts || !Array.isArray(data.accounts)) throw new Error("Invalid vault format");
-
-            // 1. Get Full Vault
-            const fullVault = await this._getFullVault(password);
-
-            let addedCount = 0;
-            for (const rawAcc of data.accounts) {
-                // Accept legacy kyber/dilithium backups, then normalize.
-                const acc = normalizeAccount(rawAcc);
-                // FORCE ID normalization
-                if (acc.mldsa && acc.mldsa.publicKey) {
-                    acc.id = acc.mldsa.publicKey;
-                }
-
-                const existingIndex = fullVault.accounts.findIndex(existing => existing.id === acc.id);
-                if (existingIndex >= 0) {
-                    fullVault.accounts[existingIndex] = acc;
-                } else {
-                    fullVault.accounts.push(acc);
-                }
-                addedCount++;
-            }
-
-            if (addedCount > 0) {
-                await this._save(fullVault, password);
-
-                // Re-sync memory completely to ensure consistency
-                this.vault = {
-                    accounts: fullVault.accounts.map(acc => this._sanitize(acc)),
-                    activeAccountId: fullVault.activeAccountId
-                };
-            }
-            return addedCount;
-        } catch (e) {
-            throw new Error("Import failed: " + e.message);
-        }
-    }
-
     async sign(message, password) {
         if (this.isLocked) throw new Error("Vault locked");
 
@@ -553,93 +410,8 @@ class VaultService {
             }
         }));
     }
-
-    // --- Biometric Authentication (FaceID/TouchID) ---
-
-    hasBiometrics() {
-        const prefs = localStorage.getItem('kryptolog_biometrics');
-        return !!prefs;
-    }
-
-    async enableBiometrics(password) {
-        if (!window.PublicKeyCredential) throw new Error("Biometrics not supported on this device/browser.");
-
-        // 1. Verify Password First
-        const fullVault = await this._getFullVault(password); // will throw if wrong
-
-        // 2. Register Credential (PRF or Fallback)
-        const activeAcct = fullVault.accounts.find(a => a.id === fullVault.activeAccountId);
-        const name = activeAcct ? activeAcct.name : "Kryptolog User";
-
-        const { registerBiometricCredential, encryptSymmetric, checkPrfSupport } = await import('../utils/crypto');
-
-        if (!await checkPrfSupport()) {
-            throw new Error("Your browser does not support WebAuthn. Biometrics unavailable.");
-        }
-
-        // Throws on devices without hardware-bound PRF — there is no software fallback.
-        const result = await registerBiometricCredential(name);
-
-        // 3. Encrypt the vault password with the hardware-bound PRF key
-        const encryptedPass = await encryptSymmetric(password, result.prfKey);
-
-        // Clear any key left by the removed legacy fallback path.
-        localStorage.removeItem('kryptolog_bio_fallback_key');
-
-        // 4. Save Preferences
-        const prefs = {
-            mode: 'prf',
-            credentialId: result.credentialId,
-            encryptedPass,
-            prfSalt: result.prfSalt
-        };
-        localStorage.setItem('kryptolog_biometrics', JSON.stringify(prefs));
-
-        return 'prf';
-    }
-
-    async recoverPasswordWithBiometrics() {
-        if (!this.hasBiometrics()) throw new Error("Biometrics not set up.");
-
-        const prefsString = localStorage.getItem('kryptolog_biometrics');
-        if (!prefsString) throw new Error("No biometric preferences found.");
-        const prefs = JSON.parse(prefsString);
-
-        // 1. Authenticate & Get Key (passes mode so correct path is used)
-        const { getBiometricKey, decryptSymmetric } = await import('../utils/crypto');
-
-        const mode = prefs.mode || 'prf'; // backward compat: old prefs without mode default to prf
-        const key = await getBiometricKey(prefs.credentialId, prefs.prfSalt, mode);
-
-        // 2. Decrypt Password
-        const password = await decryptSymmetric(prefs.encryptedPass, key);
-        if (!password) throw new Error("Biometric decryption failed.");
-
-        return password;
-    }
-
-    async unlockWithBiometrics() {
-        const password = await this.recoverPasswordWithBiometrics();
-        // 3. Unlock Vault
-        return await this.unlock(password);
-    }
-
-    disableBiometrics() {
-        localStorage.removeItem('kryptolog_biometrics');
-        localStorage.removeItem('kryptolog_bio_fallback_key'); // Clean up fallback key if present
-    }
-
-    // Returns 'prf', 'fallback', or null if biometrics not enabled
-    biometricMode() {
-        const prefsString = localStorage.getItem('kryptolog_biometrics');
-        if (!prefsString) return null;
-        try {
-            const prefs = JSON.parse(prefsString);
-            return prefs.mode || 'prf'; // backward compat
-        } catch {
-            return null;
-        }
-    }
 }
+
+Object.assign(VaultService.prototype, backupMethods, biometricMethods);
 
 export const vaultService = new VaultService();

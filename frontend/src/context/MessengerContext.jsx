@@ -2,41 +2,19 @@ import { createContext, useContext, useState, useEffect, useRef, useMemo } from 
 import { useAuth } from './AuthContext';
 import { usePQC } from './PQCContext';
 import API_ENDPOINTS from '../config';
-import { encryptWithSessionKey, decryptWithSessionKey, messageSigningBody, verifySignaturePQC } from '../utils/crypto';
-import { encryptGroupName, decryptGroupName, groupNameWrapFor, isEncryptedTitle, LOCKED_TITLE } from '../utils/titles';
+import { encryptWithSessionKey, decryptWithSessionKey, messageSigningBody } from '../utils/crypto';
+import { isEncryptedTitle, LOCKED_TITLE } from '../utils/titles';
 import { assertSafeRecipient, attestationStatus } from '../services/trustedKeys';
 import { toast } from '../utils/toast';
+import { verifyMessageAuthenticity } from './messenger/verifyMessage';
+import { useMessengerSocket } from './messenger/useMessengerSocket';
+import { useMessageSessions } from './messenger/useMessageSessions';
+import { useGroupNames } from './messenger/useGroupNames';
+import { createGroupEventHandlers } from './messenger/groupEvents';
 
-// Verify a message's end-to-end signature (audit S1). Rebuilds the exact bytes
-// the sender signed and checks them against the claimed sender_address (which IS
-// the sender's ML-DSA public key), so a server can't forge or re-attribute a
-// message. Returns true/false, or null for an unsigned (legacy) message.
-//
-// The conversation binding (`conv`) MUST come from the SERVER-ATTESTED delivery
-// context, never from a sender/server-supplied field inside the content (audit
-// F-1): DMs bind to the message row's recipient_address; groups bind to the
-// row's channel_id — NOT payload.gid, which a malicious server could rewrite to
-// re-home a message Alice signed for channel A into channel B (one she and the
-// viewer both belong to) while it still showed as "verified". For groups we also
-// reject outright when the payload's self-declared gid disagrees with the
-// channel the message was actually delivered under.
-export const verifyMessageAuthenticity = async (msg, payload, mode) => {
-    if (!payload || !payload.sig) return null;
-    try {
-        const from = (msg.sender_address || '').toLowerCase();
-        let conv;
-        if (mode === 'group') {
-            if (payload.gid && payload.gid !== msg.channel_id) return false;
-            conv = msg.channel_id || '';
-        } else {
-            conv = (msg.recipient_address || '').toLowerCase();
-        }
-        const body = messageSigningBody({ from, conv, sid: payload.sid, ct: payload.ct });
-        return await verifySignaturePQC(body, payload.sig, msg.sender_address);
-    } catch {
-        return false;
-    }
-};
+// Re-exported for existing importers (tests); the implementation lives in
+// messenger/verifyMessage.js.
+export { verifyMessageAuthenticity };
 
 const MessengerContext = createContext();
 
@@ -57,11 +35,6 @@ export const MessengerProvider = ({ children }) => {
     const activeConversationRef = useRef(null);
     useEffect(() => { activeConversationRef.current = activeConversation; }, [activeConversation]);
 
-    const [sessionKeys, setSessionKeys] = useState({});
-    const sessionKeysRef = useRef({});
-    useEffect(() => { sessionKeysRef.current = sessionKeys; }, [sessionKeys]);
-
-    const [activeSessionIds, setActiveSessionIds] = useState({});
     const [loading, setLoading] = useState(true);
     const [messagesLoading, setMessagesLoading] = useState(false);
     const [sending, setSending] = useState(false);
@@ -72,15 +45,32 @@ export const MessengerProvider = ({ children }) => {
     const activeGroupConversationRef = useRef(null);
     useEffect(() => { activeGroupConversationRef.current = activeGroupConversation; }, [activeGroupConversation]);
 
-    // Group-name keys (audit M-3: encrypted channel names). Keyed by my wrap's
-    // JSON so re-fetches never re-prompt; unresolved wraps decrypt in ONE batch.
-    const groupNameKeyCache = useRef({});
-
     // Event Listeners (e.g. for Dashboard to refresh secrets)
     const [lastEvent, setLastEvent] = useState(null);
 
-    // WebSocket Ref to prevent re-renders
-    const wsRef = useRef(null);
+    // Session-key state + decryption pipelines (messenger/useMessageSessions.js)
+    const {
+        sessionKeys,
+        sessionKeysRef,
+        setSessionKeys,
+        activeSessionIds,
+        setActiveSessionIds,
+        invalidateGroupSession,
+        processMessages,
+        handleManualDecrypt,
+    } = useMessageSessions({
+        user,
+        unwrapSessionKey,
+        unwrapManySessionKeys,
+        activeConversationRef,
+        setActiveConversation,
+        activeGroupConversationRef,
+        setActiveGroupConversation,
+    });
+
+    // Encrypted group names, audit M-3 (messenger/useGroupNames.js)
+    const { resolveChannelName, resolveGroupNames, buildGroupNameBlob } =
+        useGroupNames({ user, mlkemKey, unwrapManySessionKeys });
 
     // ── Shared Helpers ─────────────────────────────────────────────
 
@@ -101,388 +91,25 @@ export const MessengerProvider = ({ children }) => {
         return res.json();
     };
 
-    // Group key rotation & forward secrecy (audit S2).
-    //
-    // A group message wraps a fresh AES session key (sid) for each member's
-    // ML-KEM key, embedded in the first message under that sid; later messages
-    // reuse the sid. On any membership change we DROP the active sid so the next
-    // send mints a new one wrapped for the *current* member set:
-    //   • removed member → not in the new wrap, so they cannot read future
-    //     messages (forward secrecy). The server also stops delivering the
-    //     channel to non-members, so this is defense-in-depth.
-    //   • added member → included in the new wrap, so they can read from the
-    //     next message on, but NOT prior history (they were never wrapped for the
-    //     old sid) — which is the desired property.
-    // Invalidation runs both for the actor (add/removeGroupMember) and for every
-    // other member via the GROUP_MEMBER_ADDED/REMOVED WS events, so each client
-    // rekeys independently before its next send.
-    //
-    // Not provided: post-compromise security / per-message ratcheting — a leaked
-    // session key exposes messages under that sid until the next rotation.
-    const invalidateGroupSession = (channelId) => {
-        setActiveSessionIds(prev => {
-            const updated = { ...prev };
-            delete updated[`group_${channelId}`];
-            return updated;
-        });
-    };
+    // ── WebSocket (lifecycle in messenger/useMessengerSocket.js) ──
 
-    /**
-     * Unified message processing: tries cached keys, batch-unwraps missing ones,
-     * then re-decrypts. Works for both DMs (v1) and group messages (v2).
-     *
-     * @param {Array}  rawMsgs - Raw message objects from the API
-     * @param {'dm'|'group'} mode - Protocol version to use
-     * @param {Object} [partnerUser] - Partner user (DMs only)
-     */
-    const processMessages = async (rawMsgs, mode = 'dm', partnerUser = null) => {
-        const myAddr = user.address.toLowerCase();
-        const version = mode === 'dm' ? 1 : 2;
-
-        // Attach end-to-end signature verification (audit S1) before returning.
-        // Verification is over the CIPHERTEXT, so it's independent of whether we
-        // could decrypt — every message gets a verified flag in one pass.
-        const finalize = (msgs) => Promise.all(msgs.map(async m => {
-            let payload = m._sessionPayload;
-            if (!payload) { try { payload = JSON.parse(m.content); } catch { payload = null; } }
-            return { ...m, verified: await verifyMessageAuthenticity(m, payload, mode) };
-        }));
-
-        // 1. First pass: decrypt with cached keys, tag the rest with _sessionPayload
-        const processed = await Promise.all(rawMsgs.map(async msg => {
-            try {
-                const payload = JSON.parse(msg.content);
-                if (payload.v === version && payload.sid) {
-                    if (sessionKeysRef.current[payload.sid]) {
-                        const pt = await decryptWithSessionKey(payload.ct, sessionKeysRef.current[payload.sid]);
-                        return { ...msg, plainText: pt };
-                    }
-                    return { ...msg, _sessionPayload: payload };
-                }
-            } catch { /* best-effort: failure is non-fatal */ }
-            return { ...msg, plainText: null };
-        }));
-
-        // 2. Collect missing keys for batch unwrap
-        const keysToUnwrap = {};
-        for (const m of processed) {
-            if (m._sessionPayload && !sessionKeysRef.current[m._sessionPayload.sid]) {
-                const p = m._sessionPayload;
-                if (p.keys) {
-                    let keyBlob = null;
-                    if (mode === 'dm') {
-                        const isMeSender = m.sender_address.toLowerCase() === myAddr;
-                        keyBlob = isMeSender ? p.keys.sender : p.keys.recip;
-                    } else {
-                        keyBlob = p.keys[myAddr];
-                    }
-                    if (keyBlob) keysToUnwrap[p.sid] = keyBlob;
-                }
-            }
-        }
-
-        // 3. Batch unwrap and re-decrypt
-        const sids = Object.keys(keysToUnwrap);
-        if (sids.length > 0) {
-            const blobs = sids.map(sid => keysToUnwrap[sid]);
-            try {
-                const unwrappedList = await unwrapManySessionKeys(blobs);
-                const newKeys = { ...sessionKeysRef.current };
-                sids.forEach((sid, idx) => {
-                    const k = unwrappedList[idx];
-                    if (k) newKeys[sid] = k;
-                });
-                setSessionKeys(newKeys);
-
-                // For DMs, track active session
-                if (mode === 'dm') {
-                    const recentMsg = processed.find(m => m._sessionPayload && sids.includes(m._sessionPayload.sid));
-                    if (recentMsg) {
-                        const pid = recentMsg.sender_address.toLowerCase() === myAddr
-                            ? recentMsg.recipient_address.toLowerCase()
-                            : recentMsg.sender_address.toLowerCase();
-                        setActiveSessionIds(prev => ({ ...prev, [pid]: recentMsg._sessionPayload.sid }));
-                    }
-                }
-
-                return await finalize(await Promise.all(processed.map(async m => {
-                    if (m._sessionPayload && newKeys[m._sessionPayload.sid]) {
-                        try {
-                            const pt = await decryptWithSessionKey(m._sessionPayload.ct, newKeys[m._sessionPayload.sid]);
-                            return { ...m, plainText: pt };
-                        } catch { /* best-effort: failure is non-fatal */ }
-                    }
-                    return m;
-                })));
-            } catch (e) { console.error(`Batch unwrap failed (${mode})`, e); }
-        } else if (mode === 'dm') {
-            // Check if we already have a session ID active from cache
-            const validMsg = processed.find(m => m.plainText && m._sessionPayload);
-            if (validMsg) {
-                const pid = validMsg.sender_address.toLowerCase() === myAddr
-                    ? validMsg.recipient_address.toLowerCase()
-                    : validMsg.sender_address.toLowerCase();
-                setActiveSessionIds(prev => ({ ...prev, [pid]: validMsg._sessionPayload.sid }));
-            }
-        }
-
-        return finalize(processed);
-    };
-
-    /**
-     * Unified manual decryption handler for both DMs and group messages.
-     * When a key is unwrapped, it re-decrypts all sibling messages in the same session.
-     *
-     * @param {Object} msg - The message to decrypt
-     * @param {'dm'|'group'} mode - Protocol version
-     */
-    const handleManualDecrypt = async (msg, mode = 'dm') => {
-        try {
-            const payload = JSON.parse(msg.content);
-            const version = mode === 'dm' ? 1 : 2;
-            if (payload.v !== version || !payload.sid) return;
-
-            const stateSetter = mode === 'dm' ? setActiveConversation : setActiveGroupConversation;
-            const stateRef = mode === 'dm' ? activeConversationRef : activeGroupConversationRef;
-
-            // If we already have the session key cached, decrypt just this message
-            if (sessionKeysRef.current[payload.sid]) {
-                const plainText = await decryptWithSessionKey(payload.ct, sessionKeysRef.current[payload.sid]);
-                stateSetter(prev => ({
-                    ...prev,
-                    messages: prev.messages.map(m => m.id === msg.id ? { ...m, plainText } : m)
-                }));
-                return;
-            }
-
-            // Look up the key blob for this user
-            let keyBlob = null;
-            if (mode === 'dm' && payload.keys) {
-                const isMeSender = msg.sender_address.toLowerCase() === user.address.toLowerCase();
-                keyBlob = isMeSender ? payload.keys.sender : payload.keys.recip;
-            } else if (mode === 'group' && payload.keys) {
-                keyBlob = payload.keys[user.address.toLowerCase()];
-            }
-
-            if (!keyBlob) return;
-
-            const sessionKey = await unwrapSessionKey(keyBlob);
-            if (!sessionKey) return;
-
-            setSessionKeys(prev => ({ ...prev, [payload.sid]: sessionKey }));
-
-            // Re-decrypt ALL messages in the conversation sharing this session ID
-            const currentMessages = stateRef.current?.messages || [];
-            const resolvedMessages = await Promise.all(currentMessages.map(async m => {
-                if (!m.plainText && m.content) {
-                    try {
-                        const p = JSON.parse(m.content);
-                        if (p.v === version && p.sid === payload.sid) {
-                            const pt = await decryptWithSessionKey(p.ct, sessionKey);
-                            return { ...m, plainText: pt };
-                        }
-                    } catch { /* best-effort: failure is non-fatal */ }
-                }
-                return m;
-            }));
-
-            stateSetter(prev => ({ ...prev, messages: resolvedMessages }));
-        } catch (e) { console.error(`Manual decrypt failed (${mode})`, e); }
-    };
-
-    // ── WebSocket Setup ────────────────────────────────────────────
-
-    useEffect(() => {
-        if (!user) return;
-
-        let ws = null;
-        let heartbeatInterval = null;
-        let reconnectTimeout = null;
-        let retryCount = 0;
-        const maxRetries = 10;
-        let isUnmounting = false;
-
-        // Visibility / focus handlers — added ONCE, cleaned up on unmount
-        const sendFocusState = () => {
-            const currentWs = wsRef.current;
-            if (currentWs && currentWs.readyState === WebSocket.OPEN) {
-                const focused = document.visibilityState === 'visible';
-                currentWs.send(JSON.stringify({ type: focused ? 'APP_FOCUSED' : 'APP_BLURRED' }));
-            }
-        };
-        const onFocus = () => {
-            const currentWs = wsRef.current;
-            if (currentWs && currentWs.readyState === WebSocket.OPEN) {
-                currentWs.send(JSON.stringify({ type: 'APP_FOCUSED' }));
-            }
-        };
-        const onBlur = () => {
-            const currentWs = wsRef.current;
-            if (currentWs && currentWs.readyState === WebSocket.OPEN) {
-                currentWs.send(JSON.stringify({ type: 'APP_BLURRED' }));
-            }
-        };
-
-        document.addEventListener('visibilitychange', sendFocusState);
-        window.addEventListener('focus', onFocus);
-        window.addEventListener('blur', onBlur);
-
-        const connect = () => {
-            if (isUnmounting) return;
-
-            const url = API_ENDPOINTS.BASE.replace('http', 'ws');
-            const wsUrl = `${url}/ws`;
-            ws = new WebSocket(wsUrl);
-            wsRef.current = ws;
-
-            ws.onopen = () => {
-                retryCount = 0;
-                ws.send(JSON.stringify({ type: 'AUTH', token }));
-
-                if (document.visibilityState === 'visible') {
-                    ws.send(JSON.stringify({ type: 'APP_FOCUSED' }));
-                }
-
-                // Start Heartbeat
-                if (heartbeatInterval) clearInterval(heartbeatInterval);
-                heartbeatInterval = setInterval(() => {
-                    if (ws.readyState === WebSocket.OPEN) {
-                        console.debug("WS Sending PING");
-                        ws.send(JSON.stringify({ type: 'PING' }));
-                    }
-                }, 30000);
-            };
-
-            ws.onmessage = async (event) => {
-                try {
-                    const data = JSON.parse(event.data);
-                    if (data.type === 'NEW_MESSAGE') {
-                        await handleIncomingMessage(data.message);
-                    } else if (data.type === 'NEW_GROUP_MESSAGE') {
-                        await handleIncomingGroupMessage(data.message);
-                    } else if (data.type === 'GROUP_CREATED') {
-                        fetchGroupConversations();
-                    } else if (data.type === 'GROUP_MEMBER_ADDED') {
-                        fetchGroupConversations();
-                        invalidateGroupSession(data.channel_id);
-
-                        const currentActive = activeGroupConversationRef.current;
-                        if (currentActive && currentActive.channel.id === data.channel_id) {
-                            if (data.new_member) {
-                                setActiveGroupConversation(prev => {
-                                    if (!prev || prev.channel.id !== data.channel_id) return prev;
-                                    if (prev.channel.members.some(m => m.user_address === data.new_member.user_address)) return prev;
-                                    const newMember = {
-                                        ...data.new_member,
-                                        user: {
-                                            address: data.new_member.user_address,
-                                            username: data.new_member.username,
-                                            encryption_public_key: data.new_member.encryption_public_key
-                                        }
-                                    };
-                                    return {
-                                        ...prev,
-                                        channel: { ...prev.channel, members: [...prev.channel.members, newMember] }
-                                    };
-                                });
-                            }
-                        }
-                    } else if (data.type === 'GROUP_MEMBER_UPDATED') {
-                        fetchGroupConversations();
-                        const currentActive = activeGroupConversationRef.current;
-                        if (currentActive && currentActive.channel.id === data.channel_id) {
-                            setActiveGroupConversation(prev => {
-                                if (!prev || prev.channel.id !== data.channel_id) return prev;
-                                return {
-                                    ...prev,
-                                    channel: {
-                                        ...prev.channel,
-                                        members: prev.channel.members.map(m =>
-                                            m.user_address === data.member.user_address
-                                                ? { ...m, role: data.member.role }
-                                                : m
-                                        ),
-                                        owner_address: data.member.role === 'owner' ? data.member.user_address : prev.channel.owner_address
-                                    }
-                                };
-                            });
-                        }
-                    } else if (data.type === 'GROUP_UPDATED') {
-                        fetchGroupConversations();
-                        const currentActive = activeGroupConversationRef.current;
-                        if (currentActive && currentActive.channel.id === data.channel_id) {
-                            setActiveGroupConversation(prev => ({
-                                ...prev,
-                                channel: { ...prev.channel, name: data.name }
-                            }));
-                        }
-                    } else if (data.type === 'GROUP_MEMBER_REMOVED') {
-                        if (data.removed_address === user.address.toLowerCase()) {
-                            setGroupConversations(prev => prev.filter(g => g.channel.id !== data.channel_id));
-                            const currentActive = activeGroupConversationRef.current;
-                            if (currentActive && currentActive.channel.id === data.channel_id) {
-                                setActiveGroupConversation(null);
-                            }
-                        } else {
-                            fetchGroupConversations();
-                            invalidateGroupSession(data.channel_id);
-
-                            const currentActive = activeGroupConversationRef.current;
-                            if (currentActive && currentActive.channel.id === data.channel_id) {
-                                setActiveGroupConversation(prev => ({
-                                    ...prev,
-                                    channel: {
-                                        ...prev.channel,
-                                        members: prev.channel.members.filter(m => m.user_address !== data.removed_address)
-                                    }
-                                }));
-                            }
-                        }
-                    } else if (data.type === 'SECRET_SHARED') {
-                        setLastEvent({ type: 'SECRET_SHARED', timestamp: Date.now(), data: data });
-                    }
-                } catch (e) {
-                    console.error("WS Parse Error", e);
-                }
-            };
-
-            ws.onclose = (e) => {
-                if (heartbeatInterval) clearInterval(heartbeatInterval);
-
-                if (!isUnmounting && retryCount < maxRetries) {
-                    const timeout = Math.min(1000 * (2 ** retryCount), 30000);
-                    reconnectTimeout = setTimeout(() => {
-                        retryCount++;
-                        connect();
-                    }, timeout);
-                }
-            };
-
-            ws.onerror = (err) => {
-                console.error("WS Error:", err);
-                ws.close();
-            };
-        };
-
-        connect();
-
-        return () => {
-            isUnmounting = true;
-            document.removeEventListener('visibilitychange', sendFocusState);
-            window.removeEventListener('focus', onFocus);
-            window.removeEventListener('blur', onBlur);
-            if (heartbeatInterval) clearInterval(heartbeatInterval);
-            if (reconnectTimeout) clearTimeout(reconnectTimeout);
-            if (wsRef.current) {
-                wsRef.current.close();
-                wsRef.current = null;
-            }
-        };
-        // Reconnect only on identity/token change. The handlers called inside
-        // ws.onmessage are intentionally excluded — including them would tear
-        // down and rebuild the socket on every render.
-        // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [user?.address, token]);
+    useMessengerSocket({
+        user,
+        token,
+        handlers: {
+            NEW_MESSAGE: (data) => handleIncomingMessage(data.message),
+            NEW_GROUP_MESSAGE: (data) => handleIncomingGroupMessage(data.message),
+            SECRET_SHARED: (data) => setLastEvent({ type: 'SECRET_SHARED', timestamp: Date.now(), data: data }),
+            ...createGroupEventHandlers({
+                user,
+                fetchGroupConversations: () => fetchGroupConversations(),
+                invalidateGroupSession,
+                setGroupConversations,
+                setActiveGroupConversation,
+                activeGroupConversationRef,
+            }),
+        },
+    });
 
     // ── Initial Load ───────────────────────────────────────────────
 
@@ -581,7 +208,7 @@ export const MessengerProvider = ({ children }) => {
                 method: 'POST',
                 body: JSON.stringify({ partner_address: partnerUser.address })
             });
-            const processed = await processMessages(rawMsgs, 'dm', fullUser);
+            const processed = await processMessages(rawMsgs, 'dm');
             setActiveConversation({ user: fullUser, messages: processed });
         } catch (e) { console.error(e); }
         finally { setMessagesLoading(false); }
@@ -667,48 +294,6 @@ export const MessengerProvider = ({ children }) => {
 
     // ── Group Channel Functions ─────────────────────────────────────
 
-    // Decrypt an encrypted channel name (audit M-3) with my wrapped name-key,
-    // resolving uncached wraps in ONE batch unwrap. Legacy plaintext passes
-    // through; undecryptable names render a locked placeholder.
-    const resolveChannelName = async (channel, batchCache = null) => {
-        const name = channel?.name;
-        if (!isEncryptedTitle(name)) return name ?? '';
-        const wrap = groupNameWrapFor(name, user.address);
-        if (!wrap) return LOCKED_TITLE;
-        const cacheKey = JSON.stringify(wrap);
-        let key = (batchCache ?? groupNameKeyCache.current)[cacheKey];
-        if (key === undefined) {
-            try {
-                key = (await unwrapManySessionKeys([wrap]))[0] || null;
-            } catch { key = null; }
-            groupNameKeyCache.current[cacheKey] = key;
-        }
-        const plain = await decryptGroupName(name, key);
-        return plain ?? LOCKED_TITLE;
-    };
-
-    const resolveGroupNames = async (groups) => {
-        // Batch-unwrap every uncached name-key first (one extension approval).
-        const pending = [];
-        for (const g of groups) {
-            const wrap = isEncryptedTitle(g.channel?.name) ? groupNameWrapFor(g.channel.name, user.address) : null;
-            if (wrap && !(JSON.stringify(wrap) in groupNameKeyCache.current)) pending.push(wrap);
-        }
-        if (pending.length > 0) {
-            try {
-                const keys = await unwrapManySessionKeys(pending);
-                pending.forEach((w, i) => { groupNameKeyCache.current[JSON.stringify(w)] = keys[i] || null; });
-            } catch (e) {
-                console.error("Group name key batch unwrap failed", e);
-                pending.forEach((w) => { groupNameKeyCache.current[JSON.stringify(w)] = null; });
-            }
-        }
-        return Promise.all(groups.map(async (g) => ({
-            ...g,
-            channel: { ...g.channel, display_name: await resolveChannelName(g.channel) },
-        })));
-    };
-
     const fetchGroupConversations = async () => {
         try {
             const data = await api(`${API_ENDPOINTS.GROUPS.LIST}`);
@@ -722,20 +307,6 @@ export const MessengerProvider = ({ children }) => {
                 }));
             });
         } catch (e) { console.error("Fetch groups failed", e); }
-    };
-
-    // Build the encrypted name blob for the given member set (audit M-3).
-    // Always mints a FRESH name key, so members removed before a rename can
-    // never read the new name. Attestation-gated like message-key wraps.
-    const buildGroupNameBlob = async (plainName, memberUsers) => {
-        const me = { address: user.address, encryption_public_key: user?.encryption_public_key || mlkemKey };
-        const targets = [me];
-        for (const m of memberUsers) {
-            if (m.address.toLowerCase() === me.address.toLowerCase()) continue;
-            await assertSafeRecipient(m); // throws on an invalid attestation
-            targets.push(m);
-        }
-        return encryptGroupName(plainName, targets);
     };
 
     const createGroup = async (name, members) => {
