@@ -6,11 +6,6 @@
     --color-slate-750: #1e3048;
 }
 
-@theme {
-    --color-slate-850: #152033;
-    --color-slate-750: #1e3048;
-}
-
 @layer utilities {
     .font-pixel {
         font-family: 'Press Start 2P', cursive;
@@ -18,8 +13,19 @@
 }
 
 /* Retro Mode Overrides */
+/* 'Press Start 2P' renders ~40% wider/taller than the normal sans at the same
+   size. All Tailwind sizing (text, spacing, icons) is rem-based, so shrinking
+   the root font scales the whole UI back into proportion instead of letting
+   the pixel font blow text out of buttons and push modals off screen. */
 :root.retro {
     --font-sans: 'Press Start 2P', cursive;
+    font-size: 12px;
+}
+
+@media (max-width: 640px) {
+    :root.retro {
+        font-size: 10px;
+    }
 }
 
 .retro * {
@@ -31,7 +37,46 @@
 .retro body {
     background-color: #000;
     color: #0f0;
-    /* Matrix green tint potentially */
+    /* Pixel glyphs are wide and never ellipsize cleanly: wrap long strings
+       (addresses, hashes) anywhere rather than overflow their box.
+       overflow-wrap inherits, so this covers the whole tree. */
+    overflow-wrap: anywhere;
+    line-height: 1.5;
+}
+
+/* Arcade polish */
+.retro img {
+    image-rendering: pixelated;
+}
+
+.retro button:active,
+.retro a:active {
+    transform: translate(1px, 1px);
+    /* chunky "pressed" feel */
+}
+
+.retro ::selection {
+    background: #0f0;
+    color: #000;
+}
+
+.retro :focus-visible {
+    outline: 2px dashed #0f0 !important;
+    outline-offset: 2px;
+}
+
+.retro ::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+}
+
+.retro ::-webkit-scrollbar-track {
+    background: #000;
+}
+
+.retro ::-webkit-scrollbar-thumb {
+    background: #0f0;
+    border: 2px solid #000;
 }
 
 /* CRT Crash Animation */

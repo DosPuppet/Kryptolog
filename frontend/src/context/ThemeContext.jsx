@@ -42,22 +42,18 @@ export const ThemeProvider = ({ children }) => {
         // Use the click event's timestamp (a page-relative monotonic clock)
         // rather than the impure Date.now(), which the purity rule flags.
         const now = event?.timeStamp ?? 0;
-        // Reset if too slow (> 1s between clicks is generous, but total sequence matters)
-        // Plan said: 10 times in 3 seconds.
-        // Let's just track rapid clicks.
-        if (now - lastClickTime > 800) {
-            setClickCount(1);
-        } else {
-            setClickCount(prev => prev + 1);
-        }
+        // A pause > 800ms between clicks restarts the streak. Compute the new
+        // count locally: checking the clickCount state here would read the
+        // pre-reset value and fire the egg on a single click after a pause.
+        const streak = now - lastClickTime > 800 ? 1 : clickCount + 1;
+        setClickCount(streak >= 10 ? 0 : streak);
         setLastClickTime(now);
 
         setTheme((prev) => (prev === 'dark' ? 'light' : 'dark'));
 
-        // Trigger Easter Egg
-        if (clickCount >= 9) { // 9 + current click = 10
+        // Easter Egg: 10 rapid toggles in a row
+        if (streak >= 10) {
             triggerRetroMode();
-            setClickCount(0);
         }
     };
 
