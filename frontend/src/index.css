@@ -139,3 +139,23 @@
         opacity: 0.95;
     }
 }
+
+/* Light theme: dark scanlines over a white page read much harsher than over
+   a dark one, so thin them out and slow the flicker to a gentle shimmer. */
+:root.light .crt-overlay {
+    background: linear-gradient(rgba(18, 16, 16, 0) 50%, rgba(0, 0, 0, 0.08) 50%), linear-gradient(90deg, rgba(255, 0, 0, 0.03), rgba(0, 255, 0, 0.01), rgba(0, 0, 255, 0.03));
+    background-size: 100% 2px, 3px 100%;
+    animation: flicker-soft 0.6s infinite;
+}
+
+@keyframes flicker-soft {
+
+    0%,
+    100% {
+        opacity: 0.9;
+    }
+
+    50% {
+        opacity: 0.8;
+    }
+}
