@@ -59,7 +59,20 @@ else
     echo "WARNING: docker not found — assuming Postgres is already running at $DB_URL"
 fi
 
-# 4. Ensure frontend dependencies and build exist (required for preview)
+# 4. Ensure backend Python dependencies (idempotent: pip skips what's already
+# satisfied, so liboqs is only compiled on first run or version bumps).
+# --user is invalid inside a virtualenv, where installs go to the venv itself.
+echo "Checking backend dependencies..."
+PIP_USER_FLAG="--user"
+if python3 -c 'import sys; sys.exit(0 if sys.prefix != sys.base_prefix else 1)'; then
+    PIP_USER_FLAG=""
+fi
+if ! python3 -m pip install $PIP_USER_FLAG -q -r backend/requirements.txt; then
+    echo "ERROR: failed to install backend Python dependencies (backend/requirements.txt)."
+    exit 1
+fi
+
+# 5. Ensure frontend dependencies and build exist (required for preview)
 echo "Checking frontend..."
 cd frontend
 if [ ! -d "node_modules" ]; then
@@ -72,7 +85,7 @@ if [ ! -d "dist" ]; then
 fi
 cd ..
 
-# 5. Start / Restart PM2 Ecosystem
+# 6. Start / Restart PM2 Ecosystem
 echo "Starting ecosystem..."
 # By passing `--update-env`, PM2 absorbs the newly exported bash variables into the processes
 pm2 start ecosystem.config.cjs --update-env
