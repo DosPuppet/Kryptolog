@@ -289,9 +289,12 @@ class KeyTransferResponse(BaseModel):
 
 
 class PushSubscriptionCreate(BaseModel):
-    endpoint: str
-    p256dh: str
-    auth: str
+    # Bounded (KRY-002): these were previously unbounded strings. The endpoint
+    # is additionally SSRF-validated in security.url_guard. p256dh/auth are
+    # base64url-encoded P-256 point / 16-byte salt — small and fixed-ish.
+    endpoint: str = Field(..., max_length=2000)
+    p256dh: str = Field(..., max_length=256)
+    auth: str = Field(..., max_length=256)
 
 class PushSubscriptionResponse(PushSubscriptionCreate):
     id: int

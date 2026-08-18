@@ -9,6 +9,7 @@ from database import get_db
 from dependencies import get_current_user
 from websocket_manager import manager
 from utils.push import notify_user_push
+from security import authorization
 import config
 
 router = APIRouter(tags=["secrets"])
@@ -173,12 +174,7 @@ def revoke_grant(grant_id: int, current_user: models.User = Depends(get_current_
         raise HTTPException(status_code=404, detail="Grant not found")
     
     # Check permissions: Caller must be Secret Owner OR Grantee
-    secret = db.query(models.Secret).filter(models.Secret.id == grant.secret_id).first()
-    
-    is_owner = secret and secret.owner_address == current_user.address
-    is_grantee = grant.grantee_address == current_user.address
-    
-    if not (is_owner or is_grantee):
+    if not authorization.can_manage_grant(db, grant, current_user.address):
         raise HTTPException(status_code=403, detail="Not authorized")
 
     # Prevent revoking a workflow-managed secret grant directly
@@ -257,39 +253,20 @@ def get_documents(current_user: models.User = Depends(get_current_user), db: Ses
 # --- File Chunks ---
 
 def _check_secret_access(secret_id: int, user_address: str, db: Session) -> models.Secret:
-    """Verify the user owns the secret, has an AccessGrant, or is part of a Multisig workflow."""
+    """Verify the user may read this secret, or raise.
+
+    The rules live in security.authorization so they cannot drift between the
+    endpoints that enforce them (KRY-001: expired grants used to keep unlocking
+    file chunks because only the listing endpoints checked expiry).
+    """
     secret = db.query(models.Secret).filter(models.Secret.id == secret_id).first()
     if not secret:
         raise HTTPException(status_code=404, detail="Secret not found")
 
-    if secret.owner_address == user_address:
-        return secret
+    if not authorization.can_read_secret(db, secret, user_address):
+        raise HTTPException(status_code=403, detail="Not authorized")
 
-    grant = db.query(models.AccessGrant).filter(
-        models.AccessGrant.secret_id == secret_id,
-        models.AccessGrant.grantee_address == user_address
-    ).first()
-    if grant:
-        return secret
-
-    # Check multisig workflows
-    workflow = db.query(models.MultisigWorkflow).filter(models.MultisigWorkflow.secret_id == secret_id).first()
-    if workflow:
-        is_signer = db.query(models.MultisigWorkflowSigner).filter(
-            models.MultisigWorkflowSigner.workflow_id == workflow.id,
-            models.MultisigWorkflowSigner.user_address == user_address
-        ).first()
-        if is_signer:
-            return secret
-
-        is_recipient = db.query(models.MultisigWorkflowRecipient).filter(
-            models.MultisigWorkflowRecipient.workflow_id == workflow.id,
-            models.MultisigWorkflowRecipient.user_address == user_address
-        ).first()
-        if is_recipient and workflow.status == 'completed':
-            return secret
-
-    raise HTTPException(status_code=403, detail="Not authorized")
+    return secret
 
 
 @router.post("/secrets/chunks", status_code=201)
@@ -301,7 +278,7 @@ def upload_chunk(request: Request, chunk: schemas.FileChunkUpload,
     secret = db.query(models.Secret).filter(models.Secret.id == chunk.secret_id).first()
     if not secret:
         raise HTTPException(status_code=404, detail="Secret not found")
-    if secret.owner_address != current_user.address:
+    if not authorization.can_write_secret(db, secret, current_user.address):
         raise HTTPException(status_code=403, detail="Only the owner can upload chunks")
 
     # Enforce total file size limit using SQL-level aggregation (hex-encoded: 2 chars = 1 byte)
