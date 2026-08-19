@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, Text, ForeignKey, DateTime, Boolean
+from sqlalchemy import Column, Integer, String, Text, ForeignKey, DateTime, Boolean, UniqueConstraint
 from sqlalchemy.orm import relationship, declarative_base
 from datetime import datetime, timezone
 
@@ -96,6 +96,12 @@ class MultisigWorkflow(Base):
 
 class MultisigWorkflowSigner(Base):
     __tablename__ = "multisig_workflow_signers"
+    # One row per (workflow, signer): a duplicate would let a single identity
+    # contribute two signatures toward a quorum (KRY-005).
+    __table_args__ = (
+        UniqueConstraint("workflow_id", "user_address",
+                         name="uq_multisig_signer_workflow_user"),
+    )
 
     id = Column(Integer, primary_key=True, index=True)
     workflow_id = Column(Integer, ForeignKey("multisig_workflows.id"))
@@ -110,6 +116,10 @@ class MultisigWorkflowSigner(Base):
 
 class MultisigWorkflowRecipient(Base):
     __tablename__ = "multisig_workflow_recipients"
+    __table_args__ = (
+        UniqueConstraint("workflow_id", "user_address",
+                         name="uq_multisig_recipient_workflow_user"),
+    )
 
     id = Column(Integer, primary_key=True, index=True)
     workflow_id = Column(Integer, ForeignKey("multisig_workflows.id"))

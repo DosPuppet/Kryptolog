@@ -350,8 +350,99 @@ boundary and no row id is inherited.
 the DNS step, since its placeholder hostnames are deliberately unresolvable and
 would otherwise be (correctly) rejected by the new guard.
 
+### Still open after P0
+
+P2 (headers, input limits, supply chain, CI) is unchanged from the plan above.
+KRY-006 (AAD) and KRY-012 (service layer) remain deliberately deferred.
+
+---
+
+## 5. P1 implementation status — DONE (2026-08-19)
+
+Both P1 items are implemented and covered by regression tests.
+Suite: **251 passing**, up from 225, no regressions. (`test_ws_fanout.py`'s 5
+failures remain the pre-existing missing `fakeredis` dev dependency.)
+
+| Item | Status | Where |
+|---|---|---|
+| 6. Multisig locking + atomicity (KRY-005 + new bug) | done | `backend/routers/multisig.py`, migration `c3d4e5f6a7b2` |
+| 7. Strict PQC key validation (KRY-011) | done | `backend/security/crypto_validation.py` |
+
+### KRY-005 is worse than the audit reported
+
+Mutation testing settled this. Removing the row lock and restoring the split
+commits, then firing four signers concurrently at a **2-of-4** workflow:
+
+```
+AssertionError: 4 signatures recorded for a 2-of-4 quorum
+```
+
+All four signatures land. The quorum is not merely miscounted — it is bypassed
+entirely, because every signer reads `already_signed == 0` before any of them
+commits. The audit framed this as an inconsistency at "certain thresholds"; it
+is a complete failure of the N-of-M policy under concurrent signing. With
+`with_for_update()` the count is exactly 2 and the workflow ends `completed`.
+
+### Fixes
+
+**Row lock + single commit.** `sign_multisig_workflow` takes
+`SELECT ... FOR UPDATE` on the workflow, computes the quorum under that lock,
+and commits the signature, recipient keys, and `status = "completed"` in one
+transaction. This also fixes the non-atomic completion bug found during
+verification (fully-signed workflow stranded in `pending`). Push notifications
+were moved after the commit deliberately — a push failure must never roll back
+a recorded signature. `FOR UPDATE` is a no-op on SQLite, which serialises
+writes at the file level anyway; PostgreSQL is where it matters.
+
+**UNIQUE(workflow_id, user_address)** on both participant tables, via Alembic
+`c3d4e5f6a7b2`. The duplicate-collapsing step is written as a correlated
+subquery rather than `DELETE ... USING`, so it runs on SQLite too. Verified on
+a populated database: seeded duplicates collapse 2 -> 1, the constraint then
+applies, and downgrade is clean.
+
+**Strict key validation.** `security/crypto_validation.py` replaces the four
+`len(key) < 500` checks with exact-length hex validation against the FIPS
+constants (ML-KEM-768 = 2368 hex chars, ML-DSA-44 = 2624, signature = 4840).
+
+### A limit worth recording: ML-KEM has no cheap validity check
+
+The audit's remediation step 3 — "decode via the PQC implementation" — buys
+nothing here. Verified directly:
+
+```
+liboqs ACCEPTED garbage key -> no cheap semantic check available
+```
+
+liboqs will happily encapsulate against 1184 bytes of `AA`, so the audit's own
+`"AAAA..."` example is structurally indistinguishable from a real key. Format
+validation is the ceiling for a standalone key check. What actually binds a
+key to an identity is the **ML-DSA key attestation**, which the project already
+implements — the audit correctly praised it in §15.2 without noticing it is
+the answer to its own §13.
+
+### Compatibility decision: strict on write, lenient on read
+
+Strict validation is enforced where keys are **written** (login), not where
+they are **read**. Accounts whose stored key predates this check keep working
+until their client sends a new one; `is_usable_encryption_key(strict=False)`
+retains the length floor as a fallback for those rows. Enforcing strictly at
+read time would have locked existing users out of the messenger — a validation
+tightening should not be a denial of service against your own users.
+
+This did require updating test fixtures: the placeholder keys
+(`"enc_pub_key_" + "c" * 600`) are not valid hex and are now correctly
+rejected at login, so they were replaced with well-formed ML-KEM-768-shaped
+values across `conftest.py`, `test_auth.py`, and `test_key_attestation.py`.
+
+### New test files
+
+- `backend/tests/test_multisig_concurrency.py` — concurrent signing against a
+  2-of-4 quorum, the recipient-key release guard under race, completion
+  atomicity, signing closed after completion, and DB-level duplicate rejection.
+- `backend/tests/test_crypto_validation.py` — hex/length validation, the
+  audit's "600 arbitrary chars" case, and strict-vs-legacy behaviour.
+
 ### Still open
 
-P1 (multisig locking + the non-atomic completion bug, strict key validation) and
-P2 (headers, input limits, supply chain, CI) are unchanged from the plan above.
-KRY-006 (AAD) and KRY-012 (service layer) remain deliberately deferred.
+P2 only: HTTP headers, input limits (KRY-010), Python lockfile (KRY-007), and
+CI hardening (KRY-008). KRY-006 and KRY-012 remain deferred.

@@ -4,6 +4,7 @@ from sqlalchemy.orm import Session
 from datetime import datetime, timezone, timedelta
 import models, schemas, auth, config, invites
 from database import get_db
+from security.crypto_validation import is_valid_ml_kem_public_key
 
 router = APIRouter(
     prefix="/auth",
@@ -65,6 +66,18 @@ def login(request: Request, login_req: schemas.LoginRequest, db: Session = Depen
     # otherwise a failed attempt would hand back a replayable challenge.
     if not auth.verify_signature(address, login_req.nonce, login_req.signature, login_req.encryption_public_key):
         raise HTTPException(status_code=401, detail="Invalid signature")
+
+    # Reject malformed encryption keys before they can be stored (KRY-011).
+    # Enforced only on keys being *submitted*, so accounts whose stored key
+    # predates this check keep working until their client sends a new one —
+    # existing users are not locked out by a validation tightening.
+    if login_req.encryption_public_key and not is_valid_ml_kem_public_key(
+        login_req.encryption_public_key
+    ):
+        raise HTTPException(
+            status_code=400,
+            detail="encryption_public_key must be a hex-encoded ML-KEM-768 public key",
+        )
 
     # Key attestation (audit M-1): a self-signature by `address` over its own
     # ML-KEM key. Peers verify it client-side; the server checks it here too so

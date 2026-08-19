@@ -217,15 +217,31 @@ def get_multisig_workflow(workflow_id: int, current_user: models.User = Depends(
 @router.post("/workflow/{workflow_id}/sign", response_model=schemas.MultisigWorkflowResponse)
 @limiter.limit("20/minute")
 def sign_multisig_workflow(request: Request, workflow_id: int, sig_req: schemas.MultisigSignatureRequest, current_user: models.User = Depends(get_current_user), db: Session = Depends(get_db)):
-    wf = db.query(models.MultisigWorkflow).filter(models.MultisigWorkflow.id == workflow_id).first()
+    # Serialize concurrent signatures on this workflow (KRY-005).
+    #
+    # The quorum decision is read-then-write: without a lock, two signers can
+    # both observe `already_signed == quorum - 1`, both conclude they are the
+    # completing signer, and both pass the guard that is supposed to let only
+    # the final signature release recipient keys. Taking a row lock here means
+    # the second signer reads the first one's committed state.
+    #
+    # FOR UPDATE is a no-op on SQLite, which serializes writes at the file
+    # level anyway; on PostgreSQL (the deployment target) it is what actually
+    # closes the race.
+    wf = (
+        db.query(models.MultisigWorkflow)
+        .filter(models.MultisigWorkflow.id == workflow_id)
+        .with_for_update()
+        .first()
+    )
     if not wf:
         raise HTTPException(status_code=404, detail="Workflow not found")
-        
+
     signer = db.query(models.MultisigWorkflowSigner).filter(
         models.MultisigWorkflowSigner.workflow_id == wf.id,
         models.MultisigWorkflowSigner.user_address == current_user.address.lower()
     ).first()
-    
+
     if not signer:
         raise HTTPException(status_code=403, detail="You are not a signer for this workflow")
 
@@ -287,11 +303,21 @@ def sign_multisig_workflow(request: Request, workflow_id: int, sig_req: schemas.
             if recipient:
                 recipient.encrypted_key = enc_key
 
-    db.commit() # Commit this signature and keys first
+    # Status transition happens in the SAME transaction as the signature.
+    # Previously the signature was committed first and `status = "completed"`
+    # second: a crash between the two left a fully-signed workflow stuck in
+    # `pending` forever, with the secret never released and no recovery path.
+    if is_completing:
+        wf.status = "completed"
+
+    # One commit: signature, recipient keys, and status land together or not
+    # at all. This also releases the FOR UPDATE lock taken above.
+    db.commit()
 
     sender_name = current_user.username or f"{current_user.address[:8]}..."
 
-    # Notify Owner
+    # Notifications are best-effort and deliberately AFTER the commit — a push
+    # failure must never roll back a recorded signature.
     if wf.owner_address != current_user.address:
         notify_user_push(
             db,
@@ -302,11 +328,6 @@ def sign_multisig_workflow(request: Request, workflow_id: int, sig_req: schemas.
         )
 
     if is_completing:
-        wf.status = "completed"
-        # Release handled above via Recipient Key updates in table
-        db.commit()
-
-        # Notify Recipients
         for recipient in wf.recipients:
             notify_user_push(
                 db,

@@ -9,6 +9,7 @@ from database import get_db
 from dependencies import get_current_user
 from websocket_manager import manager
 from utils.push import notify_user_push
+from security.crypto_validation import is_usable_encryption_key
 
 router = APIRouter(
     prefix="/groups",
@@ -43,7 +44,7 @@ async def create_group(
 
     # Validate all members have PQC keys (Messenger requirement)
     for u in users:
-        if not u.encryption_public_key or len(u.encryption_public_key) < 500:
+        if not is_usable_encryption_key(u.encryption_public_key):
             raise HTTPException(
                 status_code=400, 
                 detail=f"User {u.address} is not Messenger-capable (Missing PQC key)"
@@ -308,7 +309,7 @@ async def add_member(
     if not target_user:
         raise HTTPException(status_code=404, detail="User not found")
         
-    if not target_user.encryption_public_key or len(target_user.encryption_public_key) < 500:
+    if not is_usable_encryption_key(target_user.encryption_public_key):
         raise HTTPException(status_code=400, detail="User is not Messenger-capable (Missing PQC key)")
 
     if len(channel.members) >= 50:

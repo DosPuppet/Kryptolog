@@ -62,7 +62,11 @@ app.dependency_overrides[get_db] = override_get_db
 TEST_USER_ADDRESS = "pqc_test_user_" + "a" * 100
 TEST_USER_ADDRESS_2 = "pqc_test_user_" + "b" * 100
 TEST_USER_ADDRESS_3 = "pqc_test_user_" + "d" * 100
-TEST_ENCRYPTION_KEY = "enc_pub_key_" + "c" * 600  # Must be > 500 chars to pass PQC key validation
+# A structurally valid ML-KEM-768 public key: 1184 bytes, hex-encoded (2368
+# chars). Not a real key — ML-KEM has no cheap validity predicate, so the
+# server can only check the format — but it must *be* the right format, since
+# login now rejects malformed keys (KRY-011).
+TEST_ENCRYPTION_KEY = "ab" * 1184
 
 
 # ---------- Auth helpers ----------
