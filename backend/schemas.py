@@ -2,11 +2,32 @@ from pydantic import BaseModel, Field, ConfigDict
 from typing import Optional, List
 from datetime import datetime
 
+# --- Input bounds (audit KRY-010) -------------------------------------------
+#
+# These are DoS bounds, not format validation: they cap how much a caller can
+# push through a field, while the cryptographic format checks live in
+# security/crypto_validation.py.
+#
+# An address IS an ML-DSA-44 public key — 1312 bytes, 2624 hex chars. The old
+# 20 000-char cap let a caller send ~8x that in every address field. 4096 keeps
+# real addresses comfortably inside while cutting the ceiling, and leaves room
+# for the shorter synthetic addresses that predate strict validation (see the
+# "strict on write, lenient on read" note in the audit doc).
+MAX_ADDRESS_LEN = 4096
+
+# Display names (groups, channels). Previously 500 000 — half a megabyte for a
+# label that renders in a sidebar. Group names may be encrypted blobs in some
+# clients, so this is generous rather than tight.
+MAX_DISPLAY_NAME_LEN = 2_000
+
+# Encrypted secret payload stored inline (large files go through FileChunks).
+MAX_SECRET_BLOB_LEN = 500_000
+
 class UserBase(BaseModel):
-    address: str = Field(..., max_length=20000)
+    address: str = Field(..., max_length=MAX_ADDRESS_LEN)
 
 class UserCreate(UserBase):
-    encryption_public_key: str = Field(..., max_length=20000)
+    encryption_public_key: str = Field(..., max_length=MAX_ADDRESS_LEN)
 
 class UserUpdate(BaseModel):
     username: Optional[str] = Field(None, max_length=200)
@@ -30,7 +51,7 @@ class SecretBase(BaseModel):
     name: str = Field(..., max_length=10_000)
     type: str = Field("standard") # 'standard' | 'signed_document'
     # 500KB limit for SecretBase.encrypted_data. Large files use FileChunks.
-    encrypted_data: str = Field(..., max_length=500_000)
+    encrypted_data: str = Field(..., max_length=MAX_SECRET_BLOB_LEN)
     # Key is small, keeping strict limit
     encrypted_key: str = Field(..., max_length=50_000) 
 
@@ -70,7 +91,7 @@ class FileMetadata(BaseModel):
 
 class AccessGrantCreate(BaseModel):
     secret_id: int
-    grantee_address: str = Field(..., max_length=20000)
+    grantee_address: str = Field(..., max_length=MAX_ADDRESS_LEN)
     encrypted_key: str = Field(..., max_length=50_000) # Key encrypted for grantee
     expires_in: Optional[int] = None # Seconds
 
@@ -104,10 +125,10 @@ class DocumentResponse(DocumentBase):
     model_config = ConfigDict(from_attributes=True)
 
 class LoginRequest(BaseModel):
-    address: str = Field(..., max_length=20000)
+    address: str = Field(..., max_length=MAX_ADDRESS_LEN)
     signature: str = Field(..., max_length=64_000)
     nonce: str = Field(..., max_length=200)
-    encryption_public_key: Optional[str] = Field(None, max_length=20000)
+    encryption_public_key: Optional[str] = Field(None, max_length=MAX_ADDRESS_LEN)
     # Self-signed attestation of encryption_public_key (audit M-1). Optional for
     # compat with older clients; verified server-side when present.
     encryption_key_attestation: Optional[str] = Field(None, max_length=64_000)
@@ -169,7 +190,7 @@ class MultisigRejectRequest(BaseModel):
     reason: Optional[str] = Field(None, max_length=500)
 
 class MessageBase(BaseModel):
-    recipient_address: str = Field(..., max_length=20000)
+    recipient_address: str = Field(..., max_length=MAX_ADDRESS_LEN)
     content: str = Field(..., max_length=10_000) # Encrypted Blob (Max 10KB)
 
 class MessageCreate(MessageBase):
@@ -215,7 +236,7 @@ class HistoryRequest(BaseModel):
 class GroupChannelCreate(BaseModel):
     # Names are E2EE blobs (audit M-3): a per-member key-wrap map, so the cap
     # scales with group size (~2.3KB/member) rather than title length.
-    name: str = Field(..., min_length=1, max_length=500_000)
+    name: str = Field(..., min_length=1, max_length=MAX_DISPLAY_NAME_LEN)
     member_addresses: List[str] = Field(..., min_length=1)
 
 class GroupMemberResponse(BaseModel):
@@ -267,7 +288,7 @@ class GroupMemberRoleUpdate(BaseModel):
 
 class GroupUpdate(BaseModel):
     # E2EE name blob — same sizing rationale as GroupChannelCreate.name.
-    name: str = Field(..., max_length=500_000)
+    name: str = Field(..., max_length=MAX_DISPLAY_NAME_LEN)
 
 class Token(BaseModel):
     access_token: str

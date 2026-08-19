@@ -35,12 +35,47 @@ app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
 class SecurityHeadersMiddleware(BaseHTTPMiddleware):
+    """Security headers for API responses (audit KRY-009).
+
+    These are defence-in-depth for the API surface itself. The SPA's own
+    headers — including the full CSP, HSTS and Permissions-Policy — are set by
+    the reverse proxy in nginx.conf.example, which is the right place for them:
+    HSTS is a property of the TLS terminator, and the SPA's CSP has to describe
+    assets FastAPI never serves. What is set here still matters, because a
+    deployment that exposes the API directly (or bypasses the proxy) would
+    otherwise get nothing at all.
+
+    X-XSS-Protection is deliberately NOT set. It is obsolete in every current
+    browser, and its legacy auditor had bypasses of its own, so emitting it is
+    at best noise and at worst harmful.
+    """
+
+    # The API returns JSON, never HTML or scripts, so it can afford the most
+    # restrictive policy there is: deny everything and forbid framing. This is
+    # not the SPA's CSP — see nginx.conf.example for that one.
+    _API_CSP = "default-src 'none'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'"
+
     async def dispatch(self, request: Request, call_next):
         response = await call_next(request)
         response.headers["X-Content-Type-Options"] = "nosniff"
         response.headers["X-Frame-Options"] = "DENY"
-        response.headers["X-XSS-Protection"] = "1; mode=block"
         response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+        response.headers["Content-Security-Policy"] = self._API_CSP
+        # No API response should be embedded by another site, and none of these
+        # browser features are ever needed by a JSON endpoint.
+        response.headers["Cross-Origin-Resource-Policy"] = "same-origin"
+        response.headers["Cross-Origin-Opener-Policy"] = "same-origin"
+        response.headers["Permissions-Policy"] = (
+            "camera=(), microphone=(), geolocation=(), payment=(), usb=()"
+        )
+        # HSTS only when the request actually arrived over TLS; sending it on a
+        # plaintext dev request is meaningless and pins localhost to https.
+        # In production the proxy sets this too — matching values, so whichever
+        # one lands is correct.
+        if request.url.scheme == "https" or request.headers.get("x-forwarded-proto") == "https":
+            response.headers["Strict-Transport-Security"] = (
+                "max-age=63072000; includeSubDomains"
+            )
         return response
 
 app.add_middleware(SecurityHeadersMiddleware)

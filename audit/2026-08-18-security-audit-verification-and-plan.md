@@ -442,7 +442,107 @@ values across `conftest.py`, `test_auth.py`, and `test_key_attestation.py`.
 - `backend/tests/test_crypto_validation.py` — hex/length validation, the
   audit's "600 arbitrary chars" case, and strict-vs-legacy behaviour.
 
-### Still open
+### Still open after P1
 
 P2 only: HTTP headers, input limits (KRY-010), Python lockfile (KRY-007), and
 CI hardening (KRY-008). KRY-006 and KRY-012 remain deferred.
+
+---
+
+## 6. P2 implementation status — DONE (2026-08-19)
+
+Suite: **274 backend tests passing** (up from 251), frontend 53 passing,
+crypto-core 22 passing, all builds green.
+
+| Item | Status | Where |
+|---|---|---|
+| 8-10. HTTP headers (KRY-009) | done | `backend/main.py` |
+| 11. Python lockfile (KRY-007) | done | `backend/requirements.lock` |
+| 12. SAST / dependency scanning (KRY-008) | done | `.github/workflows/security.yml` |
+| 13. Actions pinned by SHA (KRY-008) | done | both workflows |
+| 14. Lint gate (KRY-008) | partial — frontend blocking, extension advisory | `.github/workflows/ci.yml` |
+| 9 (KRY-010). Input limits | done | `backend/schemas.py` |
+
+### The scanner immediately earned its place
+
+Adding `pip-audit` surfaced a real problem on its first run: **`pyjwt` 2.10.1
+carried 12 known advisories**, and it was the one *hard-pinned* dependency
+(`pyjwt==2.10.1`) in `requirements.txt`.
+
+Exposure was limited — `auth.py` uses HS256 only, passes an explicit
+`algorithms=[JWT_ALG]` allowlist, and never touches `PyJWKClient` — so the
+headline advisories (PYSEC-2026-179 JWK/HMAC confusion, PYSEC-2026-175
+`PyJWKClient` URL handling) did not apply. But running the JWT library with a
+dozen open CVEs is not a defensible position for a project whose entire session
+model rests on it. Upgraded to `pyjwt>=2.13.0`; `pip-audit` now reports **no
+known vulnerabilities**, and the auth tests pass with no code changes.
+
+`npm audit` likewise found 2 high-severity issues in `packages/crypto-core`
+(`nanoid`, `postcss` — both build-time). Fixed non-breaking; crypto-core's 22
+byte-compat tests still pass. The `elliptic` chain in `trustkeys` was
+deliberately **not** force-upgraded: it arrives via `vite-plugin-node-polyfills`
+as a devDependency and does not appear in the built bundle, so a breaking
+toolchain upgrade buys nothing.
+
+### Two corrections to the audit's §11 and §10
+
+**Most of the headers the audit called missing were already present.** It
+reviewed the FastAPI middleware in isolation and concluded CSP, HSTS and
+Permissions-Policy were absent. `nginx.conf.example` already sets all three,
+plus a well-built SPA CSP that closely matches the audit's own recommendation.
+The genuine gap was the *API* surface: a deployment reaching FastAPI directly,
+or bypassing the proxy, got only four headers.
+
+So the split is now explicit: nginx owns the SPA's headers (HSTS belongs to the
+TLS terminator; the SPA's CSP describes assets FastAPI never serves), and the
+middleware sets an API-appropriate policy — `default-src 'none'` is available
+here precisely because the API returns JSON and never markup. HSTS is emitted
+only when the request actually arrived over TLS, so dev over plaintext doesn't
+pin localhost to https. `X-XSS-Protection` was removed rather than kept.
+
+**The audit also reported CI as lacking `permissions: contents: read`.** It was
+already there at workflow level in `ci.yml`.
+
+### Lint gate: honest, not aspirational
+
+The audit asked for lint to stop being `continue-on-error`. Measuring first was
+the right call:
+
+- **frontend** — already clean. Now a **blocking** gate.
+- **trustkeys** — 96 errors, of which **70 were a config gap**: `eslint.config.js`
+  loaded `globals.browser` but not `globals.webextensions`, so every `chrome.*`
+  call in an MV3 extension reported as `no-undef`. Adding that one line took it
+  to 26. The remaining 26 are real but unrelated cleanups (unused catch
+  bindings, case-block declarations, two hook-ordering issues), so this job
+  stays advisory with a note naming exactly what must be fixed to flip it.
+
+Making trustkeys blocking today would have meant either failing every build or
+bundling unrelated code churn into a security change.
+
+### Supply chain
+
+`backend/requirements.lock` pins all 56 resolved packages with artifact hashes
+(`pip-compile --generate-hashes`). Verified it installs in a clean venv under
+`pip install --require-hashes`. The CI job audits the lock (so it reflects what
+production installs, not just the floors) **and** regenerates it to prove it
+hasn't drifted from `requirements.txt` — a stale lock silently reverts the
+whole guarantee.
+
+All 8 action references across both workflows are pinned to immutable commit
+SHAs with the tag retained as a trailing comment; every SHA was verified to
+resolve. `.github/dependabot.yml` covers all five ecosystems including
+`github-actions`, which is what keeps SHA pins from rotting — a pin never
+updates itself.
+
+### Note on the pre-existing `fakeredis` failures
+
+The 5 `test_ws_fanout.py` failures reported throughout P0 and P1 were a **local
+environment gap, not a project defect**: `fakeredis` is correctly declared in
+`requirements-dev.txt` and CI installs it. Installing it locally makes all 7
+pass. Backend totals in this document are now the true full-suite count.
+
+### Still open
+
+Only the deliberately deferred items remain: **KRY-006** (structured AAD — needs
+a versioned envelope and a ciphertext migration) and **KRY-012** (service-layer
+refactor). Neither is a fix; both are projects.
