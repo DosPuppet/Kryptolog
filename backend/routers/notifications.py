@@ -1,9 +1,10 @@
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, Depends, HTTPException, Request
 from dependencies import limiter
 from sqlalchemy.orm import Session
 import models, schemas
 from database import get_db
 from dependencies import get_current_user
+from security.url_guard import UnsafeUrlError, validate_push_endpoint
 
 router = APIRouter(
     prefix="/notifications",
@@ -13,19 +14,38 @@ router = APIRouter(
 @router.post("/subscribe", response_model=schemas.PushSubscriptionResponse)
 @limiter.limit("10/minute")
 def subscribe(request: Request, sub: schemas.PushSubscriptionCreate, current_user: models.User = Depends(get_current_user), db: Session = Depends(get_db)):
-    # Check if subscription already exists for this endpoint
+    # Reject SSRF-capable endpoints at the door (KRY-002). The sender
+    # re-validates too, since stored rows predate this check and DNS can move.
+    try:
+        validate_push_endpoint(sub.endpoint)
+    except UnsafeUrlError as exc:
+        raise HTTPException(status_code=400, detail=f"Invalid push endpoint: {exc}")
+
+    # Only ever look at *this* user's own subscriptions. Matching on endpoint
+    # alone let any authenticated caller re-point somebody else's subscription
+    # row at themselves and receive that user's notifications (IDOR).
     existing = db.query(models.PushSubscription).filter(
-        models.PushSubscription.endpoint == sub.endpoint
+        models.PushSubscription.endpoint == sub.endpoint,
+        models.PushSubscription.user_address == current_user.address
     ).first()
-    
+
     if existing:
-        # Update user if it changed (e.g. login with different account on same browser)
-        existing.user_address = current_user.address
+        # Same browser, same account — refresh the rotating keys.
         existing.p256dh = sub.p256dh
         existing.auth = sub.auth
         db.commit()
         db.refresh(existing)
         return existing
+
+    # A browser endpoint is unique per (browser, push service) and is reissued
+    # on account switch, but if this exact endpoint is still registered to a
+    # different account, that registration is stale — the endpoint's current
+    # owner is whoever holds the browser now. Drop the stale row instead of
+    # reassigning it, so no history carries across the account boundary.
+    db.query(models.PushSubscription).filter(
+        models.PushSubscription.endpoint == sub.endpoint,
+        models.PushSubscription.user_address != current_user.address
+    ).delete(synchronize_session=False)
 
     new_sub = models.PushSubscription(
         user_address=current_user.address,

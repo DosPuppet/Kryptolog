@@ -75,9 +75,11 @@ class TestLogin:
         assert resp2.status_code == 400
 
     def test_login_updates_encryption_key(self, client):
-        do_login(client, TEST_USER_ADDRESS, "old_key_" + "x" * 100)
-        token2, user2 = do_login(client, TEST_USER_ADDRESS, "new_key_" + "y" * 100)
-        assert user2["encryption_public_key"] == "new_key_" + "y" * 100
+        old_key = "5e" * 1184
+        new_key = "6f" * 1184
+        do_login(client, TEST_USER_ADDRESS, old_key)
+        token2, user2 = do_login(client, TEST_USER_ADDRESS, new_key)
+        assert user2["encryption_public_key"] == new_key
 
     def test_login_default_username_from_address(self, client):
         token, user = do_login(client, TEST_USER_ADDRESS, TEST_ENCRYPTION_KEY)
@@ -108,7 +110,7 @@ class TestTokenRevocation:
 class TestKeyChangeStamp:
     """audit S1: encryption-key changes are stamped (no longer silently overwritten)."""
 
-    ALT_KEY = "enc_pub_key_alt_" + "d" * 600  # different key, still > 500 chars
+    ALT_KEY = "cd" * 1184  # a different, still well-formed ML-KEM-768 key
 
     def test_new_user_has_no_key_change_stamp(self, client):
         _, user = do_login(client, TEST_USER_ADDRESS, TEST_ENCRYPTION_KEY, "Alice")

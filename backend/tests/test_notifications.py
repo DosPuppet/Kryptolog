@@ -3,6 +3,20 @@ from models import PushSubscription
 from utils.push import notify_user_push
 from unittest.mock import patch, MagicMock
 
+
+@pytest.fixture(autouse=True)
+def _allow_placeholder_endpoints():
+    """These tests use non-resolvable placeholder hostnames.
+
+    The SSRF guard (KRY-002) would correctly reject them, so stub only the DNS
+    step — the URL parsing/scheme/port rules still run for real. The guard's
+    own behaviour is covered directly in test_ssrf_guard.py.
+    """
+    with patch(
+        "security.url_guard.resolve_safe_addresses", return_value=["93.184.216.34"]
+    ):
+        yield
+
 def test_push_subscription_registration(client, db_session, user1):
     token, current_user = user1
     auth_headers = {"Authorization": f"Bearer {token}"}

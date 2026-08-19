@@ -15,7 +15,11 @@ export default defineConfig([
     ],
     languageOptions: {
       ecmaVersion: 2020,
-      globals: globals.browser,
+      // MV3 extension code runs against the WebExtension APIs as well as the
+      // DOM, so `chrome` (and friends) are real globals here — without this
+      // every `chrome.*` call reported as no-undef, which is what kept lint
+      // advisory-only rather than a real gate.
+      globals: { ...globals.browser, ...globals.webextensions },
       parserOptions: {
         ecmaVersion: 'latest',
         ecmaFeatures: { jsx: true },

@@ -4,6 +4,7 @@ from sqlalchemy.orm import Session
 from datetime import datetime, timezone, timedelta
 import models, schemas, auth, config, invites
 from database import get_db
+from security.crypto_validation import is_valid_ml_kem_public_key
 
 router = APIRouter(
     prefix="/auth",
@@ -13,12 +14,13 @@ router = APIRouter(
 @router.get("/nonce/{address}")
 @limiter.limit("10/minute")
 def get_nonce(request: Request, address: str, db: Session = Depends(get_db)):
-    # Cleanup expired nonces first (lazy cleanup)
-    now = datetime.now(timezone.utc)
+    # Cleanup expired nonces first (lazy cleanup). Naive UTC throughout to
+    # match the timezone-less expires_at column.
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
     db.query(models.Nonce).filter(models.Nonce.expires_at <= now).delete()
-    
+
     nonce_val = auth.generate_nonce()
-    expires = datetime.now(timezone.utc) + timedelta(minutes=5)
+    expires = now + timedelta(minutes=5)
     
     # Upsert logic
     new_nonce = models.Nonce(address=address.lower(), nonce=nonce_val, expires_at=expires)
@@ -32,23 +34,50 @@ def get_nonce(request: Request, address: str, db: Session = Depends(get_db)):
 def login(request: Request, login_req: schemas.LoginRequest, db: Session = Depends(get_db)):
     address = login_req.address.lower()
     
-    # Fetch nonce from DB
-    nonce_entry = db.query(models.Nonce).filter(models.Nonce.address == address).first()
-    
-    if not nonce_entry:
-        raise HTTPException(status_code=400, detail="Nonce not found. Request a nonce first.")
-        
-    # Check expiry
-    if nonce_entry.expires_at.replace(tzinfo=timezone.utc) <= datetime.now(timezone.utc):
-        db.delete(nonce_entry)
-        db.commit()
-        raise HTTPException(status_code=400, detail="Nonce expired.")
-    
-    if login_req.nonce != nonce_entry.nonce:
-         raise HTTPException(status_code=400, detail="Invalid nonce.")
+    # Consume the nonce atomically BEFORE verifying the signature (KRY-004).
+    #
+    # The old flow was SELECT -> verify -> DELETE, and ML-DSA verification is
+    # slow enough that the window between read and delete was comfortably wide:
+    # concurrent requests could each observe the same live nonce and each go on
+    # to mint a token, so "one-time" was not actually one-time. Making the
+    # DELETE itself the guard means exactly one caller can ever claim a given
+    # nonce — whoever's statement reports rowcount == 1 — and the expensive
+    # crypto happens after the claim is already settled.
+    #
+    # Naive UTC to match the (timezone-less) expires_at column.
+    now_naive = datetime.now(timezone.utc).replace(tzinfo=None)
+    claimed = (
+        db.query(models.Nonce)
+        .filter(
+            models.Nonce.address == address,
+            models.Nonce.nonce == login_req.nonce,
+            models.Nonce.expires_at > now_naive,
+        )
+        .delete(synchronize_session=False)
+    )
+    db.commit()
 
+    if claimed != 1:
+        # Missing, mismatched, expired, or already consumed — one generic
+        # answer, so this can't be used to probe which nonces exist.
+        raise HTTPException(status_code=400, detail="Invalid or expired nonce.")
+
+    # From here the nonce is spent: every failure below must leave it spent,
+    # otherwise a failed attempt would hand back a replayable challenge.
     if not auth.verify_signature(address, login_req.nonce, login_req.signature, login_req.encryption_public_key):
         raise HTTPException(status_code=401, detail="Invalid signature")
+
+    # Reject malformed encryption keys before they can be stored (KRY-011).
+    # Enforced only on keys being *submitted*, so accounts whose stored key
+    # predates this check keep working until their client sends a new one —
+    # existing users are not locked out by a validation tightening.
+    if login_req.encryption_public_key and not is_valid_ml_kem_public_key(
+        login_req.encryption_public_key
+    ):
+        raise HTTPException(
+            status_code=400,
+            detail="encryption_public_key must be a hex-encoded ML-KEM-768 public key",
+        )
 
     # Key attestation (audit M-1): a self-signature by `address` over its own
     # ML-KEM key. Peers verify it client-side; the server checks it here too so
@@ -61,9 +90,7 @@ def login(request: Request, login_req: schemas.LoginRequest, db: Session = Depen
         if not auth.verify_message_signature(address, att_msg, attestation):
             raise HTTPException(status_code=400, detail="Invalid encryption key attestation")
 
-    # Cleanup nonce (Anti-replay)
-    db.delete(nonce_entry)
-    db.commit()
+    # (Nonce already consumed atomically above — nothing to clean up here.)
 
     # Find or create user
     user = db.query(models.User).filter(models.User.address == address).first()

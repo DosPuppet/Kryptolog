@@ -6,6 +6,7 @@ backend/sql_app.db
 backend/safelog.db
 backend/.venv/
 backend/venv/
+.venv/
 
 # Node (root-level PM2 install and any nested node_modules)
 node_modules/
@@ -37,12 +38,11 @@ Thumbs.db
 
 # Local audit / scratch docs (not tracked)
 .tempdoc/
-TRANSVERSAL_AUDIT_2026-06-12.md
-AUDIT_2026-07-03.md
 
 # Local audit venv (liboqs) — never commit
 backend/.venv-audit/
 .venv-audit/
+audit/
 
 # Claude Code project instructions — keep local
 CLAUDE.md

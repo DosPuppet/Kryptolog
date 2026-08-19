@@ -6,6 +6,7 @@ from typing import List
 import models, schemas
 from database import get_db
 from dependencies import get_current_user
+from security.crypto_validation import LEGACY_MIN_KEY_LEN
 
 router = APIRouter(
     prefix="/users",
@@ -74,9 +75,14 @@ def list_users(request: Request, search: str = None, only_pqc: bool = False, lim
         )
 
     if only_pqc:
-        # Messenger requires an ML-KEM encryption key. ML-KEM-768 public keys are
-        # large (~1184 bytes, hex ~2368), so a length floor reliably selects them.
-        query = query.filter(func.length(models.User.encryption_public_key) > 500)
+        # Messenger requires an ML-KEM encryption key. Filtered in SQL so paging
+        # stays correct; the floor (rather than the exact 2368-char length) keeps
+        # legacy accounts whose keys predate strict validation visible, matching
+        # is_usable_encryption_key's non-strict behaviour used by the endpoints
+        # that actually gate on capability.
+        query = query.filter(
+            func.length(models.User.encryption_public_key) >= LEGACY_MIN_KEY_LEN
+        )
 
     return query.limit(limit).offset(offset).all()
 

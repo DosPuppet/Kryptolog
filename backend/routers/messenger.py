@@ -11,6 +11,7 @@ from database import get_db, SessionLocal
 from dependencies import get_current_user, user_for_token
 from websocket_manager import manager
 from utils.push import notify_user_push
+from security.crypto_validation import is_usable_encryption_key
 
 logger = logging.getLogger("kryptolog.messenger")
 
@@ -30,7 +31,7 @@ async def send_message(request: Request, msg: schemas.MessageCreate, current_use
         raise HTTPException(status_code=404, detail="Recipient not found")
     
     # Validate PQC key for recipient (Messenger requires PQC for all participants)
-    if not recipient.encryption_public_key or len(recipient.encryption_public_key) < 500:
+    if not is_usable_encryption_key(recipient.encryption_public_key):
         raise HTTPException(status_code=400, detail="Recipient is not Messenger-capable (Missing PQC key)")
     
     # Create message

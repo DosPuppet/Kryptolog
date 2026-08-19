@@ -27,6 +27,14 @@ def _now() -> datetime:
     return datetime.now(timezone.utc)
 
 
+def _as_naive(value: datetime) -> datetime:
+    """Normalise to naive UTC. `expires_at` is DateTime (no timezone), so rows
+    read back are naive while freshly-built values may still be aware."""
+    if value.tzinfo is None:
+        return value
+    return value.astimezone(timezone.utc).replace(tzinfo=None)
+
+
 @router.post("", response_model=schemas.KeyTransferCreateResponse)
 @limiter.limit("10/minute")
 def create_transfer(
@@ -39,10 +47,13 @@ def create_transfer(
         raise HTTPException(status_code=413, detail="Transfer payload too large")
 
     # Opportunistically purge expired rows so the table can't accumulate.
-    db.query(models.KeyTransfer).filter(models.KeyTransfer.expires_at <= _now()).delete()
+    # Naive UTC comparison to match the (timezone-less) column.
+    db.query(models.KeyTransfer).filter(
+        models.KeyTransfer.expires_at <= _now().replace(tzinfo=None)
+    ).delete()
 
     transfer_id = _secrets.token_urlsafe(9)  # ~12 chars, unguessable
-    expires_at = _now() + timedelta(minutes=config.KEY_TRANSFER_TTL_MINUTES)
+    expires_at = _as_naive(_now() + timedelta(minutes=config.KEY_TRANSFER_TTL_MINUTES))
     db.add(models.KeyTransfer(id=transfer_id, ciphertext=body.ciphertext, expires_at=expires_at))
     db.commit()
 
@@ -52,21 +63,54 @@ def create_transfer(
 @router.get("/{transfer_id}", response_model=schemas.KeyTransferResponse)
 @limiter.limit("20/minute")
 def claim_transfer(request: Request, transfer_id: str, db: Session = Depends(get_db)):
+    """Claim a transfer exactly once.
+
+    Single-use is enforced by the DELETE itself, not by a preceding SELECT
+    (KRY-003). Two concurrent claims both used to read the ciphertext before
+    either delete landed, handing the vault blob to both callers. Here the
+    delete is the guard: whoever's statement reports rowcount == 1 owns the
+    row, everyone else gets a 404. Portable across Postgres and SQLite —
+    `DELETE ... RETURNING` would not be.
+    """
+    # Read first, but treat the value as a *candidate* only: it is not ours
+    # until the conditional delete below says so.
     row = (
         db.query(models.KeyTransfer)
         .filter(models.KeyTransfer.id == transfer_id)
         .first()
     )
-    # Treat missing AND expired identically (generic 404, no oracle). Delete an
-    # expired row if we happened upon it.
-    if row is None or row.expires_at.replace(tzinfo=timezone.utc) <= _now():
-        if row is not None:
-            db.delete(row)
-            db.commit()
+    if row is None:
         raise HTTPException(status_code=404, detail="Transfer not found or expired")
 
     ciphertext = row.ciphertext
-    # Single-use: consume on read.
-    db.delete(row)
+    expires_at = row.expires_at
+
+    # Detach so the pending-delete below is the only thing touching this row.
+    db.expunge(row)
+
+    # Expiry is evaluated inside the DELETE predicate, so an expired row is
+    # never claimable even if it was still live at SELECT time. Naive UTC to
+    # match the column convention.
+    now_naive = _now().replace(tzinfo=None)
+    deleted = (
+        db.query(models.KeyTransfer)
+        .filter(
+            models.KeyTransfer.id == transfer_id,
+            models.KeyTransfer.expires_at > now_naive,
+        )
+        .delete(synchronize_session=False)
+    )
     db.commit()
+
+    if deleted != 1:
+        # Either another request consumed it first, or it had expired. Both
+        # answer the same way — no oracle distinguishing the two.
+        if expires_at is not None and _as_naive(expires_at) <= now_naive:
+            # Expired row: clear it out so the table cannot accumulate.
+            db.query(models.KeyTransfer).filter(
+                models.KeyTransfer.id == transfer_id
+            ).delete(synchronize_session=False)
+            db.commit()
+        raise HTTPException(status_code=404, detail="Transfer not found or expired")
+
     return {"ciphertext": ciphertext}

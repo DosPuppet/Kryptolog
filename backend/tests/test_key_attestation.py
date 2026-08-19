@@ -73,7 +73,7 @@ class TestAttestationStorage:
         )
         # New encryption key + new attestation: the old one signed the old key
         # and must never survive the swap.
-        new_key = "enc_pub_key_" + "z" * 600
+        new_key = "1a" * 1184
         new_att = "bb" * 100
         resp = login_with_attestation(client, TEST_USER_ADDRESS, new_key, new_att)
         assert resp.status_code == 200
@@ -83,7 +83,7 @@ class TestAttestationStorage:
         login_with_attestation(
             client, TEST_USER_ADDRESS, TEST_ENCRYPTION_KEY, FAKE_ATTESTATION, "Stale"
         )
-        new_key = "enc_pub_key_" + "y" * 600
+        new_key = "2b" * 1184
         nonce = get_nonce(client, TEST_USER_ADDRESS)
         resp = client.post("/auth/login", json={
             "address": TEST_USER_ADDRESS,
@@ -126,7 +126,7 @@ class TestRealCrypto:
 
         signer = oqs.Signature(auth_module.SIG_ALG)
         address = signer.generate_keypair().hex()
-        enc_key = "enc_pub_key_" + "r" * 600
+        enc_key = "3c" * 1184
 
         att_msg = auth_module.encryption_key_attestation_message(enc_key)
         good_att = signer.sign(att_msg.encode("utf-8")).hex()
@@ -136,7 +136,7 @@ class TestRealCrypto:
         assert resp.json()["user"]["encryption_key_attestation"] == good_att
 
         # Same signature presented for a different KEM key must fail.
-        other_key = "enc_pub_key_" + "q" * 600
+        other_key = "4d" * 1184
         resp = login_with_attestation(client, address, other_key, good_att)
         assert resp.status_code == 400
 

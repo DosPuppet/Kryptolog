@@ -9,8 +9,11 @@ name: CI
 #   • extension   — TrustKeys MV3 build.
 #   • backend     — pytest, incl. the noble<->liboqs interop tests (liboqs is
 #     compiled from source, so the job installs cmake + a C toolchain).
-# Lint runs advisory (continue-on-error) until the F-6 lint debt is cleared; flip
-# those steps to blocking afterwards.
+# Frontend lint is a blocking gate. The extension's lint stays advisory until
+# its remaining 26 errors are cleared (see the note on that step).
+#
+# A separate Security workflow (.github/workflows/security.yml) carries the
+# AppSec gate: pip-audit, npm audit, gitleaks and CodeQL.
 
 on:
   push:
@@ -30,8 +33,8 @@ jobs:
     name: crypto-core (byte-compat / interop)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: 22
           cache: npm
@@ -45,8 +48,8 @@ jobs:
     name: frontend (tests + build)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: 22
           cache: npm
@@ -67,17 +70,18 @@ jobs:
       - name: Production build
         run: npx vite build
         working-directory: frontend
-      - name: Lint (advisory until F-6 lint debt is cleared)
+      - name: Lint (blocking)
+        # Frontend lint is clean, so it is a real gate now: new lint errors
+        # fail the build rather than scrolling past in the log.
         run: npx eslint .
         working-directory: frontend
-        continue-on-error: true
 
   extension:
     name: trustkeys extension (build)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: 22
           cache: npm
@@ -92,7 +96,11 @@ jobs:
       - name: Build
         run: npx vite build
         working-directory: trustkeys
-      - name: Lint (advisory until F-6 lint debt is cleared)
+      - name: Lint (advisory — 26 known errors, see note)
+        # Adding the webextension globals cleared 70 bogus `chrome` no-undef
+        # errors; the 26 that remain are real but unrelated code cleanups
+        # (unused catch bindings, case-block declarations, two hook ordering
+        # issues). Fix those and flip this to blocking like the frontend job.
         run: npx eslint .
         working-directory: trustkeys
         continue-on-error: true
@@ -130,8 +138,8 @@ jobs:
       # to fakeredis when unset, e.g. on a dev box without Redis).
       TEST_REDIS_URL: redis://localhost:6379/0
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
           python-version: '3.12'
           cache: pip
