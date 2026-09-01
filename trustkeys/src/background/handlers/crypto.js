@@ -63,7 +63,14 @@ export const handleSignMessage = async (request, sender, sendResponse) => {
         return sendResponse({ success: false, error: "Site not connected" });
     }
 
-    const silentAllowed = internal || isDevOrigin(origin) || !!(state.vault.autoSignSites && state.vault.autoSignSites[origin]);
+    // The localhost exemption is compiled out of production builds
+    // (__TRUSTKEYS_ALLOW_DEV_AUTOSIGN__, see vite.config.js): shipping it would
+    // let ANY page served from localhost, on any port, sign as the user with no
+    // prompt and no per-site grant. In a production build a dev origin gets the
+    // same treatment as any other site — silent signing only where the user
+    // granted it, otherwise a per-message approval popup.
+    const devAutoSign = __TRUSTKEYS_ALLOW_DEV_AUTOSIGN__ && isDevOrigin(origin);
+    const silentAllowed = internal || devAutoSign || !!(state.vault.autoSignSites && state.vault.autoSignSites[origin]);
     if (!silentAllowed) {
         // No silent-signing grant for this site → require per-message approval.
         return handleSignAsync(request, sender, sendResponse);

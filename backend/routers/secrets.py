@@ -8,7 +8,7 @@ import models, schemas
 from database import get_db
 from dependencies import get_current_user
 from websocket_manager import manager
-from utils.push import notify_user_push
+from utils.push import notify_user_push_async
 from security import authorization
 import config
 
@@ -156,7 +156,7 @@ async def share_secret(request: Request, grant: schemas.AccessGrantCreate, curre
 
     # Push Notification
     sender_name = current_user.username or f"{current_user.address[:8]}..."
-    notify_user_push(
+    await notify_user_push_async(
         db,
         grant.grantee_address.lower(),
         title="Secret Shared",

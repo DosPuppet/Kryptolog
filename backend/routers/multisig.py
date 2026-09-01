@@ -343,7 +343,17 @@ def sign_multisig_workflow(request: Request, workflow_id: int, sig_req: schemas.
 @router.post("/workflow/{workflow_id}/reject", response_model=schemas.MultisigWorkflowResponse)
 @limiter.limit("20/minute")
 def reject_multisig_workflow(request: Request, workflow_id: int, reject_req: schemas.MultisigRejectRequest, current_user: models.User = Depends(get_current_user), db: Session = Depends(get_db)):
-    wf = db.query(models.MultisigWorkflow).filter(models.MultisigWorkflow.id == workflow_id).first()
+    # Same row lock as /sign — reject and the completing signature both decide
+    # the terminal status, so they must serialize against each other. Without
+    # it, a reject that read `pending` could commit "rejected" AFTER the
+    # completing signature released the recipient keys (a workflow both blocked
+    # and released), or be silently overwritten by it.
+    wf = (
+        db.query(models.MultisigWorkflow)
+        .filter(models.MultisigWorkflow.id == workflow_id)
+        .with_for_update()
+        .first()
+    )
     if not wf:
         raise HTTPException(status_code=404, detail="Workflow not found")
 

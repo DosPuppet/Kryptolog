@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from dependencies import limiter
 from sqlalchemy.orm import Session
 from sqlalchemy import func
@@ -7,6 +7,7 @@ import models, schemas
 from database import get_db
 from dependencies import get_current_user
 from security.crypto_validation import LEGACY_MIN_KEY_LEN
+from security.usernames import InvalidUsername, normalize_username, username_taken
 
 router = APIRouter(
     prefix="/users",
@@ -27,17 +28,19 @@ def update_user(address: str, user_update: schemas.UserUpdate, current_user: mod
     user = current_user
     
     if user_update.username is not None:
-        # Check username uniqueness (case-insensitive)
-        existing = db.query(models.User).filter(
-            models.User.username == user_update.username,
-            models.User.address != current_user.address
-        ).first()
-        if existing:
+        try:
+            new_username = normalize_username(user_update.username)
+        except InvalidUsername as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
+
+        # Uniqueness is case-insensitive: the directory must not hold both
+        # "alice" and "Alice" as separate identities.
+        if username_taken(db, new_username, exclude_address=current_user.address):
             raise HTTPException(
                 status_code=409,
-                detail=f"Username '{user_update.username}' is already taken."
+                detail=f"Username '{new_username}' is already taken."
             )
-        user.username = user_update.username
+        user.username = new_username
         
     db.commit()
     db.refresh(user)
@@ -56,9 +59,18 @@ def get_user(address: str, current_user: models.User = Depends(get_current_user)
 
 @router.get("", response_model=List[schemas.UserResponse])
 @limiter.limit("30/minute")
-def list_users(request: Request, search: str = None, only_pqc: bool = False, limit: int = 5, offset: int = 0, current_user: models.User = Depends(get_current_user), db: Session = Depends(get_db)):
-    if limit > 100:
-        limit = 100
+def list_users(
+    request: Request,
+    search: str = None,
+    only_pqc: bool = False,
+    # Bounded at BOTH ends by FastAPI. The ceiling used to be clamped in the
+    # body while the floor was unchecked, so `?limit=-1` reached PostgreSQL as
+    # `LIMIT -1` — which is a hard error, i.e. a 500 on a trivial query string.
+    limit: int = Query(5, ge=1, le=100),
+    offset: int = Query(0, ge=0),
+    current_user: models.User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
     query = db.query(models.User)
 
     if search is not None:

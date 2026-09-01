@@ -19,7 +19,12 @@ export default defineConfig([
       // DOM, so `chrome` (and friends) are real globals here — without this
       // every `chrome.*` call reported as no-undef, which is what kept lint
       // advisory-only rather than a real gate.
-      globals: { ...globals.browser, ...globals.webextensions },
+      globals: {
+        ...globals.browser,
+        ...globals.webextensions,
+        // Build-time constant injected by vite.config.js `define`.
+        __TRUSTKEYS_ALLOW_DEV_AUTOSIGN__: 'readonly',
+      },
       parserOptions: {
         ecmaVersion: 'latest',
         ecmaFeatures: { jsx: true },

@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, Text, ForeignKey, DateTime, Boolean, UniqueConstraint
+from sqlalchemy import Column, Integer, String, Text, ForeignKey, DateTime, Boolean, UniqueConstraint, Index, func
 from sqlalchemy.orm import relationship, declarative_base
 from datetime import datetime, timezone
 
@@ -32,6 +32,15 @@ class User(Base):
     # and are rejected once it no longer matches (token revocation).
     token_version = Column(Integer, nullable=False, default=0, server_default="0")
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+
+    # Usernames are unique case-INSENSITIVELY: the column's own `unique=True` is
+    # case-sensitive on PostgreSQL, which would let "alice" and "Alice" exist as
+    # two identities — impersonation in a directory people pick recipients from.
+    # Matches migration d4e5f6a7b8c3 and the lower() predicate in
+    # security/usernames.py.
+    __table_args__ = (
+        Index("ix_users_username_lower_unique", func.lower(username), unique=True),
+    )
 
     secrets = relationship("Secret", back_populates="owner")
     access_grants = relationship("AccessGrant", back_populates="grantee")

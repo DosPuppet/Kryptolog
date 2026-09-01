@@ -5,6 +5,7 @@ from datetime import datetime, timezone, timedelta
 import models, schemas, auth, config, invites
 from database import get_db
 from security.crypto_validation import is_valid_ml_kem_public_key
+from security.usernames import InvalidUsername, normalize_username, username_taken
 
 router = APIRouter(
     prefix="/auth",
@@ -96,11 +97,14 @@ def login(request: Request, login_req: schemas.LoginRequest, db: Session = Depen
     user = db.query(models.User).filter(models.User.address == address).first()
     if not user:
         # Default username logic: Use provided username OR first 7 chars of address
-        default_username = login_req.username if login_req.username else address[:7]
-        # Check username uniqueness (before consuming any invite, so a name clash
-        # doesn't burn the code).
-        existing = db.query(models.User).filter(models.User.username == default_username).first()
-        if existing:
+        try:
+            default_username = normalize_username(login_req.username) or address[:7]
+        except InvalidUsername as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
+        # Check username uniqueness (case-insensitive, so the directory can't
+        # hold "alice" and "Alice" as two identities) before consuming any
+        # invite, so a name clash doesn't burn the code.
+        if username_taken(db, default_username):
             raise HTTPException(
                 status_code=409,
                 detail=f"Username '{default_username}' is already taken. Please choose a different one."

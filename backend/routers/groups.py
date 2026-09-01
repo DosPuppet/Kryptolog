@@ -8,7 +8,7 @@ import models, schemas
 from database import get_db
 from dependencies import get_current_user
 from websocket_manager import manager
-from utils.push import notify_user_push
+from utils.push import notify_many_push_async
 from security.crypto_validation import is_usable_encryption_key
 
 router = APIRouter(
@@ -77,16 +77,22 @@ async def create_group(
                 "type": "GROUP_JOINED",
                 "channel": schemas.GroupChannelResponse.model_validate(channel)
             }, addr)
-            
-            # Push Notification. Generic body: channel names are E2EE blobs the
-            # server can't read (audit M-3) — and MUST not try to display.
-            notify_user_push(
-                db,
-                addr,
-                title="New Group",
-                body="You have been added to a new group",
-                data={"type": "group_joined", "channel_id": channel.id}
-            )
+
+    # Push fan-out AFTER the WebSocket sends, in one off-loop hop: pushes are
+    # blocking network calls, so doing them inline here would stall every other
+    # request on this worker for the whole broadcast. Generic body: channel
+    # names are E2EE blobs the server can't read (audit M-3) — and MUST not try
+    # to display.
+    await notify_many_push_async(db, [
+        (
+            addr,
+            "New Group",
+            "You have been added to a new group",
+            {"type": "group_joined", "channel_id": channel.id},
+        )
+        for addr in member_addrs
+        if addr != current_user.address
+    ])
 
     return channel
 
@@ -220,19 +226,22 @@ async def send_group_message(
     sender_name = current_user.username or f"{current_user.address[:8]}..."
     
     for member in channel.members:
-        # WebSocket
         await manager.send_personal_message(msg_data, member.user_address)
-        
-        # Push Notification (Skip sender)
-        if member.user_address != current_user.address:
-            # Generic title: the channel name is an E2EE blob (audit M-3).
-            notify_user_push(
-                db,
-                member.user_address,
-                title="Group message",
-                body=f"{sender_name}: Sent a secure message",
-                data={"type": "group", "channel_id": channel.id}
-            )
+
+    # Push fan-out AFTER the WebSocket sends, in one off-loop hop. Inline this
+    # would be up to 50 blocking HTTPS requests on the event loop per message,
+    # freezing the whole worker. Generic title: the channel name is an E2EE
+    # blob (audit M-3).
+    await notify_many_push_async(db, [
+        (
+            member.user_address,
+            "Group message",
+            f"{sender_name}: Sent a secure message",
+            {"type": "group", "channel_id": channel.id},
+        )
+        for member in channel.members
+        if member.user_address != current_user.address
+    ])
 
     return msg
 

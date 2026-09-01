@@ -10,7 +10,7 @@ import models, schemas, config
 from database import get_db, SessionLocal
 from dependencies import get_current_user, user_for_token
 from websocket_manager import manager
-from utils.push import notify_user_push
+from utils.push import notify_user_push_async
 from security.crypto_validation import is_usable_encryption_key
 
 logger = logging.getLogger("kryptolog.messenger")
@@ -63,10 +63,10 @@ async def send_message(request: Request, msg: schemas.MessageCreate, current_use
     
     # Send Push Notification
     sender_name = current_user.username or f"{current_user.address[:8]}..."
-    notify_user_push(
-        db, 
-        recipient_addr, 
-        title="New Message", 
+    await notify_user_push_async(
+        db,
+        recipient_addr,
+        title="New Message",
         body=f"You have a new secure message from {sender_name}",
         data={"type": "messenger", "sender": current_user.address}
     )

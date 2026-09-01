@@ -107,6 +107,37 @@ class TestTokenRevocation:
         assert client.post("/auth/logout").status_code == 401
 
 
+class TestRegistrationUsernameCollision:
+    """Registration honours the same case-insensitive rule as /users.
+
+    The check lives on the login path too (it runs before any invite code is
+    consumed), so it needs its own coverage — an exact-match comparison here
+    would let a second identity register "Alice" against an existing "alice".
+    """
+
+    OTHER_ADDRESS = "pqc_second_identity_" + "c" * 100
+
+    def test_case_variant_of_taken_username_is_rejected(self, client):
+        do_login(client, TEST_USER_ADDRESS, TEST_ENCRYPTION_KEY, "alice")
+
+        nonce = get_nonce(client, self.OTHER_ADDRESS)
+        resp = client.post("/auth/login", json={
+            "address": self.OTHER_ADDRESS,
+            "signature": "fake",
+            "nonce": nonce,
+            "encryption_public_key": TEST_ENCRYPTION_KEY,
+            "username": "ALICE",
+        })
+        assert resp.status_code == 409
+
+    def test_distinct_username_still_registers(self, client):
+        do_login(client, TEST_USER_ADDRESS, TEST_ENCRYPTION_KEY, "alice")
+        _, user = do_login(
+            client, self.OTHER_ADDRESS, TEST_ENCRYPTION_KEY, "bob",
+        )
+        assert user["username"] == "bob"
+
+
 class TestKeyChangeStamp:
     """audit S1: encryption-key changes are stamped (no longer silently overwritten)."""
 

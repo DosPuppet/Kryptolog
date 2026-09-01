@@ -3,9 +3,21 @@ import json
 from pywebpush import webpush, WebPushException
 import logging
 
+from starlette.concurrency import run_in_threadpool
+
 from security.url_guard import UnsafeUrlError, build_guarded_session
 
 logger = logging.getLogger(__name__)
+
+# Hard ceiling on how long one push may take (connect + read, seconds).
+#
+# `requests` — and therefore pywebpush — defaults to NO timeout. The endpoint is
+# attacker-controlled (it only has to be a public HTTPS host to clear the SSRF
+# guard), so a host that accepts the connection and never answers would park
+# this call forever. Combined with the threadpool offload below that used to
+# mean an indefinitely wedged event loop; without a timeout it would still leak
+# a worker thread per push.
+PUSH_TIMEOUT_SECONDS = 10
 
 def _get_vapid_config():
     """Read VAPID keys at call time, stripping any accidental quotes."""
@@ -52,6 +64,7 @@ def send_push_notification(subscription_info, data):
             vapid_private_key=private_key,
             vapid_claims={"sub": subject},
             requests_session=session,
+            timeout=PUSH_TIMEOUT_SECONDS,
         )
         logger.info(f"Push notification sent to {endpoint[:50]}...")
         return True
@@ -78,6 +91,13 @@ def notify_user_push(db, user_address, title, body, data=None):
     """
     Fetch all subscriptions for a user and send them a push.
     Skips sending if the user has an active WebSocket connection (app is open).
+
+    BLOCKING: this does DNS resolution, a presence lookup and one outbound
+    HTTPS request per subscription. It is safe to call directly from a sync
+    (`def`) endpoint — Starlette already runs those in a worker thread — but an
+    async (`async def`) endpoint MUST use `notify_user_push_async` instead, or
+    the whole event loop (every request and every WebSocket on this worker)
+    stalls for the duration.
     """
     import models
     from websocket_manager import manager
@@ -121,3 +141,32 @@ def notify_user_push(db, user_address, title, body, data=None):
             )
             db.delete(sub)
             db.commit()
+
+
+async def notify_user_push_async(db, user_address, title, body, data=None):
+    """Await-able `notify_user_push` for use from `async def` endpoints.
+
+    Runs the blocking push path in a worker thread so the event loop stays free.
+    The request's Session is touched only inside that thread while this
+    coroutine is suspended, so it is never used from two places at once.
+    """
+    await run_in_threadpool(notify_user_push, db, user_address, title, body, data)
+
+
+async def notify_many_push_async(db, notifications):
+    """Fan out several pushes in ONE worker-thread hop.
+
+    `notifications` is an iterable of (user_address, title, body, data). A group
+    broadcast would otherwise pay a thread handoff per member; more importantly
+    the sends stay off the event loop while remaining serial, so a large group
+    can't occupy the whole threadpool at once.
+    """
+    items = list(notifications)
+    if not items:
+        return
+
+    def _send_all():
+        for user_address, title, body, data in items:
+            notify_user_push(db, user_address, title, body, data)
+
+    await run_in_threadpool(_send_all)

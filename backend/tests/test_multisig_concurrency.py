@@ -253,6 +253,89 @@ class TestCompletionIsAtomic:
         assert "completed" in late.text
 
 
+class TestConcurrentRejectAndSign:
+    """Reject and the completing signature both decide the terminal status.
+
+    /sign takes a FOR UPDATE row lock precisely so the quorum decision
+    serializes; /reject did not, so a reject that had read `pending` could
+    commit "rejected" *after* the completing signature released recipient keys
+    — a workflow simultaneously blocked and released — or be clobbered by it.
+    With both paths taking the same lock the loser observes the winner's
+    committed status and bounces off the `status != "pending"` guard.
+    """
+
+    def test_reject_racing_the_completing_signature_yields_one_outcome(
+        self, client, user1, signers
+    ):
+        owner_token, _ = user1
+        _, recipient_user = do_login(
+            client, "pqc_rr_recip_" + "y" * 100, TEST_ENCRYPTION_KEY, "RRRecip"
+        )
+        recipient = recipient_user["address"]
+        # 1-of-2: signer[0]'s signature completes it outright, so it races
+        # signer[1]'s rejection with no intermediate state in between.
+        addrs = [a for _, a in signers[:2]]
+        wf = _create_workflow(
+            client, owner_token, addrs, recipients=[recipient], threshold=1
+        ).json()
+
+        barrier = threading.Barrier(2)
+        results = {}
+
+        def signer_worker():
+            c = TestClient(app)
+            barrier.wait(timeout=10)
+            results["sign"] = c.post(
+                f"/multisig/workflow/{wf['id']}/sign",
+                json={"signature": "sig", "recipient_keys": {recipient: "released"}},
+                headers=auth_header(signers[0][0]),
+            )
+
+        def rejecter_worker():
+            c = TestClient(app)
+            barrier.wait(timeout=10)
+            results["reject"] = c.post(
+                f"/multisig/workflow/{wf['id']}/reject",
+                json={"reason": "no"},
+                headers=auth_header(signers[1][0]),
+            )
+
+        threads = [
+            threading.Thread(target=signer_worker),
+            threading.Thread(target=rejecter_worker),
+        ]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join(timeout=60)
+
+        # Exactly one of the two may win; the loser must be refused.
+        codes = sorted(r.status_code for r in results.values())
+        assert codes == [200, 400], f"both calls succeeded: {codes}"
+
+        db = TestingSessionLocal()
+        try:
+            row = db.query(models.MultisigWorkflow).filter(
+                models.MultisigWorkflow.id == wf["id"]
+            ).first()
+            rec = db.query(models.MultisigWorkflowRecipient).filter(
+                models.MultisigWorkflowRecipient.workflow_id == wf["id"],
+                models.MultisigWorkflowRecipient.user_address == recipient,
+            ).first()
+
+            assert row.status in ("completed", "rejected")
+            # The decisive invariant: keys are released if and ONLY if the
+            # workflow actually completed.
+            if row.status == "rejected":
+                assert rec.encrypted_key != "released", (
+                    "recipient keys were released on a rejected workflow"
+                )
+            else:
+                assert rec.encrypted_key == "released"
+        finally:
+            db.close()
+
+
 class TestParticipantUniqueness:
     def test_duplicate_signer_row_is_rejected_by_db(self, client, user1, signers):
         """UNIQUE(workflow_id, user_address): a duplicate signer row would let
