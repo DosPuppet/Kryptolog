@@ -85,9 +85,9 @@ Detail for each package is in `roadmap/AUDIT-REMEDIATION.md`.
 | 1 | Messenger session-adoption hardening | frontend | done — `887f779` |
 | 2 | Remove unused bulk chunk-listing endpoint | backend | done — `93f2aa9` |
 | 3 | Uniqueness constraints on group members + file chunks | backend | done — `93f2aa9` |
-| 4 | Bind chunk index into AEAD associated data | crypto-core | todo |
+| 4 | Bind chunk index into AEAD associated data | crypto-core | done — `706c7a5` |
 | 5 | Move Alembic migrations off the import path | backend | done — `93f2aa9` |
-| 6 | Extend signed message body to cover the key envelope | crypto-core | todo |
+| 6 | Extend signed message body to cover the key envelope | crypto-core | done — `706c7a5` |
 | 7 | Rate limits on 16 unprotected endpoints | backend | done — `93f2aa9` |
 | 8 | Extension: auto-lock, sender gating, request bounds | trustkeys | todo |
 | 9 | Username normalization, nginx WebSocket, point fixes | mixed | todo |
