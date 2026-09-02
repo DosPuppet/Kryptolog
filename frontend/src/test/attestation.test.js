@@ -123,6 +123,10 @@ describe('attestation downgrade (TOFU-scoped unattested)', () => {
         expect(wasEverAttested(user.address)).toBe(true);
         // Address casing must not create a second, ungated record.
         expect(wasEverAttested(user.address.toUpperCase())).toBe(true);
+        // ...and a verified sighting must never leak into the empty-address
+        // slot, or every address-less object would inherit it.
+        expect(wasEverAttested(undefined)).toBe(false);
+        expect(wasEverAttested('')).toBe(false);
     });
 });
 
