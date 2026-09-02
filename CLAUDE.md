@@ -82,7 +82,7 @@ Detail for each package is in `roadmap/AUDIT-REMEDIATION.md`.
 | WP | Scope | Area | Status |
 |---|---|---|---|
 | 0 | Cross-environment tracking setup | repo | done |
-| 1 | Messenger session-adoption hardening | frontend | todo |
+| 1 | Messenger session-adoption hardening | frontend | done — `887f779` |
 | 2 | Remove unused bulk chunk-listing endpoint | backend | done — `93f2aa9` |
 | 3 | Uniqueness constraints on group members + file chunks | backend | done — `93f2aa9` |
 | 4 | Bind chunk index into AEAD associated data | crypto-core | todo |
