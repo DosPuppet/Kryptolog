@@ -142,11 +142,24 @@ export const useMessageSessions = ({
 
             // For DMs, track the active session. Groups deliberately do NOT
             // adopt a send key from inbound history (audit O-1): they mint a
-            // fresh session per client per page load, which is wasteful but is
-            // exactly what kept H-1 off the group path. With the adoption gate
-            // above and WP6's binding of the `keys` envelope into the signature
-            // both in place, enabling it here becomes safe — a cheap follow-up,
-            // deliberately not folded into this change.
+            // fresh session per client per page load, and that is what kept H-1
+            // off the group path — an adopted group key can decrypt but can
+            // never become the key we encrypt UNDER.
+            //
+            // Do not "fix" this. It looks like waste and it is not:
+            //   • mayAdoptSession cannot check membership — the hook has no
+            //     member list, and the list it could be handed comes from the
+            //     server, which is the adversary. Verification proves the sender
+            //     holds the private key for the address they claim; it does NOT
+            //     prove that address belongs in this channel. A server can mint
+            //     an identity, sign correctly for conv=<channelId>, and wrap
+            //     keys[me] to a key it owns — H-1, reproduced in groups.
+            //   • Long-lived group sessions cost the forward secrecy the S2
+            //     rotation above exists to provide.
+            // The saving would be a few ML-KEM wraps on the first send after a
+            // page load: sub-millisecond, even for a large channel. Neither the
+            // adoption gate nor WP6's key-envelope binding changes any of this
+            // (an earlier note here claimed they would — they do not).
             if (mode === 'dm') {
                 // findLast, not find (audit L-1): history is chronologically
                 // ASCENDING, so `find` returned the OLDEST match — in a variable
