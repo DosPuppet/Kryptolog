@@ -275,10 +275,11 @@ export const MessengerProvider = ({ children }) => {
             const ct = await encryptWithSessionKey(text, sKey);
             // Sign the message end-to-end (audit S1): authorship is proven by the
             // sender's ML-DSA key, not asserted by the server.
-            const sig = await signMessage(messageSigningBody({
+            const sig = await signMessage(await messageSigningBody({
                 from: user.address.toLowerCase(),
                 conv: theirAddr,
                 sid,
+                keys: keyPayload,
                 ct,
             }));
             const payload = { v: 1, sid, keys: keyPayload, ct, sig };
@@ -529,10 +530,14 @@ export const MessengerProvider = ({ children }) => {
             const ct = await encryptWithSessionKey(text, sKey);
             // Sign end-to-end (audit S1) — critical for groups, where every member
             // holds the session key and could otherwise forge as another member.
-            const sig = await signMessage(messageSigningBody({
+            // The body covers the wrapped-key map too (audit M-8), so a relay
+            // cannot drop one member's entry to exclude them from this epoch.
+            const sig = await signMessage(await messageSigningBody({
                 from: user.address.toLowerCase(),
                 conv: channelId,
+                gid: channelId,
                 sid,
+                keys: keyPayload,
                 ct,
             }));
             const payload = { v: 2, sid, gid: channelId, keys: keyPayload, ct, sig };
