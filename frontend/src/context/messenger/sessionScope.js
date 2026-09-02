@@ -51,10 +51,11 @@ export const mayAdoptSession = (msg, verified, mode, myAddress) => {
     if (mode === 'group') {
         // The signature binds `conv` to the row's channel_id, so a verified
         // group message was signed for THIS channel by whoever holds that
-        // address. Membership is not re-checked here: the hook has no member
-        // list, and group sessions are never adopted as the SEND key (see the
-        // O-1 note in useMessageSessions), so an adopted group key can only
-        // ever decrypt, never encrypt.
+        // address. It does NOT prove that address is a member — nothing here
+        // can, since the member list would come from the server. That gap is
+        // survivable only because group sessions are never adopted as the SEND
+        // key, so an adopted group key can decrypt and never encrypt. Read the
+        // O-1 note in useMessageSessions before changing either half.
         return Boolean(from);
     }
     // DM: one end of the message has to be us. Checking "sender is the

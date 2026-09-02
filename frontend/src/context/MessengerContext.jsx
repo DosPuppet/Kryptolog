@@ -4,7 +4,7 @@ import { usePQC } from './PQCContext';
 import API_ENDPOINTS from '../config';
 import { encryptWithSessionKey, decryptWithSessionKey, messageSigningBody } from '../utils/crypto';
 import { isEncryptedTitle, LOCKED_TITLE } from '../utils/titles';
-import { assertSafeRecipient, attestationStatus } from '../services/trustedKeys';
+import { assertSafeRecipient, attestationVerdict } from '../services/trustedKeys';
 import { toast } from '../utils/toast';
 import { verifyMessageAuthenticity } from './messenger/verifyMessage';
 import { useMessengerSocket } from './messenger/useMessengerSocket';
@@ -109,8 +109,11 @@ export const MessengerProvider = ({ children }) => {
         const excluded = [];
         for (const member of members) {
             if (!member.user?.encryption_public_key) continue;
-            const status = await attestationStatus({ ...member.user, address: member.user_address });
-            (status === 'invalid' ? excluded : safe).push(member);
+            // 'downgraded' counts as 'invalid': a member previously seen
+            // attested whose key now arrives with none is a key swap by
+            // omission, not a legacy account.
+            const verdict = await attestationVerdict({ ...member.user, address: member.user_address });
+            (verdict === 'invalid' || verdict === 'downgraded' ? excluded : safe).push(member);
         }
         return { safe, excluded };
     };
