@@ -129,8 +129,9 @@ docker compose up -d postgres redis
 ```
 
 Using external instances instead? Set `DATABASE_URL` (and `REDIS_URL`) in
-`backend/.env` — see [Configuration](#configuration). Schema migrations run
-automatically at backend startup; Redis is optional (single-process mode
+`backend/.env` — see [Configuration](#configuration). Schema migrations are an
+explicit step (`alembic upgrade head`, see [Database Migrations](#database-migrations-alembic))
+— `start_all.sh` runs it for you; Redis is optional (single-process mode
 without it).
 
 ### 3. Backend
@@ -331,12 +332,22 @@ formats both apps share.
 
 ## Database Migrations (Alembic)
 
-Schema changes are managed with Alembic. The backend automatically runs
-`alembic upgrade head` on startup (targeting `DATABASE_URL`).
+Schema changes are managed with Alembic. Migrations are an **explicit deployment
+step** — the backend does *not* run them on startup, and will serve whatever
+schema it finds. `start_all.sh` applies them before starting the app; if you run
+uvicorn yourself, run `alembic upgrade head` first.
+
+> The backend used to migrate at import time with a `create_all` + `stamp head`
+> fallback. A migration that failed halfway therefore left a partial schema
+> stamped as current, which no later upgrade would repair. Failing the deploy is
+> the safer outcome, so the fallback is gone.
 
 ```bash
 cd backend
 source ../.venv/bin/activate
+
+# Apply migrations (required before first start, and after pulling model changes)
+alembic upgrade head
 
 # After modifying models.py: auto-generate a migration from the model diff
 alembic revision --autogenerate -m "describe your change"

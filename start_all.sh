@@ -34,7 +34,7 @@ fi
 
 echo "Environment initialized."
 
-# 3. Ensure PostgreSQL is up (the backend runs its Alembic migrations at startup)
+# 3. Ensure PostgreSQL is up (migrations run as an explicit step below)
 # Default DATABASE_URL targets the docker-compose Postgres on localhost:5432.
 # Redis (shared rate limits + WS fan-out, optional) is started alongside it.
 DB_URL="${DATABASE_URL:-postgresql+psycopg://kryptolog:kryptolog@localhost:5432/kryptolog}"
@@ -53,7 +53,7 @@ elif command -v docker &> /dev/null; then
     done
     echo
     if [ "$PG_STATUS" != "healthy" ]; then
-        echo "WARNING: Postgres is not healthy yet — the backend's startup migration may fail. Check: docker compose logs postgres"
+        echo "WARNING: Postgres is not healthy yet — the migration step below may fail. Check: docker compose logs postgres"
     fi
 else
     echo "WARNING: docker not found — assuming Postgres is already running at $DB_URL"
@@ -72,7 +72,19 @@ if ! python3 -m pip install $PIP_USER_FLAG -q -r backend/requirements.txt; then
     exit 1
 fi
 
-# 5. Ensure frontend dependencies and build exist (required for preview)
+# 5. Apply database migrations — explicitly, and fail hard.
+# This used to run at backend import time behind a bare except that fell back to
+# create_all + stamp head, which silently stamped a partially-migrated schema as
+# current (audit M-3). Refusing to start is the correct outcome: a drifted schema
+# stamped "up to date" cannot be repaired by a later upgrade.
+echo "Applying database migrations..."
+if ! (cd backend && python3 -m alembic upgrade head); then
+    echo "ERROR: database migration failed — refusing to start."
+    echo "  Check the schema state with: cd backend && python3 -m alembic current"
+    exit 1
+fi
+
+# 6. Ensure frontend dependencies and build exist (required for preview)
 echo "Checking frontend..."
 cd frontend
 if [ ! -d "node_modules" ]; then
@@ -85,7 +97,7 @@ if [ ! -d "dist" ]; then
 fi
 cd ..
 
-# 6. Start / Restart PM2 Ecosystem
+# 7. Start / Restart PM2 Ecosystem
 echo "Starting ecosystem..."
 # By passing `--update-env`, PM2 absorbs the newly exported bash variables into the processes
 pm2 start ecosystem.config.cjs --update-env

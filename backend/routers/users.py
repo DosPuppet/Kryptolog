@@ -21,7 +21,8 @@ router = APIRouter(
 # the identity's signature now covers it (see auth._login_message).
 
 @router.put("/{address}", response_model=schemas.UserResponse)
-def update_user(address: str, user_update: schemas.UserUpdate, current_user: models.User = Depends(get_current_user), db: Session = Depends(get_db)):
+@limiter.limit("30/minute")
+def update_user(request: Request, address: str, user_update: schemas.UserUpdate, current_user: models.User = Depends(get_current_user), db: Session = Depends(get_db)):
     if current_user.address.lower() != address.lower():
         raise HTTPException(status_code=403, detail="Not authorized to update this user")
         
@@ -51,7 +52,10 @@ def update_user(address: str, user_update: schemas.UserUpdate, current_user: mod
 MIN_SEARCH_LEN = 2
 
 @router.get("/{address}", response_model=schemas.UserResponse)
-def get_user(address: str, current_user: models.User = Depends(get_current_user), db: Session = Depends(get_db)):
+# Same 30/min as POST /users/resolve: both answer "does this account exist?",
+# so leaving this one uncapped made the paid-for limit on the other pointless.
+@limiter.limit("30/minute")
+def get_user(request: Request, address: str, current_user: models.User = Depends(get_current_user), db: Session = Depends(get_db)):
     user = db.query(models.User).filter(models.User.address == address.lower()).first()
     if not user:
         raise HTTPException(status_code=404, detail="User not found")

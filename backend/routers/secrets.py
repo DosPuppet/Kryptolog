@@ -2,6 +2,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from dependencies import limiter
 from sqlalchemy.orm import Session, joinedload
 from sqlalchemy import func
+from sqlalchemy.exc import IntegrityError
 from typing import List
 from datetime import datetime, timezone, timedelta
 import models, schemas
@@ -43,7 +44,8 @@ def create_secret(request: Request, secret: schemas.SecretCreate, current_user: 
     return new_secret
 
 @router.get("/secrets", response_model=List[schemas.SecretResponse])
-def get_secrets(current_user: models.User = Depends(get_current_user), db: Session = Depends(get_db)):
+@limiter.limit("60/minute")
+def get_secrets(request: Request, current_user: models.User = Depends(get_current_user), db: Session = Depends(get_db)):
     results = db.query(models.Secret, models.AccessGrant.encrypted_key)\
         .options(joinedload(models.Secret.owner))\
         .join(models.AccessGrant, (models.AccessGrant.secret_id == models.Secret.id) & (models.AccessGrant.grantee_address == current_user.address))\
@@ -60,7 +62,8 @@ def get_secrets(current_user: models.User = Depends(get_current_user), db: Sessi
     return response
 
 @router.put("/secrets/{secret_id}", response_model=schemas.SecretResponse)
-def update_secret(secret_id: int, secret_update: schemas.SecretCreate, current_user: models.User = Depends(get_current_user), db: Session = Depends(get_db)):
+@limiter.limit("30/minute")
+def update_secret(request: Request, secret_id: int, secret_update: schemas.SecretCreate, current_user: models.User = Depends(get_current_user), db: Session = Depends(get_db)):
     secret = db.query(models.Secret).filter(models.Secret.id == secret_id).first()
     if not secret:
         raise HTTPException(status_code=404, detail="Secret not found")
@@ -81,7 +84,8 @@ def update_secret(secret_id: int, secret_update: schemas.SecretCreate, current_u
     return secret
 
 @router.delete("/secrets/{secret_id}")
-def delete_secret(secret_id: int, current_user: models.User = Depends(get_current_user), db: Session = Depends(get_db)):
+@limiter.limit("30/minute")
+def delete_secret(request: Request, secret_id: int, current_user: models.User = Depends(get_current_user), db: Session = Depends(get_db)):
     secret = db.query(models.Secret).filter(models.Secret.id == secret_id).first()
     if not secret:
         raise HTTPException(status_code=404, detail="Secret not found")
@@ -168,7 +172,8 @@ async def share_secret(request: Request, grant: schemas.AccessGrantCreate, curre
     return new_grant
 
 @router.delete("/secrets/share/{grant_id}")
-def revoke_grant(grant_id: int, current_user: models.User = Depends(get_current_user), db: Session = Depends(get_db)):
+@limiter.limit("30/minute")
+def revoke_grant(request: Request, grant_id: int, current_user: models.User = Depends(get_current_user), db: Session = Depends(get_db)):
     grant = db.query(models.AccessGrant).filter(models.AccessGrant.id == grant_id).first()
     if not grant:
         raise HTTPException(status_code=404, detail="Grant not found")
@@ -187,7 +192,8 @@ def revoke_grant(grant_id: int, current_user: models.User = Depends(get_current_
     return {"status": "ok"}
 
 @router.get("/secrets/{secret_id}/access", response_model=List[schemas.AccessGrantResponse])
-def get_secret_access(secret_id: int, current_user: models.User = Depends(get_current_user), db: Session = Depends(get_db)):
+@limiter.limit("60/minute")
+def get_secret_access(request: Request, secret_id: int, current_user: models.User = Depends(get_current_user), db: Session = Depends(get_db)):
     secret = db.query(models.Secret).filter(models.Secret.id == secret_id).first()
     if not secret:
         raise HTTPException(status_code=404, detail="Secret not found")
@@ -209,7 +215,8 @@ def get_secret_access(secret_id: int, current_user: models.User = Depends(get_cu
     ).all()
 
 @router.get("/secrets/shared-with-me", response_model=List[schemas.AccessGrantResponse])
-def get_shared_secrets(current_user: models.User = Depends(get_current_user), db: Session = Depends(get_db)):
+@limiter.limit("60/minute")
+def get_shared_secrets(request: Request, current_user: models.User = Depends(get_current_user), db: Session = Depends(get_db)):
     now = datetime.now(timezone.utc)
 
     # Bulk-delete expired grants for this user
@@ -299,26 +306,32 @@ def upload_chunk(request: Request, chunk: schemas.FileChunkUpload,
         encrypted_data=chunk.encrypted_data
     )
     db.add(new_chunk)
-    db.commit()
+    try:
+        db.commit()
+    except IntegrityError:
+        # uq_file_chunk_secret_index (audit M-2). Re-uploading an index the file
+        # already holds is a client bug or an attempt to shadow a chunk, not a
+        # partial write to paper over — reject it rather than letting reads pick
+        # non-deterministically between two rows.
+        db.rollback()
+        raise HTTPException(
+            status_code=409,
+            detail=f"Chunk {chunk.chunk_index} already uploaded for this secret",
+        )
     return {"status": "ok", "chunk_index": chunk.chunk_index}
 
 
-@router.get("/secrets/{secret_id}/chunks", response_model=List[schemas.FileChunkResponse])
-def list_chunks(secret_id: int,
-                current_user: models.User = Depends(get_current_user),
-                db: Session = Depends(get_db)):
-    """List all chunks for a secret (metadata only if needed, or full data)."""
-    _check_secret_access(secret_id, current_user.address, db)
-
-    chunks = db.query(models.FileChunk).filter(
-        models.FileChunk.secret_id == secret_id
-    ).order_by(models.FileChunk.chunk_index).all()
-
-    return chunks
+# NOTE: `GET /secrets/{id}/chunks` (list every chunk WITH its payload) was removed
+# — audit H-2. Despite its "metadata only if needed" docstring it loaded every
+# row's full encrypted_data: at MAX_TOTAL_FILE_SIZE and hex encoding, one
+# unauthenticated-by-rate-limit request materialized ~100 MB of strings, again
+# through Pydantic, against a 500 MB worker restart threshold. No client ever
+# called it — fileChunks.js fetches chunks one at a time by index, below.
 
 
 @router.get("/secrets/{secret_id}/chunks/{chunk_index}", response_model=schemas.FileChunkResponse)
-def get_chunk(secret_id: int, chunk_index: int,
+@limiter.limit("240/minute")
+def get_chunk(request: Request, secret_id: int, chunk_index: int,
               current_user: models.User = Depends(get_current_user),
               db: Session = Depends(get_db)):
     """Download a single encrypted chunk by index."""

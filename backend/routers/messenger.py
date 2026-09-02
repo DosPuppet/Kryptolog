@@ -150,7 +150,8 @@ def get_message_history(request: Request, req: schemas.HistoryRequest, current_u
     return msgs[::-1]
 
 @router.post("/mark-read/{partner_address}")
-def mark_read(partner_address: str, current_user: models.User = Depends(get_current_user), db: Session = Depends(get_db)):
+@limiter.limit("60/minute")
+def mark_read(request: Request, partner_address: str, current_user: models.User = Depends(get_current_user), db: Session = Depends(get_db)):
     partner_addr = partner_address.lower()
     
     # Mark all messages sent BY partner TO me as read

@@ -120,7 +120,8 @@ def create_multisig_workflow(request: Request, workflow: schemas.MultisigWorkflo
     return new_workflow
 
 @router.get("/workflows", response_model=List[schemas.MultisigWorkflowResponse])
-def list_multisig_workflows(current_user: models.User = Depends(get_current_user), db: Session = Depends(get_db)):
+@limiter.limit("60/minute")
+def list_multisig_workflows(request: Request, current_user: models.User = Depends(get_current_user), db: Session = Depends(get_db)):
     # Return workflows where I am owner OR signer
     # Using python filtering for simplicity unless perf is issue, OR union query.
     # Simple Union query:
@@ -171,7 +172,8 @@ def list_multisig_workflows(current_user: models.User = Depends(get_current_user
     return response_list
 
 @router.get("/workflow/{workflow_id}", response_model=schemas.MultisigWorkflowResponse)
-def get_multisig_workflow(workflow_id: int, current_user: models.User = Depends(get_current_user), db: Session = Depends(get_db)):
+@limiter.limit("60/minute")
+def get_multisig_workflow(request: Request, workflow_id: int, current_user: models.User = Depends(get_current_user), db: Session = Depends(get_db)):
     # Eager load secret to ensure it's available for schema
     wf = db.query(models.MultisigWorkflow).options(joinedload(models.MultisigWorkflow.secret)).filter(models.MultisigWorkflow.id == workflow_id).first()
     if not wf:

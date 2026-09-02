@@ -1,6 +1,8 @@
-from pydantic import BaseModel, Field, ConfigDict
+from pydantic import BaseModel, Field, ConfigDict, field_validator
 from typing import Optional, List
 from datetime import datetime
+
+from security.crypto_validation import is_hex
 
 # --- Input bounds (audit KRY-010) -------------------------------------------
 #
@@ -73,6 +75,24 @@ class FileChunkUpload(BaseModel):
     chunk_index: int
     iv: str = Field(..., max_length=100)
     encrypted_data: str = Field(..., max_length=2_100_000)  # ~1MB chunk hex-encoded
+
+    # Both fields are hex on the wire, but nothing checked that (audit M-2), so
+    # arbitrary text reached storage and only failed much later — client-side, as
+    # an opaque decrypt error. The size accounting in upload_chunk also divides
+    # length by 2 to get bytes, which is only meaningful for real hex.
+    @field_validator("iv", "encrypted_data")
+    @classmethod
+    def _must_be_hex(cls, v: str, info) -> str:
+        if not is_hex(v):
+            raise ValueError(f"{info.field_name} must be non-empty, even-length hex")
+        return v
+
+    @field_validator("chunk_index")
+    @classmethod
+    def _index_non_negative(cls, v: int) -> int:
+        if v < 0:
+            raise ValueError("chunk_index must be >= 0")
+        return v
 
 class FileChunkResponse(BaseModel):
     chunk_index: int

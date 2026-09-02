@@ -2,8 +2,6 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from database import engine
-from models import Base
 import logging
 import os
 
@@ -98,20 +96,23 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# ── Database migrations (run AFTER app init) ────────────────────
-
-try:
-    from alembic.config import Config
-    from alembic import command
-    alembic_cfg = Config(os.path.join(os.path.dirname(__file__), "alembic.ini"))
-    command.upgrade(alembic_cfg, "head")
-except Exception as e:
-    logger.warning("Alembic upgrade failed: %s — falling back to create_all + stamp head", e)
-    Base.metadata.create_all(bind=engine)
-    try:
-        command.stamp(alembic_cfg, "head")
-    except Exception as e2:
-        logger.warning("Alembic stamp also failed: %s", e2)
+# ── Database migrations ─────────────────────────────────────────
+#
+# Deliberately NOT run here (audit M-3). This module used to call
+# `alembic upgrade head` at import time behind a bare `except Exception` that
+# fell back to `create_all` + `stamp head`. Three problems compounded:
+#
+#   1. `create_all` only creates MISSING TABLES — it cannot add a column to a
+#      table that already exists. So a migration failing halfway left a partial
+#      schema, and `stamp head` then declared that schema up to date. The drift
+#      was invisible and no later `alembic upgrade` would repair it.
+#   2. At import time, every worker raced the same DDL with no advisory lock.
+#   3. It coupled importing the app to mutating the database, which is why the
+#      test suite has to set DATABASE_URL before importing this module.
+#
+# Migrations now run as an explicit deployment step (`alembic upgrade head`, see
+# start_all.sh and the README). A refused start beats a drifted schema stamped
+# "current".
 
 # ── JWT secret validation (fail closed at boot in production) ──
 # auth.py is imported here as `signing` because `auth` already refers to the

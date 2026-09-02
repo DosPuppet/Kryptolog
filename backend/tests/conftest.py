@@ -21,9 +21,10 @@ TEST_DATABASE_URL = os.getenv(
     "postgresql+psycopg://kryptolog:kryptolog@localhost:5432/kryptolog_test",
 )
 
-# Must be set before importing `database`/`main`: main.py runs an Alembic
-# upgrade at import time against DATABASE_URL, which must hit the test DB —
-# never the dev database.
+# Must be set before importing `database`/`main`: `database` builds its engine
+# from DATABASE_URL at import time, and it must hit the test DB, never the dev
+# one. (main.py no longer migrates on import — audit M-3 — so this is now only
+# about which engine gets constructed.)
 os.environ["DATABASE_URL"] = TEST_DATABASE_URL
 
 # Fake VAPID keys for testing
