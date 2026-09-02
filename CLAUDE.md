@@ -83,12 +83,12 @@ Detail for each package is in `roadmap/AUDIT-REMEDIATION.md`.
 |---|---|---|---|
 | 0 | Cross-environment tracking setup | repo | done |
 | 1 | Messenger session-adoption hardening | frontend | todo |
-| 2 | Remove unused bulk chunk-listing endpoint | backend | done (uncommitted) |
-| 3 | Uniqueness constraints on group members + file chunks | backend | done (uncommitted) |
+| 2 | Remove unused bulk chunk-listing endpoint | backend | done — `93f2aa9` |
+| 3 | Uniqueness constraints on group members + file chunks | backend | done — `93f2aa9` |
 | 4 | Bind chunk index into AEAD associated data | crypto-core | todo |
-| 5 | Move Alembic migrations off the import path | backend | done (uncommitted) |
+| 5 | Move Alembic migrations off the import path | backend | done — `93f2aa9` |
 | 6 | Extend signed message body to cover the key envelope | crypto-core | todo |
-| 7 | Rate limits on 16 unprotected endpoints | backend | done (uncommitted) |
+| 7 | Rate limits on 16 unprotected endpoints | backend | done — `93f2aa9` |
 | 8 | Extension: auto-lock, sender gating, request bounds | trustkeys | todo |
 | 9 | Username normalization, nginx WebSocket, point fixes | mixed | todo |
 | 10 | Extension test suite (new vitest harness) | trustkeys | todo |
@@ -97,3 +97,17 @@ Suggested order: WP2/3/5/7 (backend, independent) → WP1 → WP4+WP6 (one commi
 wire-format boundary) → WP8+WP10 → WP9.
 
 Record the commit SHA in the status column as each lands.
+
+### Known issues, not yet scoped
+
+- **Schema drift on `users.username`.** `alembic check` reports a pending
+  `remove_index` / `add_constraint` pair: the model keeps `unique=True` on the column
+  while migration `d4e5f6a7b8c3` replaced that plain index with a functional `lower()`
+  one, so autogenerate keeps wanting to re-add it. Harmless today, but it means
+  `alembic check` cannot be used as a drift gate until it is resolved. Fold into WP9,
+  which touches username normalization anyway.
+- **Port 5432 may be held by a native PostgreSQL** that lacks the `kryptolog` role, in
+  which case `docker compose up -d postgres` fails to bind. Workaround: run the test
+  database on another port and point `TEST_DATABASE_URL` at it.
+- **`test_ws_fanout` needs `fakeredis`** (`requirements-dev.txt`). Without it five tests
+  error out in a way unrelated to whatever you are changing.
