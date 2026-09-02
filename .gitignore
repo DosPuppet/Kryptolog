@@ -38,11 +38,18 @@ Thumbs.db
 
 # Local audit / scratch docs (not tracked)
 .tempdoc/
+AUDIT.md
+# Remediation plan: enumerates not-yet-fixed findings, so it stays local. Note
+# this is one file, not all of roadmap/ — that directory also holds completed,
+# non-sensitive design docs that ARE tracked (e.g. postgresql-migration.md).
+# Neutral cross-machine status lives in the tracked CLAUDE.md instead.
+roadmap/AUDIT-REMEDIATION.md
 
 # Local audit venv (liboqs) — never commit
 backend/.venv-audit/
 .venv-audit/
 audit/
 
-# Claude Code project instructions — keep local
-CLAUDE.md
+# CLAUDE.md is deliberately TRACKED: work is split across dev environments and
+# it carries the remediation status table between them. Keep findings detail out
+# of it — that belongs in the untracked AUDIT.md / roadmap/.
