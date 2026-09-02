@@ -160,6 +160,14 @@ User.received_messages = relationship("Message", foreign_keys=[Message.recipient
 
 class FileChunk(Base):
     __tablename__ = "file_chunks"
+    # One row per (secret, index). Without this a second upload at an index the
+    # file already has is accepted, `GET .../chunks/{i}` then returns whichever
+    # row PostgreSQL happens to hand back first, and the reassembled file is
+    # silently wrong — corruption with no error anywhere (audit M-2).
+    __table_args__ = (
+        UniqueConstraint("secret_id", "chunk_index",
+                         name="uq_file_chunk_secret_index"),
+    )
 
     id = Column(Integer, primary_key=True, index=True)
     secret_id = Column(Integer, ForeignKey("secrets.id"), index=True)
@@ -188,6 +196,16 @@ class GroupChannel(Base):
 
 class GroupMember(Base):
     __tablename__ = "group_members"
+    # One row per (channel, member) — the same invariant MultisigWorkflowSigner
+    # gets for the symmetric reason (KRY-005). Without it, `add_member`'s
+    # read-then-write check races, and a duplicate row survives removal because
+    # the delete only ever matched one: the "removed" member keeps read/write
+    # access to the channel (audit M-1). An admin can also do this deliberately
+    # — double-add an accomplice, then publicly "remove" them.
+    __table_args__ = (
+        UniqueConstraint("channel_id", "user_address",
+                         name="uq_group_member_channel_user"),
+    )
 
     id = Column(Integer, primary_key=True, index=True)
     channel_id = Column(String, ForeignKey("group_channels.id"), index=True)

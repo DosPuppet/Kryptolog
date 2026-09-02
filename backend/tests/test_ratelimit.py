@@ -71,3 +71,57 @@ def test_storage_uri_explicit_override_wins_over_redis_url(monkeypatch):
     monkeypatch.setenv("REDIS_URL", "redis://cache:6379/0")
     monkeypatch.setenv("RATELIMIT_STORAGE_URI", "redis://explicit:6379/1")
     assert _ratelimit_storage_uri() == "redis://explicit:6379/1"
+
+
+# --- Endpoint coverage (audit M-7) ---
+#
+# 16 endpoints shipped with no @limiter.limit at all. They looked like
+# oversights rather than decisions: the costly ones (chunk download, the
+# joinedload-heavy workflow list) were uncapped while cheaper neighbours were
+# capped, and GET /users/{address} was a free account-existence oracle beside a
+# 30/min POST /users/resolve that answers the identical question.
+#
+# Asserted by introspection rather than by hammering each route: this stays fast
+# and, more importantly, fails when someone ADDS an endpoint here without a
+# limit — which is how the original 16 accumulated.
+
+# Endpoints that must carry an explicit limit, as `module.function` keys.
+RATE_LIMITED_ENDPOINTS = {
+    "routers.secrets.get_secrets",
+    "routers.secrets.update_secret",
+    "routers.secrets.delete_secret",
+    "routers.secrets.revoke_grant",
+    "routers.secrets.get_secret_access",
+    "routers.secrets.get_shared_secrets",
+    "routers.secrets.get_chunk",
+    "routers.multisig.list_multisig_workflows",
+    "routers.multisig.get_multisig_workflow",
+    "routers.users.update_user",
+    "routers.users.get_user",
+    "routers.messenger.mark_read",
+    "routers.groups.mark_group_read",
+}
+
+
+def test_previously_unlimited_endpoints_are_now_limited():
+    import main  # noqa: F401 — importing registers every router on the limiter
+    from dependencies import limiter
+
+    missing = RATE_LIMITED_ENDPOINTS - set(limiter._route_limits)
+    assert not missing, f"endpoints without a rate limit: {sorted(missing)}"
+
+
+def test_limit_is_actually_enforced(client, user1):
+    """One end-to-end check that the decorators are wired, not just present.
+
+    GET /users/{address} is capped at 30/min to match POST /users/resolve.
+    """
+    token, user = user1
+    headers = {"Authorization": f"Bearer {token}"}
+
+    statuses = [
+        client.get(f"/users/{user['address']}", headers=headers).status_code
+        for _ in range(35)
+    ]
+    assert 200 in statuses
+    assert 429 in statuses, f"never throttled; saw {sorted(set(statuses))}"

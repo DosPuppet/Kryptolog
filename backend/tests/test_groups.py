@@ -236,6 +236,64 @@ class TestGroupMembers:
         }, headers=auth_header(token1))
         assert resp.status_code == 400
 
+    def test_duplicate_membership_rejected_by_db(self, client, user1, user2, db_session):
+        """The database refuses a second membership row (audit M-1).
+
+        `add_member`'s check is read-then-write and therefore racy; the
+        application check alone is not the invariant. uq_group_member_channel_user
+        is, so a duplicate cannot exist for `remove_member` to miss.
+        """
+        import models
+        from sqlalchemy.exc import IntegrityError
+
+        token1, u1 = user1
+        _, u2 = user2
+
+        create_resp = client.post("/groups", json={
+            "name": "Constrained",
+            "member_addresses": [u1["address"], u2["address"]],
+        }, headers=auth_header(token1))
+        channel_id = create_resp.json()["id"]
+
+        db_session.add(models.GroupMember(
+            channel_id=channel_id,
+            user_address=u2["address"].lower(),
+            role="member",
+        ))
+        with pytest.raises(IntegrityError):
+            db_session.commit()
+        db_session.rollback()
+
+    def test_removal_deletes_every_membership_row(self, client, user1, user2, db_session):
+        """Removal is by predicate, not by instance (audit M-1).
+
+        `remove_member` used to delete the single row it had loaded, so any
+        duplicate survived and the "removed" member kept channel access. Assert
+        against the table rather than the 200, which was green either way.
+        """
+        import models
+
+        token1, u1 = user1
+        _, u2 = user2
+
+        create_resp = client.post("/groups", json={
+            "name": "Fully Removable",
+            "member_addresses": [u1["address"], u2["address"]],
+        }, headers=auth_header(token1))
+        channel_id = create_resp.json()["id"]
+
+        resp = client.delete(
+            f"/groups/{channel_id}/members/{u2['address']}",
+            headers=auth_header(token1),
+        )
+        assert resp.status_code == 200
+
+        remaining = db_session.query(models.GroupMember).filter(
+            models.GroupMember.channel_id == channel_id,
+            models.GroupMember.user_address == u2["address"].lower(),
+        ).count()
+        assert remaining == 0
+
 
 class TestGroupAdmin:
     def test_promote_member_to_admin(self, client, user1, user2):

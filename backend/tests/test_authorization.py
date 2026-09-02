@@ -64,7 +64,13 @@ def _expire_grant(db_session, grant_id):
 class TestExpiredGrantBlocksFileAccess:
     """KRY-001: the exact bypass the audit described."""
 
-    def test_expired_grant_cannot_list_chunks(self, client, db_session):
+    def test_expiry_flips_chunk_access_from_allowed_to_refused(self, client, db_session):
+        """Both sides of the transition, on one grant.
+
+        Previously asserted against the bulk `GET /secrets/{id}/chunks`, removed
+        as audit H-2; the single-chunk endpoint enforces the same rule through
+        the same `_check_secret_access` path.
+        """
         owner, _ = do_login(client, TEST_USER_ADDRESS, TEST_ENCRYPTION_KEY, "Owner")
         bob, bob_user = do_login(client, TEST_USER_ADDRESS_2, TEST_ENCRYPTION_KEY, "Bob")
         secret_id, grant_id = _make_shared_secret_with_chunk(
@@ -73,14 +79,14 @@ class TestExpiredGrantBlocksFileAccess:
 
         # Live grant: Bob can read.
         assert client.get(
-            f"/secrets/{secret_id}/chunks", headers=auth_header(bob)
+            f"/secrets/{secret_id}/chunks/0", headers=auth_header(bob)
         ).status_code == 200
 
         _expire_grant(db_session, grant_id)
 
         # Expired grant: Bob must be refused.
         assert client.get(
-            f"/secrets/{secret_id}/chunks", headers=auth_header(bob)
+            f"/secrets/{secret_id}/chunks/0", headers=auth_header(bob)
         ).status_code == 403
 
     def test_expired_grant_cannot_download_single_chunk(self, client, db_session):
@@ -139,7 +145,7 @@ class TestExpiredGrantBlocksFileAccess:
             headers=auth_header(owner),
         ).json()
         assert client.get(
-            f"/secrets/{secret['id']}/chunks", headers=auth_header(stranger)
+            f"/secrets/{secret['id']}/chunks/0", headers=auth_header(stranger)
         ).status_code == 403
 
 
