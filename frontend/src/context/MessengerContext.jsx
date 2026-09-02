@@ -9,6 +9,7 @@ import { toast } from '../utils/toast';
 import { verifyMessageAuthenticity } from './messenger/verifyMessage';
 import { useMessengerSocket } from './messenger/useMessengerSocket';
 import { useMessageSessions } from './messenger/useMessageSessions';
+import { sessionKeyId, groupConversationId } from './messenger/sessionScope';
 import { useGroupNames } from './messenger/useGroupNames';
 import { createGroupEventHandlers } from './messenger/groupEvents';
 
@@ -68,6 +69,11 @@ export const MessengerProvider = ({ children }) => {
         setActiveGroupConversation,
     });
 
+    // Which member set each group session was wrapped for, by session key id.
+    // Lets sendGroupMessage tell "the attestation gate still agrees" from "the
+    // gate's verdict changed, rotate" without re-wrapping on every send.
+    const groupSessionMembersRef = useRef({});
+
     // Encrypted group names, audit M-3 (messenger/useGroupNames.js)
     const { resolveChannelName, resolveGroupNames, buildGroupNameBlob } =
         useGroupNames({ user, mlkemKey, unwrapManySessionKeys });
@@ -89,6 +95,24 @@ export const MessengerProvider = ({ children }) => {
             throw new Error(err.detail || `Request failed: ${res.status}`);
         }
         return res.json();
+    };
+
+    /**
+     * Attestation gate for a group's member set (audit M-1): the members we are
+     * willing to wrap a session key to, and the ones we refuse. Excluding one
+     * member keeps the rest of the group working while that key can't read.
+     * Members with no encryption key at all are simply not wrappable and count
+     * as neither.
+     */
+    const gateGroupMembers = async (members) => {
+        const safe = [];
+        const excluded = [];
+        for (const member of members) {
+            if (!member.user?.encryption_public_key) continue;
+            const status = await attestationStatus({ ...member.user, address: member.user_address });
+            (status === 'invalid' ? excluded : safe).push(member);
+        }
+        return { safe, excluded };
     };
 
     // ── WebSocket (lifecycle in messenger/useMessengerSocket.js) ──
@@ -134,7 +158,7 @@ export const MessengerProvider = ({ children }) => {
         try {
             const payload = JSON.parse(msg.content);
             if (payload.v === 1 && payload.sid) {
-                const key = sessionKeysRef.current[payload.sid];
+                const key = sessionKeysRef.current[sessionKeyId(partnerAddr, payload.sid)];
                 if (key) {
                     plainText = await decryptWithSessionKey(payload.ct, key);
                 }
@@ -221,21 +245,30 @@ export const MessengerProvider = ({ children }) => {
             if (!recipientKey) throw new Error("Recipient has no public key");
 
             const theirAddr = partnerUser.address.toLowerCase();
+
+            // Attestation gate (audit M-1): refuse to encrypt to a key that FAILS
+            // its identity binding (throws on 'invalid').
+            //
+            // This runs before EVERY send now, not only when minting a session
+            // (audit H-1). It used to sit inside the `if (!sKey)` branch below,
+            // so the moment the key cache held a session for this partner the
+            // gate was skipped entirely — and seeding that cache was precisely
+            // the attack. A gate reachable only on the path the attacker avoids
+            // is not a gate.
+            await assertSafeRecipient(partnerUser);
+
             let sid = activeSessionIds[theirAddr];
-            let sKey = sid ? sessionKeys[sid] : null;
+            let sKey = sid ? sessionKeys[sessionKeyId(theirAddr, sid)] : null;
             let keyPayload = null;
 
             if (!sKey) {
-                // Attestation gate (audit M-1): refuse to wrap a fresh session key
-                // to a key that FAILS its identity binding (throws on 'invalid').
-                await assertSafeRecipient(partnerUser);
                 sid = crypto.randomUUID();
                 sKey = await generateSessionKey();
                 const wRecip = await wrapSessionKey(sKey, recipientKey);
                 const myKey = user?.encryption_public_key || mlkemKey;
                 const wSender = myKey ? await wrapSessionKey(sKey, myKey) : null;
                 keyPayload = { recip: wRecip, sender: wSender };
-                setSessionKeys(prev => ({ ...prev, [sid]: sKey }));
+                setSessionKeys(prev => ({ ...prev, [sessionKeyId(theirAddr, sid)]: sKey }));
                 setActiveSessionIds(prev => ({ ...prev, [theirAddr]: sid }));
             }
 
@@ -449,35 +482,48 @@ export const MessengerProvider = ({ children }) => {
         try {
             const members = channel.members || [];
             const channelId = channel.id;
+            const conv = groupConversationId(channelId);
 
-            let sid = activeSessionIds[`group_${channelId}`];
-            let sKey = sid ? sessionKeys[sid] : null;
+            // Attestation gate (audit M-1), re-evaluated on EVERY send rather
+            // than only when minting a session (audit H-1). A member whose key
+            // stops matching its identity binding must stop receiving messages
+            // immediately, not at the next rotation.
+            const { safe, excluded } = await gateGroupMembers(members);
+            for (const member of excluded) {
+                console.error(`Skipping ${member.user_address}: encryption key failed attestation`);
+                toast.error(`Key verification failed for a member (${(member.user?.username) || member.user_address.slice(0, 12) + '…'}) — they were excluded from this message.`);
+            }
+
+            let sid = activeSessionIds[conv];
+            let sKey = sid ? sessionKeys[sessionKeyId(conv, sid)] : null;
             let keyPayload = null;
+
+            // Rotate instead of reusing when the gate's verdict has moved since
+            // this session was wrapped — otherwise a member who just failed
+            // attestation keeps reading under the old sid, and one who newly
+            // passes stays locked out. Compared against the recorded set rather
+            // than `excluded.length`, so a permanently-invalid member costs one
+            // rotation, not a fresh session per message.
+            const safeSet = safe.map(m => m.user_address).sort().join(',');
+            if (sKey && groupSessionMembersRef.current[sessionKeyId(conv, sid)] !== safeSet) {
+                sKey = null;
+            }
 
             if (!sKey) {
                 sid = crypto.randomUUID();
                 sKey = await generateSessionKey();
 
                 const wrappedKeys = {};
-                for (const member of members) {
-                    const pubKey = member.user?.encryption_public_key;
-                    if (pubKey) {
-                        // Attestation gate (audit M-1): never wrap the group key to a
-                        // member whose key fails its identity binding — skipping keeps
-                        // the rest of the group working while that key can't read.
-                        const status = await attestationStatus({ ...member.user, address: member.user_address });
-                        if (status === 'invalid') {
-                            console.error(`Skipping ${member.user_address}: encryption key failed attestation`);
-                            toast.error(`Key verification failed for a member (${(member.user?.username) || member.user_address.slice(0, 12) + '…'}) — they were excluded from this message.`);
-                            continue;
-                        }
-                        wrappedKeys[member.user_address] = await wrapSessionKey(sKey, pubKey);
-                    }
+                for (const member of safe) {
+                    wrappedKeys[member.user_address] =
+                        await wrapSessionKey(sKey, member.user.encryption_public_key);
                 }
 
                 keyPayload = wrappedKeys;
-                setSessionKeys(prev => ({ ...prev, [sid]: sKey }));
-                setActiveSessionIds(prev => ({ ...prev, [`group_${channelId}`]: sid }));
+                const keyId = sessionKeyId(conv, sid);
+                groupSessionMembersRef.current[keyId] = safeSet;
+                setSessionKeys(prev => ({ ...prev, [keyId]: sKey }));
+                setActiveSessionIds(prev => ({ ...prev, [conv]: sid }));
             }
 
             const ct = await encryptWithSessionKey(text, sKey);
@@ -520,7 +566,7 @@ export const MessengerProvider = ({ children }) => {
         try {
             const payload = JSON.parse(msg.content);
             if (payload.v === 2 && payload.sid) {
-                const key = sessionKeysRef.current[payload.sid];
+                const key = sessionKeysRef.current[sessionKeyId(groupConversationId(channelId), payload.sid)];
                 if (key) {
                     plainText = await decryptWithSessionKey(payload.ct, key);
                 }
