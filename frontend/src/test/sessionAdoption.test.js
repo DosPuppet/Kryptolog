@@ -39,9 +39,10 @@ beforeAll(async () => {
 /** A DM row as the server would deliver it. `signWith` defaults to the claimed sender. */
 const dmMessage = async ({ id, from, to, sid, sKey, text = 'hello', blob = null, sign = true, signWith }) => {
     const ct = await encryptWithSessionKey(text, sKey);
-    const payload = { v: 1, sid, keys: blob ? { recip: blob, sender: null } : null, ct };
+    const keys = blob ? { recip: blob, sender: null } : null;
+    const payload = { v: 1, sid, keys, ct };
     if (sign) {
-        const body = messageSigningBody({ from: from.address, conv: to.address, sid, ct });
+        const body = await messageSigningBody({ from: from.address, conv: to.address, sid, keys, ct });
         payload.sig = await signMessagePQC(body, (signWith || from).privateKey);
     }
     return { id, sender_address: from.address, recipient_address: to.address, content: JSON.stringify(payload) };
@@ -53,7 +54,9 @@ const groupMessage = async ({ id, from, sid, sKey, text = 'hi group', wrapFor = 
     for (const [addr, blob] of wrapFor) keys[addr] = blob;
     const payload = { v: 2, sid, gid: CHANNEL, keys, ct };
     if (sign) {
-        const body = messageSigningBody({ from: from.address, conv: CHANNEL, sid, ct });
+        const body = await messageSigningBody({
+            from: from.address, conv: CHANNEL, gid: CHANNEL, sid, keys, ct,
+        });
         payload.sig = await signMessagePQC(body, (signWith || from).privateKey);
     }
     return { id, sender_address: from.address, channel_id: CHANNEL, content: JSON.stringify(payload) };

@@ -3,7 +3,7 @@
  * Splits files into 512KB chunks, encrypts each individually with AES-GCM,
  * and uploads/downloads them via the /secrets/chunks API.
  */
-import { encryptChunk, decryptChunk } from './crypto';
+import { encryptChunk, decryptChunk, chunkAad } from './crypto';
 
 export const CHUNK_SIZE = 512 * 1024; // 512KB per chunk
 
@@ -40,8 +40,9 @@ export async function uploadChunkedFile(file, secretId, fileKey, token, apiBaseU
         const end = Math.min(start + CHUNK_SIZE, totalSize);
         const chunkData = fileBytes.slice(start, end);
 
-        // Encrypt chunk
-        const { iv, ciphertext } = await encryptChunk(chunkData, fileKey);
+        // Encrypt chunk, bound to its (secret, index) so the server cannot
+        // serve it back under a different index (audit M-2).
+        const { iv, ciphertext } = await encryptChunk(chunkData, fileKey, chunkAad(secretId, i));
 
         // Upload
         const res = await fetch(`${apiBaseUrl}/secrets/chunks`, {
@@ -97,7 +98,10 @@ export async function downloadChunkedFile(secretId, fileKey, token, apiBaseUrl, 
         }
 
         const chunkData = await res.json();
-        const decryptedBytes = await decryptChunk(chunkData.iv, chunkData.encrypted_data, fileKey);
+        // Throws on an AES-GCM tag failure if this is not the chunk that was
+        // encrypted for index i (audit M-2). Deliberately uncaught: a wrong
+        // chunk must fail the download, not silently corrupt the file.
+        const decryptedBytes = await decryptChunk(chunkData.iv, chunkData.encrypted_data, fileKey, chunkAad(secretId, i));
         decryptedChunks.push(decryptedBytes);
 
         if (onProgress) {
@@ -151,7 +155,9 @@ export async function uploadMultipleChunkedFiles(files, secretId, fileKey, token
             const end = Math.min(start + CHUNK_SIZE, fileBytes.length);
             const chunkData = fileBytes.slice(start, end);
 
-            const { iv, ciphertext } = await encryptChunk(chunkData, fileKey);
+            // The GLOBAL index, which is what downloadFileByRange requests —
+            // binding the per-file index here would never match (audit M-2).
+            const { iv, ciphertext } = await encryptChunk(chunkData, fileKey, chunkAad(secretId, globalChunkIndex));
 
             const res = await fetch(`${apiBaseUrl}/secrets/chunks`, {
                 method: 'POST',
@@ -212,7 +218,12 @@ export async function downloadFileByRange(secretId, fileKey, token, apiBaseUrl, 
         }
 
         const chunkData = await res.json();
-        const decryptedBytes = await decryptChunk(chunkData.iv, chunkData.encrypted_data, fileKey);
+        // The GLOBAL index, matching what uploadMultipleChunkedFiles bound in
+        // (audit M-2) — `i` here is only this file's offset into the range.
+        // Throws on an AES-GCM tag failure if the server served a different
+        // chunk; deliberately uncaught, so a wrong chunk fails the download
+        // instead of silently corrupting the file.
+        const decryptedBytes = await decryptChunk(chunkData.iv, chunkData.encrypted_data, fileKey, chunkAad(secretId, chunkIndex));
         decryptedChunks.push(decryptedBytes);
 
         if (onProgress) {
