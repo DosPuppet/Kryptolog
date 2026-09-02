@@ -102,8 +102,13 @@ export const attestationStatus = async (user) => {
 // nothing here can fix that without an out-of-band channel (that is what the
 // safety number in utils/fingerprint.js is for).
 const rememberAttested = (address, encryptionPublicKey) => {
-    const map = load(ATTEST_KEY);
     const a = norm(address);
+    // Never key a record on the empty string: every address-less object would
+    // then share one record, and one verified sighting would mark them all.
+    // Unreachable today (attestationStatus can't verify without an address),
+    // kept so a future caller can't make it reachable.
+    if (!a) return;
+    const map = load(ATTEST_KEY);
     map[a] = {
         key: encryptionPublicKey,
         firstSeen: map[a]?.firstSeen || Date.now(),

@@ -198,6 +198,12 @@ const ShareModal = ({ isOpen, onClose, secret, onShare }) => {
                                 <span>This recipient's encryption key <strong>failed verification</strong> against their identity signature. It may be a substituted key — sharing is blocked.</span>
                             </div>
                         )}
+                        {attStatus === 'downgraded' && (
+                            <div className="mb-3 flex items-start gap-2 rounded-lg border border-red-500/40 bg-red-50 dark:bg-red-900/20 px-3 py-2 text-xs text-red-700 dark:text-red-300">
+                                <ShieldAlert className="w-4 h-4 shrink-0 mt-0.5" />
+                                <span>This recipient was <strong>previously verified</strong>, but their key is now served with no attestation. That is what a key swap by omission looks like — sharing is blocked until you verify the safety number below with them.</span>
+                            </div>
+                        )}
                         {attStatus === 'verified' && (
                             <div className="mb-3 flex items-center gap-2 rounded-lg border border-emerald-500/30 bg-emerald-50 dark:bg-emerald-900/20 px-3 py-2 text-xs text-emerald-700 dark:text-emerald-300">
                                 <Check className="w-4 h-4 shrink-0" />
@@ -234,7 +240,7 @@ const ShareModal = ({ isOpen, onClose, secret, onShare }) => {
                         </div>
                         <button
                             onClick={handleShare}
-                            disabled={sharing || !!successMsg || attStatus === 'invalid'}
+                            disabled={sharing || !!successMsg || attStatus === 'invalid' || attStatus === 'downgraded'}
                             className="w-full bg-indigo-600 hover:bg-indigo-500 text-white py-2 rounded-lg font-medium shadow-lg shadow-indigo-500/20 disabled:opacity-50 flex justify-center items-center gap-2"
                         >
                             {sharing ? <Loader2 className="w-5 h-5 animate-spin" /> : `Share with ${selectedUser.username}`}
