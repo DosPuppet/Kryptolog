@@ -31,7 +31,25 @@ import { ml_dsa44 } from '@noble/post-quantum/ml-dsa.js';
 //        ML-KEM key under the `key-attestation` context so peers can verify the
 //        directory's key binding offline; keyFingerprint() renders the pair as
 //        a Signal-style safety number for out-of-band comparison.
-export const CRYPTO_CORE_VERSION = '1.3.0';
+// 1.4.0: two wire-format breaks, landed together so there is ONE incompatibility
+//        boundary rather than two.
+//        • encryptChunk/decryptChunk now REQUIRE an AAD binding the chunk to its
+//          (secret, index) — audit M-2. Chunks written before this no longer
+//          decrypt.
+//        • messageSigningBody now also covers `gid` and a digest of the key
+//          envelope (`keysh`), and is async — audit M-8. Signatures produced
+//          before this no longer verify.
+// 1.5.0: ADDITIVE — no wire or storage format change. deriveVaultKeyBits() /
+//        importVaultKey() expose the vault KDF's raw output so the extension can
+//        resume a session without keeping the password anywhere (audit M-4).
+//        deriveKey() is now composed from them and produces the identical key;
+//        the byte-compat suite pins the KDF output as a golden vector so that
+//        equivalence cannot regress silently.
+// 1.6.0: ADDITIVE/hardening — no wire or storage format change. fromHex() now
+//        THROWS on malformed input (audit L-9) instead of decoding non-hex to
+//        zero bytes and truncating odd-length strings, which turned a corrupted
+//        key into a valid-looking different one.
+export const CRYPTO_CORE_VERSION = '1.6.0';
 
 // Helper: Uint8Array/Array <-> Hex. Deliberately Buffer-free so this package
 // stays a pure, runtime-agnostic ESM module (Node, browser SPA, MV3 extension)
@@ -46,7 +64,19 @@ export const toHex = (arr) => {
     for (let i = 0; i < bytes.length; i++) hex += _HEX[bytes[i]];
     return hex;
 };
+// Throws rather than guessing (audit L-9). This used to feed every character
+// pair to parseInt(_, 16) and store the result, so a non-hex pair became NaN,
+// NaN stored into a Uint8Array became 0, and a corrupted public key silently
+// decoded to a key of ZEROS instead of raising. An odd-length string quietly
+// lost its last character the same way. Both turn "this data is damaged" into
+// "this data is valid and different", which is the worst answer a decoder can
+// give — every caller here is decoding a key, iv, salt or ciphertext, and none
+// of them can act on a silently substituted one. Matches the backend's is_hex.
+const _HEX_ONLY = /^[0-9a-fA-F]+$/;
 export const fromHex = (hex) => {
+    if (typeof hex !== 'string' || hex.length === 0 || hex.length % 2 !== 0 || !_HEX_ONLY.test(hex)) {
+        throw new Error('fromHex: expected a non-empty, even-length hex string');
+    }
     const len = hex.length >> 1;
     const out = new Uint8Array(len);
     for (let i = 0; i < len; i++) out[i] = parseInt(hex.substr(i * 2, 2), 16);
@@ -104,21 +134,55 @@ export const MESSAGE_SIGNING_PREFIX = domainSeparate(SIGNING_CONTEXT.MESSAGE, ''
 const canonicalCiphertext = (ct) =>
     (ct && typeof ct === 'object') ? `${ct.iv}.${ct.content}` : ct;
 
-// Canonical bytes a sender signs for one chat message (audit S1: authenticate
-// messages end-to-end, not just encrypt them). Binds the author, the
-// conversation (DM recipient address or group channel id), the session id, and
-// the exact ciphertext, under the `message` domain so it can't be replayed as
-// another signature type. Sender and every receiver build this identically:
-//   from = message.sender_address, conv = recipient_address (DM) | channel_id (group).
-export const messageSigningBody = ({ from, conv, sid, ct }) =>
-    domainSeparate(SIGNING_CONTEXT.MESSAGE, `from=${from}\nconv=${conv}\nsid=${sid}\nct=${canonicalCiphertext(ct)}`);
-
 // SHA-256 of a UTF-8 string -> lowercase hex (matches Python hashlib.sha256().hexdigest()).
 export const sha256Hex = async (str) => {
     const bytes = new TextEncoder().encode(str);
     const digest = await crypto.subtle.digest('SHA-256', bytes);
     return toHex(new Uint8Array(digest));
 };
+
+// Deterministic JSON with recursively sorted object keys. JSON.stringify would
+// NOT do: it preserves insertion order, so the sender and a verifier that
+// rebuilt the object from a re-serialized payload could produce different bytes
+// for the same value and the signature would fail for reasons that look random.
+// Every party has to derive the identical string from the identical value, so
+// key order has to come from the data, not from how it was constructed.
+export const canonicalJson = (value) => {
+    if (value === null || value === undefined) return 'null';
+    if (Array.isArray(value)) return `[${value.map(canonicalJson).join(',')}]`;
+    if (typeof value === 'object') {
+        return `{${Object.keys(value).sort()
+            .map(k => `${JSON.stringify(k)}:${canonicalJson(value[k])}`)
+            .join(',')}}`;
+    }
+    return JSON.stringify(value);
+};
+
+// Canonical bytes a sender signs for one chat message (audit S1: authenticate
+// messages end-to-end, not just encrypt them). Binds the author, the
+// conversation (DM recipient address or group channel id), the declared group
+// id, the session id, the KEY ENVELOPE, and the exact ciphertext, under the
+// `message` domain so it can't be replayed as another signature type. Sender and
+// every receiver build this identically:
+//   from = message.sender_address, conv = recipient_address (DM) | channel_id (group).
+//
+// `keysh` — digest of the per-recipient wrapped-key map (audit M-8). Without it
+// the signature covered `ct` but not `keys`, so a relay could DROP or substitute
+// one member's entry and the message still verified for everyone else. It cannot
+// read anything that way (wrapping a valid entry needs the session key), but it
+// can silently exclude one member from a session epoch — targeted censorship
+// that reaches the victim only as "encrypted, key unavailable". Digested rather
+// than inlined because the map holds a full ML-KEM envelope per member.
+//
+// `gid` is signed as well even though `conv` already binds the server-attested
+// channel_id: it makes the payload's self-declared group id part of the signed
+// statement rather than something only a separate equality check defends.
+//
+// Async because of the digest — every call site must await it.
+export const messageSigningBody = async ({ from, conv, sid, ct, gid = '', keys = null }) =>
+    domainSeparate(SIGNING_CONTEXT.MESSAGE,
+        `from=${from}\nconv=${conv}\ngid=${gid ?? ''}\nsid=${sid}` +
+        `\nkeysh=${await sha256Hex(canonicalJson(keys ?? null))}\nct=${canonicalCiphertext(ct)}`);
 
 // --- Encryption-key attestation (audit M-1) ---
 // The address IS the ML-DSA public key (self-certifying), but the ML-KEM
@@ -464,53 +528,111 @@ const importAesKey = async (keyHex) => {
     return crypto.subtle.importKey("raw", keyBytes, "AES-GCM", false, ["encrypt", "decrypt"]);
 };
 
+// Associated data binding a chunk to its position (audit M-2).
+//
+// Every chunk of a secret is encrypted under the SAME fileKey, and AES-GCM was
+// used with no AAD — so a server could swap chunk 3 for chunk 7, both decrypt
+// cleanly, and the reassembled file is silently wrong. Nothing catches it: the
+// message signature layer covers metadata, not file bytes. Binding (secret,
+// index) into the AEAD makes a misplaced chunk fail its tag instead.
+//
+// Not a substitute for the DB's uq_file_chunk_secret_index constraint — that
+// stops a duplicate index being stored at all; this stops a stored chunk being
+// served under the wrong index.
+export const chunkAad = (secretId, chunkIndex) =>
+    `Kryptolog/chunk/v1\nsecret=${secretId}\nindex=${chunkIndex}`;
+
+// AAD is REQUIRED, not defaulted: falling back to "no AAD" would silently write
+// the old, swappable format, which is exactly the downgrade path the
+// clean-cutover stance exists to avoid.
+const aadBytes = (aad, fn) => {
+    if (typeof aad !== 'string' || aad === '') {
+        throw new Error(`${fn}: aad is required — build it with chunkAad(secretId, chunkIndex) (audit M-2)`);
+    }
+    return new TextEncoder().encode(aad);
+};
+
 /**
  * Encrypt a binary chunk (Uint8Array) with AES-GCM.
+ * @param {string} aad - from chunkAad(secretId, chunkIndex); required.
  * Returns { iv: hex, ciphertext: hex }
  */
-export const encryptChunk = async (chunkBytes, keyHex) => {
+export const encryptChunk = async (chunkBytes, keyHex, aad) => {
+    const additionalData = aadBytes(aad, 'encryptChunk');
     const key = await importAesKey(keyHex);
     const iv = crypto.getRandomValues(new Uint8Array(12));
-    const encrypted = await crypto.subtle.encrypt({ name: "AES-GCM", iv }, key, chunkBytes);
+    const encrypted = await crypto.subtle.encrypt(
+        { name: "AES-GCM", iv, additionalData }, key, chunkBytes
+    );
     return { iv: toHex(iv), ciphertext: toHex(new Uint8Array(encrypted)) };
 };
 
 /**
  * Decrypt a binary chunk. Returns Uint8Array (raw bytes).
+ * @param {string} aad - must be byte-identical to the one used at encrypt time.
+ * Throws (AES-GCM tag failure) if the chunk was served under a different index.
  */
-export const decryptChunk = async (ivHex, ciphertextHex, keyHex) => {
+export const decryptChunk = async (ivHex, ciphertextHex, keyHex, aad) => {
+    const additionalData = aadBytes(aad, 'decryptChunk');
     const key = await importAesKey(keyHex);
     const decrypted = await crypto.subtle.decrypt(
-        { name: "AES-GCM", iv: fromHex(ivHex) }, key, fromHex(ciphertextHex)
+        { name: "AES-GCM", iv: fromHex(ivHex), additionalData }, key, fromHex(ciphertextHex)
     );
     return new Uint8Array(decrypted);
 };
 
 // --- Vault Security ---
 
-// Helper to derive key
-export async function deriveKey(password, salt) {
-    const enc = new TextEncoder();
-    const keyMaterial = await crypto.subtle.importKey(
-        "raw",
-        enc.encode(password),
-        { name: "PBKDF2" },
-        false,
-        ["deriveKey"]
-    );
+// One definition of the vault KDF, shared by the CryptoKey and raw-bits paths
+// below so the two can never drift apart.
+const VAULT_KDF = {
+    name: "PBKDF2",
+    iterations: 600000, // OWASP Recommended (was 100k)
+    hash: "SHA-512",    // Hardened from SHA-256
+};
+const VAULT_KEY_BITS = 256;
 
-    return crypto.subtle.deriveKey(
-        {
-            name: "PBKDF2",
-            salt: salt,
-            iterations: 600000, // OWASP Recommended (was 100k)
-            hash: "SHA-512"   // Hardened from SHA-256
-        },
-        keyMaterial,
-        { name: "AES-GCM", length: 256 },
-        false,
-        ["encrypt", "decrypt"]
+const vaultKeyMaterial = (password) => crypto.subtle.importKey(
+    "raw",
+    new TextEncoder().encode(password),
+    { name: "PBKDF2" },
+    false,
+    ["deriveBits", "deriveKey"]
+);
+
+/**
+ * The vault key as RAW BYTES. Same KDF and same output as deriveKey() — this
+ * just hands back the material instead of a sealed CryptoKey.
+ *
+ * Exists so a session can be resumed without keeping the PASSWORD anywhere
+ * (audit M-4). A non-extractable CryptoKey cannot survive an MV3 service-worker
+ * restart — chrome.storage.session is JSON-serialized, not structured-clone —
+ * so the extension caches these bytes instead. Strictly less valuable to an
+ * attacker than the password: the password is the KDF *input*, survives a salt
+ * change, and is the thing a user is likely to have reused elsewhere.
+ */
+export const deriveVaultKeyBits = async (password, salt) => {
+    const material = await vaultKeyMaterial(password);
+    const bits = await crypto.subtle.deriveBits(
+        { ...VAULT_KDF, salt }, material, VAULT_KEY_BITS
     );
+    return new Uint8Array(bits);
+};
+
+/** Import raw vault-key bytes as a non-extractable AES-GCM key. */
+export const importVaultKey = async (keyBytes) => crypto.subtle.importKey(
+    "raw",
+    keyBytes,
+    { name: "AES-GCM", length: VAULT_KEY_BITS },
+    false,
+    ["encrypt", "decrypt"]
+);
+
+// Helper to derive key. Composed from the two above rather than calling
+// crypto.subtle.deriveKey directly, so there is exactly one KDF in the file and
+// the bytes path is provably the same key (byte-compat test pins both).
+export async function deriveKey(password, salt) {
+    return importVaultKey(await deriveVaultKeyBits(password, salt));
 }
 
 /**

@@ -79,8 +79,23 @@ export const interpretDecryptedContent = async ({ contentString, fileKey, workfl
     const signedBody = domainSeparate(SIGNING_CONTEXT.CONTENT, parsed.content);
     const isValid = await verifySignaturePQC(signedBody, parsed.signature, parsed.signerPublicKey);
 
+    // ...but verifying against a key taken FROM THE BLOB proves only that
+    // whoever wrote the blob held some key — not that it was this workflow's
+    // creator (audit L-3). Anyone able to write the payload can sign it with a
+    // key they generated and it renders as "verified". Bind the claimed signer
+    // to the workflow's server-attested owner_address before saying so.
+    //
+    // 'mismatch' is deliberately distinct from 'failed': the signature is
+    // cryptographically sound, it just does not belong to who the UI is about
+    // to attribute it to, and those need different words in front of a user.
+    const claimedSigner = (parsed.signerPublicKey || '').toLowerCase();
+    const ownerAddress = (workflow?.owner_address || '').toLowerCase();
+    const attributionHolds = Boolean(ownerAddress) && claimedSigner === ownerAddress;
+
     const result = {
-        verificationStatus: isValid ? 'verified' : 'failed',
+        verificationStatus: !isValid ? 'failed' : (attributionHolds ? 'verified' : 'mismatch'),
+        signerMatchesOwner: attributionHolds,
+        claimedSigner: parsed.signerPublicKey,
         creatorSignature: parsed.signature,
         creatorSignedContent: parsed.content,
         rawDecryptedContent: contentString,

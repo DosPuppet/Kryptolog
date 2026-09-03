@@ -40,7 +40,11 @@ async def create_group(
     found_addrs = {u.address for u in users}
     missing = set(member_addrs) - found_addrs
     if missing:
-        raise HTTPException(status_code=404, detail=f"Users not found: {', '.join(missing)}")
+        # Generic on purpose (audit L-6): naming the addresses that were not
+        # found turns group creation into an account-existence oracle — probe
+        # with a candidate address, read whether it came back. /auth/login is
+        # already generic for the same reason.
+        raise HTTPException(status_code=404, detail="One or more users could not be found")
 
     # Validate all members have PQC keys (Messenger requirement)
     for u in users:
@@ -429,7 +433,15 @@ async def remove_member(
             }
 
     if not group_deleted:
-        db.delete(target_member)
+        # Delete by predicate, not by instance: `target_member` is only the FIRST
+        # matching row, so removing the instance left any duplicate behind and the
+        # "removed" member kept access (audit M-1). The unique constraint added in
+        # migration e5f6a7b8c9d4 makes duplicates impossible going forward; this
+        # stays a bulk delete so the removal is correct regardless.
+        db.query(models.GroupMember).filter(
+            models.GroupMember.channel_id == channel_id,
+            models.GroupMember.user_address == target_addr,
+        ).delete(synchronize_session="fetch")
     db.commit()
 
     # If the group is gone there's no one left to notify.
@@ -570,7 +582,9 @@ async def update_group(
 # ── Mark Read ───────────────────────────────────────────────────
 
 @router.post("/{channel_id}/mark-read")
+@limiter.limit("60/minute")
 def mark_group_read(
+    request: Request,
     channel_id: str,
     current_user: models.User = Depends(get_current_user),
     db: Session = Depends(get_db),

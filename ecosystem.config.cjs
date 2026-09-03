@@ -1,3 +1,11 @@
+// PM2 process definitions.
+//
+// NOTE: nothing here runs database migrations. `start_all.sh` applies
+// `alembic upgrade head` BEFORE it calls `pm2 start`, so the normal path is
+// covered — but starting this file directly (`pm2 start ecosystem.config.cjs`)
+// skips that step and the backend will happily serve whatever schema it finds.
+// Migrations are a deliberate deployment step, not an import-time side effect
+// (audit M-3); see README "Database Migrations (Alembic)".
 module.exports = {
   apps: [
     {

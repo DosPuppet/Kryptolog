@@ -4,7 +4,7 @@ from sqlalchemy.orm import Session
 from datetime import datetime, timezone, timedelta
 import models, schemas, auth, config, invites
 from database import get_db
-from security.crypto_validation import is_valid_ml_kem_public_key
+from security.crypto_validation import is_valid_ml_kem_public_key, is_valid_ml_dsa_public_key
 from security.usernames import InvalidUsername, normalize_username, username_taken
 
 router = APIRouter(
@@ -15,6 +15,13 @@ router = APIRouter(
 @router.get("/nonce/{address}")
 @limiter.limit("10/minute")
 def get_nonce(request: Request, address: str, db: Session = Depends(get_db)):
+    # The address IS an ML-DSA-44 public key, so anything that is not one can
+    # never produce a verifying signature and can never complete a login
+    # (audit L-5). Checking the shape here stops an unauthenticated endpoint
+    # from writing a row for every distinct string it is handed.
+    if not is_valid_ml_dsa_public_key(address):
+        raise HTTPException(status_code=400, detail="Invalid address")
+
     # Cleanup expired nonces first (lazy cleanup). Naive UTC throughout to
     # match the timezone-less expires_at column.
     now = datetime.now(timezone.utc).replace(tzinfo=None)

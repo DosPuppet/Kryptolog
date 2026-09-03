@@ -21,6 +21,15 @@ if [ -z "$KRYPTOLOG_JWT_SECRET" ]; then
     echo "WARNING: KRYPTOLOG_JWT_SECRET not set — using an ephemeral JWT secret (tokens reset on restart)."
 fi
 
+# Apply migrations before serving. The app no longer migrates at import time
+# (audit M-3), so this has to be explicit — and fail hard rather than starting
+# against a schema that doesn't match the models.
+echo "Applying database migrations..."
+if ! python3 -m alembic upgrade head; then
+    echo "ERROR: database migration failed — refusing to start."
+    exit 1
+fi
+
 # Start FastAPI Backend
 echo "Starting FastAPI Backend..."
 uvicorn main:app --reload --port 8000 --h11-max-incomplete-event-size 65536

@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback } from 'react';
 import { Search, Loader2, X, Check, ShieldAlert, Fingerprint } from 'lucide-react';
 import API_ENDPOINTS from '../../config';
 import { useAuth } from '../../context/AuthContext';
-import { checkContactKey, trustContactKey, attestationStatus } from '../../services/trustedKeys';
+import { checkContactKey, trustContactKey, attestationVerdict } from '../../services/trustedKeys';
 import { safetyNumber } from '../../utils/fingerprint';
 import { confirmDialog } from '../../utils/confirm';
 
@@ -18,7 +18,7 @@ const ShareModal = ({ isOpen, onClose, secret, onShare }) => {
     // number, and whether their key changed vs. what we last shared with (TOFU).
     const [fingerprint, setFingerprint] = useState('');
     const [keyStatus, setKeyStatus] = useState('unchanged'); // 'new' | 'unchanged' | 'changed'
-    const [attStatus, setAttStatus] = useState('unattested'); // 'verified' | 'unattested' | 'invalid' (audit M-1)
+    const [attStatus, setAttStatus] = useState('unattested'); // 'verified' | 'unattested' | 'invalid' | 'downgraded' (audit M-1)
     // Inline feedback instead of window.alert(): blocking dialogs are unreliable
     // in installed PWAs (notably iOS standalone), where they can be suppressed or
     // hang — leaving the modal stuck open even though the share succeeded.
@@ -73,7 +73,7 @@ const ShareModal = ({ isOpen, onClose, secret, onShare }) => {
         safetyNumber(selectedUser.address, selectedUser.encryption_public_key)
             .then((fp) => { if (!cancelled) setFingerprint(fp || ''); });
         // Attestation (audit M-1): verify the recipient's self-signed key binding.
-        attestationStatus(selectedUser)
+        attestationVerdict(selectedUser)
             .then((st) => { if (!cancelled) setAttStatus(st); });
         return () => { cancelled = true; };
     }, [selectedUser]);
@@ -85,6 +85,13 @@ const ShareModal = ({ isOpen, onClose, secret, onShare }) => {
         // own identity signature — a substituted key. Hard block, no override.
         if (attStatus === 'invalid') {
             setError("This recipient's encryption key failed verification against their identity. Sharing is blocked — ask them to log in again to re-attest their key.");
+            return;
+        }
+        // Same block for an attestation that DISAPPEARED: this contact was seen
+        // attested before, so 'unattested' now is the directory dropping the
+        // proof rather than an account that never had one.
+        if (attStatus === 'downgraded') {
+            setError("This recipient was previously verified, but their key is now served with no attestation. Sharing is blocked — verify their safety number out of band, or ask them to log in again to re-attest.");
             return;
         }
 
@@ -191,6 +198,12 @@ const ShareModal = ({ isOpen, onClose, secret, onShare }) => {
                                 <span>This recipient's encryption key <strong>failed verification</strong> against their identity signature. It may be a substituted key — sharing is blocked.</span>
                             </div>
                         )}
+                        {attStatus === 'downgraded' && (
+                            <div className="mb-3 flex items-start gap-2 rounded-lg border border-red-500/40 bg-red-50 dark:bg-red-900/20 px-3 py-2 text-xs text-red-700 dark:text-red-300">
+                                <ShieldAlert className="w-4 h-4 shrink-0 mt-0.5" />
+                                <span>This recipient was <strong>previously verified</strong>, but their key is now served with no attestation. That is what a key swap by omission looks like — sharing is blocked until you verify the safety number below with them.</span>
+                            </div>
+                        )}
                         {attStatus === 'verified' && (
                             <div className="mb-3 flex items-center gap-2 rounded-lg border border-emerald-500/30 bg-emerald-50 dark:bg-emerald-900/20 px-3 py-2 text-xs text-emerald-700 dark:text-emerald-300">
                                 <Check className="w-4 h-4 shrink-0" />
@@ -227,7 +240,7 @@ const ShareModal = ({ isOpen, onClose, secret, onShare }) => {
                         </div>
                         <button
                             onClick={handleShare}
-                            disabled={sharing || !!successMsg || attStatus === 'invalid'}
+                            disabled={sharing || !!successMsg || attStatus === 'invalid' || attStatus === 'downgraded'}
                             className="w-full bg-indigo-600 hover:bg-indigo-500 text-white py-2 rounded-lg font-medium shadow-lg shadow-indigo-500/20 disabled:opacity-50 flex justify-center items-center gap-2"
                         >
                             {sharing ? <Loader2 className="w-5 h-5 animate-spin" /> : `Share with ${selectedUser.username}`}

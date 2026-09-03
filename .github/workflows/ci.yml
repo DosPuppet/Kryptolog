@@ -9,8 +9,7 @@ name: CI
 #   • extension   — TrustKeys MV3 build.
 #   • backend     — pytest, incl. the noble<->liboqs interop tests (liboqs is
 #     compiled from source, so the job installs cmake + a C toolchain).
-# Frontend lint is a blocking gate. The extension's lint stays advisory until
-# its remaining 26 errors are cleared (see the note on that step).
+# Frontend and extension lint are both blocking gates.
 #
 # A separate Security workflow (.github/workflows/security.yml) carries the
 # AppSec gate: pip-audit, npm audit, gitleaks and CodeQL.
@@ -77,7 +76,7 @@ jobs:
         working-directory: frontend
 
   extension:
-    name: trustkeys extension (build)
+    name: trustkeys extension (tests + build)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
@@ -93,17 +92,19 @@ jobs:
       - name: Install extension deps
         run: npm ci
         working-directory: trustkeys
+      - name: Unit tests (vitest)
+        run: npx vitest run
+        working-directory: trustkeys
       - name: Build
         run: npx vite build
         working-directory: trustkeys
-      - name: Lint (advisory — 26 known errors, see note)
-        # Adding the webextension globals cleared 70 bogus `chrome` no-undef
-        # errors; the 26 that remain are real but unrelated code cleanups
-        # (unused catch bindings, case-block declarations, two hook ordering
-        # issues). Fix those and flip this to blocking like the frontend job.
+      - name: Lint
+        # Blocking, like the frontend job. Getting here took two steps: the
+        # webextension globals in eslint.config.js cleared 70 bogus `chrome`
+        # no-undef errors, then the 23 real ones behind them (unused catch
+        # bindings, case-block declarations, two hook-ordering issues) were fixed.
         run: npx eslint .
         working-directory: trustkeys
-        continue-on-error: true
 
   backend:
     name: backend (pytest + PQC interop)
@@ -156,6 +157,15 @@ jobs:
         # Full upgrade against a real Postgres — catches dialect-specific DDL
         # breakage (incl. the users.address btree-index-size risk) on every push.
         run: alembic upgrade head
+        working-directory: backend
+      - name: Check for model/migration drift
+        # Blocking now that the users.username discrepancy is resolved (audit
+        # WP9): the column declared `unique=True`, which renders as a unique
+        # CONSTRAINT, while the database holds a unique INDEX — so autogenerate
+        # reported a permanent remove_index/add_constraint pair and this gate
+        # could never be switched on. Fails if a model change ships without its
+        # migration.
+        run: alembic check
         working-directory: backend
       - name: Run tests
         # A fresh venv has none of the Ethereum-era packages, so the stale

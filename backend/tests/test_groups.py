@@ -2,16 +2,42 @@
 Tests for the Group Channels feature.
 """
 import pytest
-from conftest import do_login, auth_header, TEST_USER_ADDRESS, TEST_USER_ADDRESS_2, TEST_ENCRYPTION_KEY
+from conftest import (
+    do_login, auth_header,
+    TEST_USER_ADDRESS, TEST_USER_ADDRESS_2, TEST_USER_ADDRESS_3, TEST_ENCRYPTION_KEY,
+)
 
 
-TEST_USER_ADDRESS_3 = "pqc_test_user_" + "d" * 100
+
 
 
 @pytest.fixture()
 def user3(client):
     token, user = do_login(client, TEST_USER_ADDRESS_3, TEST_ENCRYPTION_KEY, "TestUser3")
     return token, user
+
+
+class TestMemberLookupIsNotAnOracle:
+    """L-6: the 404 used to name the addresses it could not find.
+
+    That turns group creation into an account-existence oracle — probe with a
+    candidate address and read whether it comes back in the message. /auth/login
+    is already generic for the same reason.
+    """
+
+    def test_error_does_not_reveal_which_addresses_exist(self, client, user1):
+        from conftest import synthetic_address
+        token, u1 = user1
+        absent = synthetic_address("never-registered")
+
+        resp = client.post("/groups", json={
+            "name": "probe", "member_addresses": [u1["address"], absent],
+        }, headers=auth_header(token))
+
+        assert resp.status_code == 404
+        detail = resp.json()["detail"]
+        assert absent not in detail
+        assert u1["address"] not in detail
 
 
 class TestCreateGroup:
@@ -235,6 +261,64 @@ class TestGroupMembers:
             "user_address": u2["address"],
         }, headers=auth_header(token1))
         assert resp.status_code == 400
+
+    def test_duplicate_membership_rejected_by_db(self, client, user1, user2, db_session):
+        """The database refuses a second membership row (audit M-1).
+
+        `add_member`'s check is read-then-write and therefore racy; the
+        application check alone is not the invariant. uq_group_member_channel_user
+        is, so a duplicate cannot exist for `remove_member` to miss.
+        """
+        import models
+        from sqlalchemy.exc import IntegrityError
+
+        token1, u1 = user1
+        _, u2 = user2
+
+        create_resp = client.post("/groups", json={
+            "name": "Constrained",
+            "member_addresses": [u1["address"], u2["address"]],
+        }, headers=auth_header(token1))
+        channel_id = create_resp.json()["id"]
+
+        db_session.add(models.GroupMember(
+            channel_id=channel_id,
+            user_address=u2["address"].lower(),
+            role="member",
+        ))
+        with pytest.raises(IntegrityError):
+            db_session.commit()
+        db_session.rollback()
+
+    def test_removal_deletes_every_membership_row(self, client, user1, user2, db_session):
+        """Removal is by predicate, not by instance (audit M-1).
+
+        `remove_member` used to delete the single row it had loaded, so any
+        duplicate survived and the "removed" member kept channel access. Assert
+        against the table rather than the 200, which was green either way.
+        """
+        import models
+
+        token1, u1 = user1
+        _, u2 = user2
+
+        create_resp = client.post("/groups", json={
+            "name": "Fully Removable",
+            "member_addresses": [u1["address"], u2["address"]],
+        }, headers=auth_header(token1))
+        channel_id = create_resp.json()["id"]
+
+        resp = client.delete(
+            f"/groups/{channel_id}/members/{u2['address']}",
+            headers=auth_header(token1),
+        )
+        assert resp.status_code == 200
+
+        remaining = db_session.query(models.GroupMember).filter(
+            models.GroupMember.channel_id == channel_id,
+            models.GroupMember.user_address == u2["address"].lower(),
+        ).count()
+        assert remaining == 0
 
 
 class TestGroupAdmin:

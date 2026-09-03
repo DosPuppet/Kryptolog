@@ -23,7 +23,9 @@ export const API_ENDPOINTS = {
         DELETE: (secretId) => `${API_BASE_URL}/secrets/${secretId}`,
         REVOKE: (grantId) => `${API_BASE_URL}/secrets/share/${grantId}`,
         CHUNKS_UPLOAD: `${API_BASE_URL}/secrets/chunks`,
-        CHUNKS_LIST: (secretId) => `${API_BASE_URL}/secrets/${secretId}/chunks`,
+        // No bulk chunk listing: the server endpoint was removed (audit H-2) —
+        // it returned every chunk's full payload in one response. Fetch chunks
+        // one at a time by index instead (see utils/fileChunks.js).
         CHUNK: (secretId, index) => `${API_BASE_URL}/secrets/${secretId}/chunks/${index}`,
     },
     GROUPS: {

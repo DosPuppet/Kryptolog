@@ -1,5 +1,6 @@
-import { state, getSessionPassword } from '../state.js';
-import { saveVault, launchPopup, isDevOrigin, isAllowedTrustedOrigin } from '../utils.js';
+import { state } from '../state.js';
+import { saveVaultWithSessionKey, launchPopup, isDevOrigin, isAllowedTrustedOrigin } from '../utils.js';
+import { requestApproval } from '../approvals.js';
 
 // Dev-only origins hardcoded in manifest — cannot be removed
 const DEV_ORIGINS = ['http://localhost', 'http://127.0.0.1'];
@@ -36,21 +37,18 @@ export const handleConnectAsync = async (origin, sendResponse) => {
         return;
     }
 
-    const reqId = Math.random().toString(36).substr(2, 9);
-    state.pendingRequests.set(reqId, {
-        resolve: () => {
+    await requestApproval({
+        type: 'CONNECT',
+        origin,
+        data: { origin },
+        route: 'connect',
+        onApprove: async () => {
             state.vault.permissions[origin] = true;
-            saveVault(getSessionPassword());
+            await saveVaultWithSessionKey();
             sendResponse({ success: true });
         },
-        reject: (err) => {
-            sendResponse({ success: false, error: err || "Rejected" });
-        },
-        type: 'CONNECT',
-        data: { origin }
+        onReject: (err) => sendResponse({ success: false, error: err }),
     });
-
-    await launchPopup('connect', { requestId: reqId, origin });
 };
 
 // ─── Dynamic content script registration ─────────────────────
@@ -88,7 +86,7 @@ export const registerOriginScripts = async (origin) => {
     try {
         const existing = await chrome.scripting.getRegisteredContentScripts({ ids: [mainId, isolatedId] });
         if (existing.length >= 2) return; // Already registered
-    } catch (e) {
+    } catch {
         // getRegisteredContentScripts may throw if IDs don't exist yet — that's fine
     }
 
@@ -125,7 +123,7 @@ export const unregisterOriginScripts = async (origin) => {
 
     try {
         await chrome.scripting.unregisterContentScripts({ ids });
-    } catch (e) {
+    } catch {
         // May not exist — ignore
     }
 };
@@ -145,7 +143,7 @@ export const syncDynamicScripts = async () => {
             changed = true;
         }
     }
-    if (changed) await saveVault(getSessionPassword());
+    if (changed) await saveVaultWithSessionKey();
 
     const origins = Object.keys(state.vault.permissions);
 
@@ -200,11 +198,11 @@ export const handleAddTrustedSite = async (origin, tabId) => {
     }
 
     state.vault.permissions[origin] = true;
-    await saveVault(getSessionPassword());
+    await saveVaultWithSessionKey();
     await registerOriginScripts(origin);
 
     if (tabId) {
-        try { await chrome.tabs.reload(tabId); } catch (e) { /* tab may be gone */ }
+        try { await chrome.tabs.reload(tabId); } catch { /* tab may be gone */ }
     }
 
     return { success: true };
@@ -220,11 +218,11 @@ export const handleRemoveTrustedSite = async (origin) => {
 
     delete state.vault.permissions[origin];
     if (state.vault.autoSignSites) delete state.vault.autoSignSites[origin];
-    await saveVault(getSessionPassword());
+    await saveVaultWithSessionKey();
     await unregisterOriginScripts(origin);
     // Drop the host permission too (doesn't require a user gesture), so removing
     // a site fully revokes the extension's standing access to it.
-    try { await chrome.permissions.remove({ origins: [`${origin}/*`] }); } catch (e) { /* best effort */ }
+    try { await chrome.permissions.remove({ origins: [`${origin}/*`] }); } catch { /* best effort */ }
 
     return { success: true };
 };
@@ -239,6 +237,6 @@ export const handleSetSiteAutoSign = async (origin, enabled) => {
     if (!state.vault.autoSignSites) state.vault.autoSignSites = {};
     if (enabled) state.vault.autoSignSites[origin] = true;
     else delete state.vault.autoSignSites[origin];
-    await saveVault(getSessionPassword());
+    await saveVaultWithSessionKey();
     return { success: true };
 };
