@@ -19,9 +19,11 @@ and repeated spaces are invisible in every client that renders the name.
 
 Deliberately NOT applied retroactively: the script-mixing rule. A name that
 would be refused on write today does not violate any constraint, and renaming
-somebody's display name is an operator decision, not a migration's. Such names
-are reported below so an operator can act on them, and any later write to that
-account has to satisfy the new rule.
+somebody's display name is an operator decision, not a migration's. This
+migration therefore neither rewrites nor reports such names — it normalizes
+form and refuses to proceed on a collision, nothing more. The rule applies from
+here on at every write, so an account holding one keeps it until its next
+rename.
 """
 import unicodedata
 from typing import Sequence, Union
