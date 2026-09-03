@@ -2,7 +2,7 @@
 
 import pytest
 
-from conftest import auth_header, do_login, TEST_ENCRYPTION_KEY
+from conftest import auth_header, do_login, synthetic_address, TEST_ENCRYPTION_KEY
 
 
 def _create_workflow(client, token, signer_addresses, recipient_addresses=None, threshold=None):
@@ -160,7 +160,7 @@ class TestSignWorkflow:
         assert wf["signers"][0]["has_signed"] is False
 
 
-RECIPIENT_ADDRESS = "recipient_" + "r" * 100
+RECIPIENT_ADDRESS = synthetic_address("multisig-recipient")
 
 
 @pytest.fixture()
@@ -210,6 +210,112 @@ class TestRecipientKeyRelease:
         wf = client.get(f"/multisig/workflow/{wf_id}", headers=auth_header(token1)).json()
         rec = next(r for r in wf["recipients"] if r["user_address"] == RECIPIENT_ADDRESS)
         assert rec["encrypted_key"] == "released_key"
+
+
+class TestRecipientAddressNormalization:
+    """L-2: the recipient path never lowercased its address keys.
+
+    The signer path normalized its key map at creation; the recipient path did
+    not, and the completing-signature lookup matched `user_address == r_addr`
+    on the raw value. A client sending a mixed-case address therefore matched
+    no row, `if recipient:` was false, and the loop passed in silence — leaving
+    a COMPLETED workflow whose recipient holds no key. That state is terminal:
+    the secret is released to nobody and a completed workflow can no longer be
+    signed or deleted.
+    """
+
+    def test_creation_accepts_a_mixed_case_recipient_key(self, client, user1, user2, recipient_user):
+        token1, u1 = user1
+        _, u2 = user2
+        resp = client.post("/multisig/workflow", json={
+            "name": "MixedCase",
+            "secret_data": {
+                "name": "S", "type": "standard",
+                "encrypted_data": "d", "encrypted_key": "k",
+            },
+            "signers": [u2["address"]],
+            "recipients": [RECIPIENT_ADDRESS],
+            "signer_keys": {u2["address"]: "signer_key"},
+            # The client spelled the address in a different case.
+            "recipient_keys": {RECIPIENT_ADDRESS.upper(): "creation_key"},
+            "threshold": 1,
+        }, headers=auth_header(token1))
+        assert resp.status_code == 200, resp.text
+
+        wf = client.get(f"/multisig/workflow/{resp.json()['id']}",
+                        headers=auth_header(token1)).json()
+        rec = next(r for r in wf["recipients"] if r["user_address"] == RECIPIENT_ADDRESS)
+        assert rec["encrypted_key"] == "creation_key"
+
+    def test_completing_signature_accepts_a_mixed_case_recipient_key(self, client, user1, user2, recipient_user):
+        token1, _ = user1
+        token2, u2 = user2
+        wf_id = _create_workflow(
+            client, token1, [u2["address"]], [RECIPIENT_ADDRESS]
+        ).json()["id"]
+
+        resp = client.post(f"/multisig/workflow/{wf_id}/sign", json={
+            "signature": "sig_final",
+            "recipient_keys": {RECIPIENT_ADDRESS.upper(): "released_key"},
+        }, headers=auth_header(token2))
+        assert resp.status_code == 200, resp.text
+
+        wf = client.get(f"/multisig/workflow/{wf_id}", headers=auth_header(token1)).json()
+        rec = next(r for r in wf["recipients"] if r["user_address"] == RECIPIENT_ADDRESS)
+        assert rec["encrypted_key"] == "released_key"
+
+    def test_refuses_to_complete_when_a_recipient_would_hold_no_key(self, client, user1, user2, recipient_user):
+        # Create WITHOUT a recipient key, then try to complete without one.
+        token1, _ = user1
+        token2, u2 = user2
+        created = client.post("/multisig/workflow", json={
+            "name": "NoRecipientKey",
+            "secret_data": {
+                "name": "S", "type": "standard",
+                "encrypted_data": "d", "encrypted_key": "k",
+            },
+            "signers": [u2["address"]],
+            "recipients": [RECIPIENT_ADDRESS],
+            "signer_keys": {u2["address"]: "signer_key"},
+            "recipient_keys": {},
+            "threshold": 1,
+        }, headers=auth_header(token1))
+        assert created.status_code == 200, created.text
+        wf_id = created.json()["id"]
+
+        resp = client.post(f"/multisig/workflow/{wf_id}/sign", json={
+            "signature": "sig_final",
+        }, headers=auth_header(token2))
+        assert resp.status_code == 400, resp.text
+        assert "no encrypted key for recipient" in resp.json()["detail"].lower()
+
+        # Refusing leaves the workflow signable. Completing would have left it
+        # permanently stuck, which is the whole point of failing here.
+        wf = client.get(f"/multisig/workflow/{wf_id}", headers=auth_header(token1)).json()
+        assert wf["status"] == "pending"
+        assert all(not s["has_signed"] for s in wf["signers"])
+
+        # Supplying the key completes it.
+        ok = client.post(f"/multisig/workflow/{wf_id}/sign", json={
+            "signature": "sig_final",
+            "recipient_keys": {RECIPIENT_ADDRESS: "late_key"},
+        }, headers=auth_header(token2))
+        assert ok.status_code == 200, ok.text
+        assert ok.json()["status"] == "completed"
+
+    def test_refuses_keys_for_someone_who_is_not_a_recipient(self, client, user1, user2, recipient_user):
+        token1, u1 = user1
+        token2, u2 = user2
+        wf_id = _create_workflow(
+            client, token1, [u2["address"]], [RECIPIENT_ADDRESS]
+        ).json()["id"]
+
+        resp = client.post(f"/multisig/workflow/{wf_id}/sign", json={
+            "signature": "sig_final",
+            "recipient_keys": {u1["address"]: "not_a_recipient"},
+        }, headers=auth_header(token2))
+        assert resp.status_code == 400, resp.text
+        assert "not recipients" in resp.json()["detail"]
 
 
 class TestThreshold:

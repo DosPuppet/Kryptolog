@@ -32,20 +32,65 @@ describe('golden constants (wire/storage format contract)', () => {
         });
     });
 
-    it('message signing body is byte-exact', () => {
-        expect(core.messageSigningBody({ from: 'A', conv: 'B', sid: 'S', ct: 'C' }))
-            .toBe('Kryptolog Signed Message v1\ncontext=message\nfrom=A\nconv=B\nsid=S\nct=C');
+    // Golden vector regenerated deliberately for v1.4.0 (audit M-8): the body
+    // gained `gid` and `keysh`. `keysh` here is sha256("null") — the digest of
+    // an absent key envelope — which is also what `echo -n null | sha256sum`
+    // gives, so this vector is checkable by hand.
+    const NULL_KEYS_DIGEST = '74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b';
+
+    it('message signing body is byte-exact', async () => {
+        expect(await core.messageSigningBody({ from: 'A', conv: 'B', sid: 'S', ct: 'C' }))
+            .toBe('Kryptolog Signed Message v1\ncontext=message\n' +
+                `from=A\nconv=B\ngid=\nsid=S\nkeysh=${NULL_KEYS_DIGEST}\nct=C`);
+        expect(NULL_KEYS_DIGEST).toBe(createHash('sha256').update('null').digest('hex'));
     });
 
-    it('message signing body binds the ciphertext object canonically (not "[object Object]")', () => {
+    it('message signing body binds the ciphertext object canonically (not "[object Object]")', async () => {
         // Production passes the AES-GCM envelope object, not a string. The signed
         // bytes must commit to the actual iv+content so a same-session ciphertext
         // cannot be swapped under a valid signature.
-        expect(core.messageSigningBody({ from: 'A', conv: 'B', sid: 'S', ct: { iv: '00', content: 'ff' } }))
-            .toBe('Kryptolog Signed Message v1\ncontext=message\nfrom=A\nconv=B\nsid=S\nct=00.ff');
+        expect(await core.messageSigningBody({ from: 'A', conv: 'B', sid: 'S', ct: { iv: '00', content: 'ff' } }))
+            .toBe('Kryptolog Signed Message v1\ncontext=message\n' +
+                `from=A\nconv=B\ngid=\nsid=S\nkeysh=${NULL_KEYS_DIGEST}\nct=00.ff`);
         // Different ciphertext => different signed bytes.
-        expect(core.messageSigningBody({ from: 'A', conv: 'B', sid: 'S', ct: { iv: '00', content: 'ee' } }))
-            .not.toBe(core.messageSigningBody({ from: 'A', conv: 'B', sid: 'S', ct: { iv: '00', content: 'ff' } }));
+        expect(await core.messageSigningBody({ from: 'A', conv: 'B', sid: 'S', ct: { iv: '00', content: 'ee' } }))
+            .not.toBe(await core.messageSigningBody({ from: 'A', conv: 'B', sid: 'S', ct: { iv: '00', content: 'ff' } }));
+    });
+
+    it('message signing body binds the key envelope and the group id (M-8)', async () => {
+        const keys = { alice: { kem: 'aa', iv: 'bb', encKey: 'cc' }, bob: { kem: 'dd', iv: 'ee', encKey: 'ff' } };
+        const base = { from: 'A', conv: 'B', gid: 'B', sid: 'S', ct: 'C' };
+        const signed = await core.messageSigningBody({ ...base, keys });
+
+        // Dropping a member's wrapped key changes the signed bytes — the relay's
+        // targeted-exclusion attack no longer survives verification.
+        const dropped = { alice: keys.alice };
+        expect(await core.messageSigningBody({ ...base, keys: dropped })).not.toBe(signed);
+
+        // Substituting one entry does too.
+        const swapped = { ...keys, bob: { kem: '00', iv: '11', encKey: '22' } };
+        expect(await core.messageSigningBody({ ...base, keys: swapped })).not.toBe(signed);
+
+        // Re-homing under another gid does too.
+        expect(await core.messageSigningBody({ ...base, gid: 'other', keys })).not.toBe(signed);
+
+        // Key INSERTION ORDER does not: sender and verifier must agree whatever
+        // order the payload happened to serialize in.
+        const reordered = { bob: keys.bob, alice: keys.alice };
+        expect(await core.messageSigningBody({ ...base, keys: reordered })).toBe(signed);
+
+        // An absent envelope and an explicit null are the same statement.
+        expect(await core.messageSigningBody({ ...base, keys: null }))
+            .toBe(await core.messageSigningBody(base));
+    });
+
+    it('canonicalJson sorts keys recursively and is insertion-order independent', () => {
+        expect(core.canonicalJson({ b: '2', a: { z: 1, y: 'x' } })).toBe('{"a":{"y":"x","z":1},"b":"2"}');
+        expect(core.canonicalJson({ a: { y: 'x', z: 1 }, b: '2' })).toBe('{"a":{"y":"x","z":1},"b":"2"}');
+        expect(core.canonicalJson(null)).toBe('null');
+        expect(core.canonicalJson(undefined)).toBe('null');
+        expect(core.canonicalJson({ a: undefined })).toBe('{"a":null}');
+        expect(core.canonicalJson(['b', 'a'])).toBe('["b","a"]'); // arrays keep order
     });
 
     it('multisig approval message matches the server format', () => {
@@ -63,6 +108,16 @@ describe('golden constants (wire/storage format contract)', () => {
         const bytes = new Uint8Array([0, 1, 254, 255]);
         expect(core.toHex(bytes)).toBe('0001feff');
         expect(Array.from(core.fromHex('0001feff'))).toEqual([0, 1, 254, 255]);
+        expect(Array.from(core.fromHex('0001FEFF'))).toEqual([0, 1, 254, 255]);
+    });
+
+    it('fromHex rejects malformed input instead of decoding it to zeros (L-9)', () => {
+        // The failure this replaces: 'zz' -> parseInt NaN -> stored as 0, so a
+        // corrupted public key became a VALID key of zeros. A decoder that
+        // answers "valid and different" is worse than one that answers "no".
+        for (const bad of ['zz', 'nothex', '0001fe f', 'abc', '', '0x0102', null, undefined, 1234]) {
+            expect(() => core.fromHex(bad)).toThrow(/hex/i);
+        }
     });
 });
 
@@ -101,12 +156,33 @@ describe('randomized envelope round-trips', () => {
         expect(await core.decryptSymmetric(env, key)).toBe('plaintext');
     });
 
-    it('binary chunk: encrypt -> decrypt', async () => {
+    it('binary chunk: encrypt -> decrypt under the same AAD', async () => {
         const key = await core.generateSymmetricKey();
         const chunk = new Uint8Array([5, 6, 7, 8, 9]);
-        const { iv, ciphertext } = await core.encryptChunk(chunk, key);
-        const out = await core.decryptChunk(iv, ciphertext, key);
+        const aad = core.chunkAad(42, 3);
+        const { iv, ciphertext } = await core.encryptChunk(chunk, key, aad);
+        const out = await core.decryptChunk(iv, ciphertext, key, aad);
         expect(Array.from(out)).toEqual([5, 6, 7, 8, 9]);
+    });
+
+    it('a chunk served under the wrong index fails its tag (M-2)', async () => {
+        // Every chunk of a secret shares one fileKey, so without the AAD a
+        // swapped chunk decrypted cleanly and corrupted the reassembled file
+        // with no error anywhere.
+        const key = await core.generateSymmetricKey();
+        const chunk = new Uint8Array([1, 2, 3]);
+        const { iv, ciphertext } = await core.encryptChunk(chunk, key, core.chunkAad(42, 3));
+
+        await expect(core.decryptChunk(iv, ciphertext, key, core.chunkAad(42, 7))).rejects.toThrow();
+        // ...and under a different secret, so chunks can't be moved between files.
+        await expect(core.decryptChunk(iv, ciphertext, key, core.chunkAad(99, 3))).rejects.toThrow();
+    });
+
+    it('chunk AAD is byte-exact and required (no silent no-AAD fallback)', async () => {
+        expect(core.chunkAad(42, 3)).toBe('Kryptolog/chunk/v1\nsecret=42\nindex=3');
+        const key = await core.generateSymmetricKey();
+        await expect(core.encryptChunk(new Uint8Array([1]), key)).rejects.toThrow(/aad is required/);
+        await expect(core.decryptChunk('00', '00', key)).rejects.toThrow(/aad is required/);
     });
 
     it('vault: password encrypt -> decrypt (PBKDF2 600k / SHA-512)', async () => {
@@ -116,6 +192,42 @@ describe('randomized envelope round-trips', () => {
         expect(vault).toHaveProperty('data');
         expect(await core.decryptVault(vault, 'hunter2')).toEqual({ a: 1, b: 'two' });
         await expect(core.decryptVault(vault, 'wrong')).rejects.toThrow();
+    });
+
+    // The vault KDF is pinned as a golden vector because deriveKey() is now
+    // COMPOSED from deriveVaultKeyBits() + importVaultKey() (v1.5.0, audit M-4).
+    // That refactor must not have moved the key by a single byte — every vault
+    // already on disk was written under the old one-shot deriveKey.
+    it('vault KDF output is byte-exact (PBKDF2-SHA512, 600k, 256 bits)', async () => {
+        const salt = core.fromHex('000102030405060708090a0b0c0d0e0f');
+        const bits = await core.deriveVaultKeyBits('correct horse battery staple', salt);
+        expect(core.toHex(bits))
+            .toBe('1cf30a518878f44aecb75c0e0d0d69a02ac5f9181a53b5292092e10a3c0cbb41');
+        expect(bits).toBeInstanceOf(Uint8Array);
+        expect(bits.length).toBe(32);
+    });
+
+    it('the bytes path and deriveKey produce the same key (either can open the vault)', async () => {
+        // Resuming a session from cached key BYTES has to open a vault that was
+        // sealed by the password path, and vice versa — otherwise a worker
+        // restart would look exactly like a wrong password.
+        const salt = crypto.getRandomValues(new Uint8Array(16));
+        const fromPassword = await core.deriveKey('hunter2', salt);
+        const fromBytes = await core.importVaultKey(await core.deriveVaultKeyBits('hunter2', salt));
+
+        const sealed = await core.encryptVaultWithKey({ a: 1 }, fromPassword, salt);
+        expect(await core.decryptVaultWithKey(sealed, fromBytes)).toEqual({ a: 1 });
+
+        const resealed = await core.encryptVaultWithKey({ b: 2 }, fromBytes, salt);
+        expect(await core.decryptVaultWithKey(resealed, fromPassword)).toEqual({ b: 2 });
+    });
+
+    it('a different password or salt yields a different vault key', async () => {
+        const salt = core.fromHex('000102030405060708090a0b0c0d0e0f');
+        const other = core.fromHex('0f0e0d0c0b0a09080706050403020100');
+        const base = core.toHex(await core.deriveVaultKeyBits('pw', salt));
+        expect(core.toHex(await core.deriveVaultKeyBits('pw2', salt))).not.toBe(base);
+        expect(core.toHex(await core.deriveVaultKeyBits('pw', other))).not.toBe(base);
     });
 
     it('vault: pre-derived key encrypt -> decrypt', async () => {
@@ -222,6 +334,6 @@ describe('encryption-key attestation (audit M-1, v1.3.0)', () => {
 
 describe('single-source / version guard', () => {
     it('exports a version both app builds can assert against', () => {
-        expect(core.CRYPTO_CORE_VERSION).toBe('1.3.0');
+        expect(core.CRYPTO_CORE_VERSION).toBe('1.6.0');
     });
 });

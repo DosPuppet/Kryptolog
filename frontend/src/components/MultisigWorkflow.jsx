@@ -18,7 +18,7 @@ export default function MultisigWorkflow({ workflow, onClose, onUpdate, onDelete
     const [isDeleting, setIsDeleting] = useState(false);
     const [decryptedContent, setDecryptedContent] = useState(null);
     const [rawDecryptedContent, setRawDecryptedContent] = useState(null); // The actual string signers signed
-    const [verificationStatus, setVerificationStatus] = useState(null); // 'verified', 'failed', 'unsigned'
+    const [verificationStatus, setVerificationStatus] = useState(null); // 'verified' | 'failed' | 'mismatch' | 'unsigned'
     const [creatorSignature, setCreatorSignature] = useState(null);
     const [creatorSignedContent, setCreatorSignedContent] = useState(null);
     const [error, setError] = useState('');
@@ -57,8 +57,16 @@ export default function MultisigWorkflow({ workflow, onClose, onUpdate, onDelete
         setTimeout(resetProgress, 500);
     };
 
-    const handleDownloadProof = () =>
-        downloadMultisigProof({ workflow, creatorSignature, creatorSignedContent, rawDecryptedContent });
+    const handleDownloadProof = async () => {
+        try {
+            await downloadMultisigProof({
+                workflow, creatorSignature, creatorSignedContent, rawDecryptedContent,
+                verificationStatus,
+            });
+        } catch (e) {
+            setError(e.message);
+        }
+    };
 
     const fetchAndDecrypt = async () => {
         setError('');

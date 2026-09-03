@@ -13,6 +13,11 @@ import { messageSigningBody, verifySignaturePQC } from '../../utils/crypto';
 // viewer both belong to) while it still showed as "verified". For groups we also
 // reject outright when the payload's self-declared gid disagrees with the
 // channel the message was actually delivered under.
+//
+// Since v1.4.0 the signed body also covers the key envelope and the declared
+// gid (audit M-8), so a relay that drops or substitutes one member's wrapped
+// key entry — previously invisible, since the signature only covered `ct` —
+// now fails verification for every recipient.
 export const verifyMessageAuthenticity = async (msg, payload, mode) => {
     if (!payload || !payload.sig) return null;
     try {
@@ -24,7 +29,14 @@ export const verifyMessageAuthenticity = async (msg, payload, mode) => {
         } else {
             conv = (msg.recipient_address || '').toLowerCase();
         }
-        const body = messageSigningBody({ from, conv, sid: payload.sid, ct: payload.ct });
+        const body = await messageSigningBody({
+            from,
+            conv,
+            gid: payload.gid || '',
+            sid: payload.sid,
+            keys: payload.keys ?? null,
+            ct: payload.ct,
+        });
         return await verifySignaturePQC(body, payload.sig, msg.sender_address);
     } catch {
         return false;

@@ -2,7 +2,7 @@
 
 from conftest import (
     TEST_USER_ADDRESS, TEST_ENCRYPTION_KEY,
-    get_nonce, do_login, auth_header,
+    get_nonce, do_login, auth_header, synthetic_address,
 )
 
 
@@ -19,9 +19,18 @@ class TestNonce:
         assert len(nonce2) == 32
 
     def test_get_nonce_normalizes_to_lowercase(self, client):
-        addr = "PQC_UPPER_" + "A" * 100
+        # Uppercase hex is still a well-formed address, so it passes validation
+        # (audit L-5) and is stored lowercased like every other address.
+        addr = synthetic_address("upper-case").upper()
         nonce = get_nonce(client, addr)
         assert len(nonce) == 32
+
+    def test_get_nonce_refuses_an_address_that_is_not_a_public_key(self, client):
+        # Unauthenticated, so it used to write a row for any string it was
+        # handed (audit L-5). Only an ML-DSA-44 public key can ever complete a
+        # login, so nothing else has a reason to reserve a nonce.
+        for bad in ["not-an-address", "", "zz" * 1312, synthetic_address("short")[:-2]]:
+            assert client.get(f"/auth/nonce/{bad}").status_code in (400, 404), bad
 
 
 class TestLogin:
@@ -115,7 +124,7 @@ class TestRegistrationUsernameCollision:
     would let a second identity register "Alice" against an existing "alice".
     """
 
-    OTHER_ADDRESS = "pqc_second_identity_" + "c" * 100
+    OTHER_ADDRESS = synthetic_address("second-identity")
 
     def test_case_variant_of_taken_username_is_rejected(self, client):
         do_login(client, TEST_USER_ADDRESS, TEST_ENCRYPTION_KEY, "alice")

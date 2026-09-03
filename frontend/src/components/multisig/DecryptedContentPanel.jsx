@@ -28,6 +28,15 @@ const DecryptedContentPanel = ({ workflow, decryptedContent, verificationStatus,
                         <AlertTriangle className="w-3 h-3" /> Signature Invalid
                     </div>
                 )}
+                {/* Audit L-3: the signature is sound but was made by a key that
+                    is not this workflow's owner, so the document is authentic
+                    to SOMEONE — just not to who this panel would otherwise
+                    name. Distinct wording from "invalid" on purpose. */}
+                {verificationStatus === 'mismatch' && (
+                    <div className="flex items-center gap-1 text-amber-700 text-xs px-2 py-1 bg-amber-100 rounded-full">
+                        <AlertTriangle className="w-3 h-3" /> Signed by a different key than the owner
+                    </div>
+                )}
             </div>
 
             {isMultiFile ? (

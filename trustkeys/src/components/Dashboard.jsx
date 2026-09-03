@@ -13,6 +13,22 @@ const Dashboard = () => {
   const [currentTabOrigin, setCurrentTabOrigin] = useState(null);
   const [authStatus, setAuthStatus] = useState(null); // null, 'authorized', 'unauthorized'
 
+  // Declared above the mount effect that calls them: a `const` arrow function is
+  // in its temporal dead zone until its own line, so declaring these below the
+  // effect leaves the effect reading a binding that is not initialized yet
+  // (react-hooks/immutability).
+  const fetchAccounts = () => {
+    chrome.runtime.sendMessage({ type: 'GET_ACCOUNTS' }, (response) => {
+      if (response && response.success) setAccounts(response.accounts);
+    });
+  };
+
+  const fetchActiveAccount = () => {
+    chrome.runtime.sendMessage({ type: 'GET_ACTIVE_ACCOUNT' }, (response) => {
+      if (response && response.success) setActiveAccount(response.account);
+    });
+  };
+
   useEffect(() => {
     fetchAccounts();
     fetchActiveAccount();
@@ -34,18 +50,6 @@ const Dashboard = () => {
       }
     });
   }, []);
-
-  const fetchAccounts = () => {
-    chrome.runtime.sendMessage({ type: 'GET_ACCOUNTS' }, (response) => {
-      if (response && response.success) setAccounts(response.accounts);
-    });
-  };
-
-  const fetchActiveAccount = () => {
-    chrome.runtime.sendMessage({ type: 'GET_ACTIVE_ACCOUNT' }, (response) => {
-      if (response && response.success) setActiveAccount(response.account);
-    });
-  };
 
   const createAccount = () => {
     if (!newAccountName) return;

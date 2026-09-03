@@ -9,6 +9,7 @@ client signature); JWT issuance and verification run for real against an
 ephemeral server key.
 """
 
+import hashlib
 import sys, os
 import pytest
 from unittest.mock import patch
@@ -21,9 +22,10 @@ TEST_DATABASE_URL = os.getenv(
     "postgresql+psycopg://kryptolog:kryptolog@localhost:5432/kryptolog_test",
 )
 
-# Must be set before importing `database`/`main`: main.py runs an Alembic
-# upgrade at import time against DATABASE_URL, which must hit the test DB —
-# never the dev database.
+# Must be set before importing `database`/`main`: `database` builds its engine
+# from DATABASE_URL at import time, and it must hit the test DB, never the dev
+# one. (main.py no longer migrates on import — audit M-3 — so this is now only
+# about which engine gets constructed.)
 os.environ["DATABASE_URL"] = TEST_DATABASE_URL
 
 # Fake VAPID keys for testing
@@ -57,11 +59,28 @@ def override_get_db():
 app.dependency_overrides[get_db] = override_get_db
 
 
+from security.crypto_validation import ML_DSA_44_PUBLIC_KEY_HEX_LEN
+
+
 # ---------- Constants ----------
 
-TEST_USER_ADDRESS = "pqc_test_user_" + "a" * 100
-TEST_USER_ADDRESS_2 = "pqc_test_user_" + "b" * 100
-TEST_USER_ADDRESS_3 = "pqc_test_user_" + "d" * 100
+def synthetic_address(tag: str) -> str:
+    """A structurally valid ML-DSA-44 public key (= an address) for tests.
+
+    Deterministic per tag, and the right shape: 1312 bytes hex-encoded (2624
+    chars). These used to be readable strings like "pqc_test_user_aaa...",
+    which /auth/nonce now refuses — the address IS an ML-DSA public key, so an
+    unauthenticated endpoint has no reason to write a row for anything that
+    isn't one (audit L-5). Not real keys: signature verification is patched out
+    in these tests, and the server can only check the format anyway.
+    """
+    digest = hashlib.sha256(tag.encode()).hexdigest()  # 64 chars
+    return (digest * (ML_DSA_44_PUBLIC_KEY_HEX_LEN // len(digest) + 1))[:ML_DSA_44_PUBLIC_KEY_HEX_LEN]
+
+
+TEST_USER_ADDRESS = synthetic_address("user-1")
+TEST_USER_ADDRESS_2 = synthetic_address("user-2")
+TEST_USER_ADDRESS_3 = synthetic_address("user-3")
 # A structurally valid ML-KEM-768 public key: 1184 bytes, hex-encoded (2368
 # chars). Not a real key — ML-KEM has no cheap validity predicate, so the
 # server can only check the format — but it must *be* the right format, since
