@@ -86,7 +86,7 @@ export const registerOriginScripts = async (origin) => {
     try {
         const existing = await chrome.scripting.getRegisteredContentScripts({ ids: [mainId, isolatedId] });
         if (existing.length >= 2) return; // Already registered
-    } catch (e) {
+    } catch {
         // getRegisteredContentScripts may throw if IDs don't exist yet — that's fine
     }
 
@@ -123,7 +123,7 @@ export const unregisterOriginScripts = async (origin) => {
 
     try {
         await chrome.scripting.unregisterContentScripts({ ids });
-    } catch (e) {
+    } catch {
         // May not exist — ignore
     }
 };
@@ -202,7 +202,7 @@ export const handleAddTrustedSite = async (origin, tabId) => {
     await registerOriginScripts(origin);
 
     if (tabId) {
-        try { await chrome.tabs.reload(tabId); } catch (e) { /* tab may be gone */ }
+        try { await chrome.tabs.reload(tabId); } catch { /* tab may be gone */ }
     }
 
     return { success: true };
@@ -222,7 +222,7 @@ export const handleRemoveTrustedSite = async (origin) => {
     await unregisterOriginScripts(origin);
     // Drop the host permission too (doesn't require a user gesture), so removing
     // a site fully revokes the extension's standing access to it.
-    try { await chrome.permissions.remove({ origins: [`${origin}/*`] }); } catch (e) { /* best effort */ }
+    try { await chrome.permissions.remove({ origins: [`${origin}/*`] }); } catch { /* best effort */ }
 
     return { success: true };
 };

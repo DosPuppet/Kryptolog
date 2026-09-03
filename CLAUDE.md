@@ -39,7 +39,7 @@ cd frontend && npx eslint .        # blocking gate — lint is clean, keep it cl
 # extension
 cd trustkeys && npm test           # vitest, node env — chrome.* is mocked (test/chrome-mock.js)
 cd trustkeys && npm run build
-cd trustkeys && npm run lint       # advisory: 23 known errors, not yet a gate
+cd trustkeys && npm run lint       # blocking gate — lint is clean, keep it clean
 
 # full stack (PM2 + docker-compose Postgres/Redis)
 ./start_all.sh
@@ -132,10 +132,6 @@ carries the commits.
   database on another port and point `TEST_DATABASE_URL` at it.
 - **`test_ws_fanout` needs `fakeredis`** (`requirements-dev.txt`). Without it five tests
   error out in a way unrelated to whatever you are changing.
-- **Extension lint is still advisory (23 errors).** 15 are case-block declarations in
-  `src/content/index.js`; the rest are unused catch bindings and two hook-ordering
-  issues. All pre-date the audit work. Clear them and the CI job can go blocking like
-  the frontend one.
 - **Extension tests are slow by design** (~15s): the vault KDF is 600k PBKDF2
   iterations and each `bootWithVault()` pays it. Use `boot()` where a test only needs
   the sender guard, which runs before any vault access.
