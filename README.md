@@ -335,7 +335,8 @@ formats both apps share.
 Schema changes are managed with Alembic. Migrations are an **explicit deployment
 step** — the backend does *not* run them on startup, and will serve whatever
 schema it finds. `start_all.sh` applies them before starting the app; if you run
-uvicorn yourself, run `alembic upgrade head` first.
+uvicorn yourself, or start PM2 directly with `pm2 start ecosystem.config.cjs`,
+run `alembic upgrade head` first.
 
 > The backend used to migrate at import time with a `create_all` + `stamp head`
 > fallback. A migration that failed halfway therefore left a partial schema
