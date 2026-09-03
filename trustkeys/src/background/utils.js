@@ -1,35 +1,69 @@
-import { encryptVaultWithKey, deriveKey } from '../utils/crypto.js';
-import { state, setSessionPassword } from './state.js';
+import { encryptVaultWithKey, deriveVaultKeyBits, importVaultKey } from '../utils/crypto.js';
+import { state } from './state.js';
+import { persistSession } from './session.js';
 
-export const saveVault = async (password) => {
-    if (!state.vault) return;
-
-    // Reuse the session's cached KDF key when saving under the session password,
-    // so the deliberately-slow 600k-iter PBKDF2 runs once per unlock — not on
-    // every account create/switch/delete. Only re-derive when there's no usable
-    // cache (e.g. initial setup, or a save under a different password), and
-    // cache the result when it matches the active session.
-    let key = state.derivedKey;
-    let salt = state.vaultSalt;
-    if (!key || !salt || password !== state.sessionPassword) {
-        salt = crypto.getRandomValues(new Uint8Array(16));
-        key = await deriveKey(password, salt);
-        if (password === state.sessionPassword) {
-            state.derivedKey = key;
-            state.vaultSalt = salt;
-        }
-    }
-
+const writeVault = async (key, salt) => {
     const encryptionResult = await encryptVaultWithKey(state.vault, key, salt);
     await chrome.storage.local.set({ vaultData: encryptionResult });
     state.hasPassword = true;
 };
 
+/**
+ * Save under a freshly derived key. Only for the two places that legitimately
+ * hold a password — initial setup and vault import — because it pays the
+ * deliberately-slow 600k-iteration PBKDF2 every time.
+ *
+ * Re-caches the result as the session key, so the in-memory key never goes stale
+ * against the salt just written to disk.
+ */
+export const saveVault = async (password) => {
+    if (!state.vault) return;
+    const salt = crypto.getRandomValues(new Uint8Array(16));
+    const keyBytes = await deriveVaultKeyBits(password, salt);
+    const key = await importVaultKey(keyBytes);
+
+    await writeVault(key, salt);
+
+    state.vaultKey = key;
+    state.vaultKeyBytes = keyBytes;
+    state.vaultSalt = salt;
+    await persistSession();
+};
+
+/**
+ * Save using the unlocked session's cached key — every other call site
+ * (account create/switch/delete, permission changes).
+ *
+ * This is what replaced `saveVault(getSessionPassword())` (audit M-4): those
+ * eight call sites were the whole reason the password had to be kept around at
+ * all. With the key cached instead, none of them needs it.
+ */
+export const saveVaultWithSessionKey = async () => {
+    if (!state.vault) return;
+    if (!state.vaultKey || !state.vaultSalt) {
+        throw new Error("Vault is locked");
+    }
+    await writeVault(state.vaultKey, state.vaultSalt);
+};
+
+/**
+ * Open the extension popup (not an approval — see approvals.js for those).
+ * Reuses the tracked window so a locked site calling CONNECT in a loop focuses
+ * one window instead of spawning an OS window per call (audit M-6).
+ */
 export const launchPopup = async (route, params = {}) => {
-    const queryString = new URLSearchParams({ route, ...params }).toString();
+    if (state.popupWindowId !== null) {
+        try {
+            await chrome.windows.update(state.popupWindowId, { focused: true });
+            return;
+        } catch {
+            state.popupWindowId = null;
+        }
+    }
+
+    const queryString = new URLSearchParams(route ? { route, ...params } : params).toString();
     const width = 360;
     const height = 600;
-
     let left, top;
 
     try {
@@ -45,22 +79,21 @@ export const launchPopup = async (route, params = {}) => {
         console.warn("Failed to calculate popup position", e);
     }
 
-    await chrome.windows.create({
-        url: `index.html?${queryString}`,
-        type: 'popup',
-        width,
-        height,
-        left,
-        top,
-        focused: true
-    });
-};
-
-export const updateActivity = () => {
-    if (!state.isLocked) {
-        chrome.storage.session.set({ lastActive: Date.now() }).catch(() => { });
+    try {
+        const win = await chrome.windows.create({
+            url: queryString ? `index.html?${queryString}` : 'index.html',
+            type: 'popup',
+            width,
+            height,
+            left,
+            top,
+            focused: true
+        });
+        state.popupWindowId = win?.id ?? null;
+    } catch (e) {
+        console.warn("Failed to open popup", e);
     }
-}
+};
 
 // --- Sender trust (audit M4) ---
 // Authorization decisions MUST use the origin Chrome attaches to the message

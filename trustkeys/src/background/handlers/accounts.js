@@ -1,6 +1,6 @@
 import { generateAccount, decryptVault, encryptVault, normalizeAccount } from '../../utils/crypto.js';
-import { state, getSessionPassword } from '../state.js';
-import { saveVault } from '../utils.js';
+import { state } from '../state.js';
+import { saveVault, saveVaultWithSessionKey } from '../utils.js';
 
 export const createAccount = async (name) => {
     if (state.isLocked) throw new Error("Locked");
@@ -9,7 +9,7 @@ export const createAccount = async (name) => {
     state.vault.accounts.push(account);
     if (!state.vault.activeAccountId) state.vault.activeAccountId = account.id;
 
-    await saveVault(getSessionPassword());
+    await saveVaultWithSessionKey();
     return { id: account.id, name: account.name };
 };
 
@@ -26,7 +26,7 @@ export const getAccounts = () => {
 export const setActiveAccount = async (id) => {
     if (state.isLocked) throw new Error("Locked");
     state.vault.activeAccountId = id;
-    await saveVault(getSessionPassword());
+    await saveVaultWithSessionKey();
 };
 
 export const getActiveAccount = (checkOrigin) => {
@@ -143,8 +143,11 @@ export const importVault = async (vaultObj, password, passphrase) => {
     state.hasPassword = true;
     state.isLocked = false;
 
-    // Save cleanly
-    await saveVault(password);
+    // Save cleanly. A password is present only when the caller supplied one for
+    // this import; otherwise re-seal under the unlocked session's key, which is
+    // what removed the need to keep the password around at all (audit M-4).
+    if (password) await saveVault(password);
+    else await saveVaultWithSessionKey();
 
     return true;
 };
@@ -167,6 +170,6 @@ export const deleteAccount = async (id) => {
         }
     }
 
-    await saveVault(getSessionPassword());
+    await saveVaultWithSessionKey();
     return true;
 };

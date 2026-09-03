@@ -1,6 +1,7 @@
 import { signMessage, encryptMessage, decryptMessage, verifySignature, generateSessionKey, wrapSessionKey, unwrapSessionKey, attestEncryptionKey, MESSAGE_SIGNING_PREFIX } from '../../utils/crypto.js';
 import { state } from '../state.js';
-import { launchPopup, isInternalSender, getSenderOrigin, isDevOrigin } from '../utils.js';
+import { isInternalSender, getSenderOrigin, isDevOrigin } from '../utils.js';
+import { requestApproval } from '../approvals.js';
 
 export const handleSignAsync = async (request, sender, sendResponse) => {
     if (state.isLocked) throw new Error("Locked");
@@ -22,20 +23,19 @@ export const handleSignAsync = async (request, sender, sendResponse) => {
         throw new Error("Site not connected");
     }
 
-    const reqId = Math.random().toString(36).substr(2, 9);
-    state.pendingRequests.set(reqId, {
-        resolve: async () => {
+    await requestApproval({
+        type: 'SIGN',
+        origin: checkOrigin,
+        data: { origin: checkOrigin, message: request.message },
+        route: 'sign',
+        onApprove: async () => {
             const account = state.vault.accounts.find(a => a.id === state.vault.activeAccountId);
             if (!account) return sendResponse({ success: false, error: "No active account" });
             const signature = await signMessage(request.message, account.mldsa.privateKey);
             sendResponse({ success: true, signature });
         },
-        reject: (err) => sendResponse({ success: false, error: err || "Rejected" }),
-        type: 'SIGN',
-        data: { origin: checkOrigin, message: request.message }
+        onReject: (err) => sendResponse({ success: false, error: err }),
     });
-
-    await launchPopup('sign', { requestId: reqId });
 };
 
 // Silent message signing (audit S1). Unlike handleSignAsync (which pops an
@@ -142,20 +142,19 @@ export const handleDecryptAsync = async (request, sender, sendResponse) => {
     const checkOrigin = getSenderOrigin(sender);
     if (!checkOrigin || !state.vault.permissions[checkOrigin]) throw new Error("Site not connected");
 
-    const reqId = Math.random().toString(36).substr(2, 9);
-    state.pendingRequests.set(reqId, {
-        resolve: async () => {
+    await requestApproval({
+        type: 'DECRYPT',
+        origin: checkOrigin,
+        data: { origin: checkOrigin },
+        route: 'decrypt',
+        onApprove: async () => {
             const account = state.vault.accounts.find(a => a.id === state.vault.activeAccountId);
             if (!account) return sendResponse({ success: false, error: "No active account" });
             const decrypted = await decryptMessage(request.data, account.mlkem.privateKey);
             sendResponse({ success: true, decrypted });
         },
-        reject: (err) => sendResponse({ success: false, error: err || "Rejected" }),
-        type: 'DECRYPT',
-        data: { origin: checkOrigin }
+        onReject: (err) => sendResponse({ success: false, error: err }),
     });
-
-    await launchPopup('decrypt', { requestId: reqId });
 };
 
 export const handleUnwrapSessionKeyAsync = async (request, sender, sendResponse) => {
@@ -163,9 +162,12 @@ export const handleUnwrapSessionKeyAsync = async (request, sender, sendResponse)
     const checkOrigin = getSenderOrigin(sender);
     if (!checkOrigin || !state.vault.permissions[checkOrigin]) throw new Error("Site not connected");
 
-    const reqId = Math.random().toString(36).substr(2, 9);
-    state.pendingRequests.set(reqId, {
-        resolve: async () => {
+    await requestApproval({
+        type: 'DECRYPT',
+        origin: checkOrigin,
+        data: { origin: checkOrigin },
+        route: 'decrypt',
+        onApprove: async () => {
             const account = state.vault.accounts.find(a => a.id === state.vault.activeAccountId);
             if (!account) return sendResponse({ success: false, error: "No active account" });
 
@@ -177,12 +179,8 @@ export const handleUnwrapSessionKeyAsync = async (request, sender, sendResponse)
                 sendResponse({ success: false, error: "Unwrap failed: " + e.message });
             }
         },
-        reject: (err) => sendResponse({ success: false, error: err || "Rejected" }),
-        type: 'DECRYPT',
-        data: { origin: checkOrigin }
+        onReject: (err) => sendResponse({ success: false, error: err }),
     });
-
-    await launchPopup('decrypt', { requestId: reqId });
 };
 
 // Batch decrypt of PQC envelopes ({kem, iv, content}) — ONE approval popup for
@@ -194,9 +192,12 @@ export const handleDecryptManyAsync = async (request, sender, sendResponse) => {
     const checkOrigin = getSenderOrigin(sender);
     if (!checkOrigin || !state.vault.permissions[checkOrigin]) throw new Error("Site not connected");
 
-    const reqId = Math.random().toString(36).substr(2, 9);
-    state.pendingRequests.set(reqId, {
-        resolve: async () => {
+    await requestApproval({
+        type: 'DECRYPT',
+        origin: checkOrigin,
+        data: { origin: checkOrigin, count: request.items?.length },
+        route: 'decrypt',
+        onApprove: async () => {
             const account = state.vault.accounts.find(a => a.id === state.vault.activeAccountId);
             if (!account) return sendResponse({ success: false, error: "No active account" });
 
@@ -208,7 +209,7 @@ export const handleDecryptManyAsync = async (request, sender, sendResponse) => {
                 const results = await Promise.all(items.map(async (blob) => {
                     try {
                         return await decryptMessage(blob, privKey);
-                    } catch (e) { return null; } // per-item failure -> null, not batch failure
+                    } catch { return null; } // per-item failure -> null, not batch failure
                 }));
                 sendResponse({ success: true, results });
             } catch (e) {
@@ -216,12 +217,8 @@ export const handleDecryptManyAsync = async (request, sender, sendResponse) => {
                 sendResponse({ success: false, error: "Batch decrypt failed: " + e.message });
             }
         },
-        reject: (err) => sendResponse({ success: false, error: err || "Rejected" }),
-        type: 'DECRYPT',
-        data: { origin: checkOrigin, count: request.items?.length }
+        onReject: (err) => sendResponse({ success: false, error: err }),
     });
-
-    await launchPopup('decrypt', { requestId: reqId });
 };
 
 // Batch Unwrap
@@ -230,9 +227,12 @@ export const handleUnwrapManySessionKeysAsync = async (request, sender, sendResp
     const checkOrigin = getSenderOrigin(sender);
     if (!checkOrigin || !state.vault.permissions[checkOrigin]) throw new Error("Site not connected");
 
-    const reqId = Math.random().toString(36).substr(2, 9);
-    state.pendingRequests.set(reqId, {
-        resolve: async () => {
+    await requestApproval({
+        type: 'DECRYPT',
+        origin: checkOrigin,
+        data: { origin: checkOrigin, count: request.wrappedKeys?.length },
+        route: 'decrypt',
+        onApprove: async () => {
             const account = state.vault.accounts.find(a => a.id === state.vault.activeAccountId);
             if (!account) return sendResponse({ success: false, error: "No active account" });
 
@@ -244,7 +244,7 @@ export const handleUnwrapManySessionKeysAsync = async (request, sender, sendResp
                 const results = await Promise.all(wrappedKeys.map(async (blob) => {
                     try {
                         return await unwrapSessionKey(blob, privKey);
-                    } catch (e) { return null; }
+                    } catch { return null; }
                 }));
                 sendResponse({ success: true, sessionKeys: results });
             } catch (e) {
@@ -252,10 +252,6 @@ export const handleUnwrapManySessionKeysAsync = async (request, sender, sendResp
                 sendResponse({ success: false, error: "Batch unwrap failed: " + e.message });
             }
         },
-        reject: (err) => sendResponse({ success: false, error: err || "Rejected" }),
-        type: 'DECRYPT',
-        data: { origin: checkOrigin, count: request.wrappedKeys?.length }
+        onReject: (err) => sendResponse({ success: false, error: err }),
     });
-
-    await launchPopup('decrypt', { requestId: reqId });
 };
