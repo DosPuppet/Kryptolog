@@ -36,8 +36,9 @@ cd frontend && npx vite build
 cd frontend && npx eslint .        # blocking gate — lint is clean, keep it clean
 
 # extension
+cd trustkeys && npm test           # vitest, node env — chrome.* is mocked (test/chrome-mock.js)
 cd trustkeys && npm run build
-cd trustkeys && npm run lint       # advisory: 26 known errors, not yet a gate
+cd trustkeys && npm run lint       # advisory: 23 known errors, not yet a gate
 
 # full stack (PM2 + docker-compose Postgres/Redis)
 ./start_all.sh
@@ -89,9 +90,9 @@ Detail for each package is in `roadmap/AUDIT-REMEDIATION.md`.
 | 5 | Move Alembic migrations off the import path | backend | done — `93f2aa9` |
 | 6 | Extend signed message body to cover the key envelope | crypto-core | done — `706c7a5` |
 | 7 | Rate limits on 16 unprotected endpoints | backend | done — `93f2aa9` |
-| 8 | Extension: auto-lock, sender gating, request bounds | trustkeys | todo |
+| 8 | Extension: auto-lock, sender gating, request bounds | trustkeys | done — `e77cf89` |
 | 9 | Username normalization, nginx WebSocket, point fixes | mixed | todo |
-| 10 | Extension test suite (new vitest harness) | trustkeys | todo |
+| 10 | Extension test suite (new vitest harness) | trustkeys | done — `e77cf89` |
 
 Suggested order: WP2/3/5/7 (backend, independent) → WP1 → WP4+WP6 (one commit, single
 wire-format boundary) → WP8+WP10 → WP9.
@@ -111,3 +112,10 @@ Record the commit SHA in the status column as each lands.
   database on another port and point `TEST_DATABASE_URL` at it.
 - **`test_ws_fanout` needs `fakeredis`** (`requirements-dev.txt`). Without it five tests
   error out in a way unrelated to whatever you are changing.
+- **Extension lint is still advisory (23 errors).** 15 are case-block declarations in
+  `src/content/index.js`; the rest are unused catch bindings and two hook-ordering
+  issues. All pre-date the audit work. Clear them and the CI job can go blocking like
+  the frontend one.
+- **Extension tests are slow by design** (~15s): the vault KDF is 600k PBKDF2
+  iterations and each `bootWithVault()` pays it. Use `boot()` where a test only needs
+  the sender guard, which runs before any vault access.
