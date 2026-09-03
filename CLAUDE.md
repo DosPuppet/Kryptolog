@@ -26,6 +26,7 @@ These mirror `.github/workflows/ci.yml` — if you change one, change it there t
 ```bash
 # backend — needs the docker-compose Postgres running
 cd backend && pytest
+cd backend && alembic check      # blocking drift gate: models vs migrations
 
 # crypto-core
 cd packages/crypto-core && npm test
@@ -91,7 +92,7 @@ Detail for each package is in `roadmap/AUDIT-REMEDIATION.md`.
 | 6 | Extend signed message body to cover the key envelope | crypto-core | done — `706c7a5` |
 | 7 | Rate limits on 16 unprotected endpoints | backend | done — `93f2aa9` |
 | 8 | Extension: auto-lock, sender gating, request bounds | trustkeys | done — `e77cf89` |
-| 9 | Username normalization, nginx WebSocket, point fixes | mixed | todo |
+| 9 | Username normalization, nginx WebSocket, point fixes | mixed | done — `a263995` |
 | 10 | Extension test suite (new vitest harness) | trustkeys | done — `e77cf89` |
 
 Suggested order: WP2/3/5/7 (backend, independent) → WP1 → WP4+WP6 (one commit, single
@@ -101,12 +102,6 @@ Record the commit SHA in the status column as each lands.
 
 ### Known issues, not yet scoped
 
-- **Schema drift on `users.username`.** `alembic check` reports a pending
-  `remove_index` / `add_constraint` pair: the model keeps `unique=True` on the column
-  while migration `d4e5f6a7b8c3` replaced that plain index with a functional `lower()`
-  one, so autogenerate keeps wanting to re-add it. Harmless today, but it means
-  `alembic check` cannot be used as a drift gate until it is resolved. Fold into WP9,
-  which touches username normalization anyway.
 - **Port 5432 may be held by a native PostgreSQL** that lacks the `kryptolog` role, in
   which case `docker compose up -d postgres` fails to bind. Workaround: run the test
   database on another port and point `TEST_DATABASE_URL` at it.
