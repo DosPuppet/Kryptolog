@@ -1,41 +1,58 @@
-import { state, getSessionPassword } from './state.js';
+import { state } from './state.js';
 import * as auth from './handlers/auth.js';
 import * as conn from './handlers/connection.js';
 import * as acct from './handlers/accounts.js';
 import * as crypto from './handlers/crypto.js';
-import { updateActivity, isInternalSender, getSenderOrigin } from './utils.js';
+import { isInternalSender, getSenderOrigin } from './utils.js';
+import { settleApproval, peekApproval, handleWindowClosed } from './approvals.js';
+import {
+    touchActivity, shouldIdleLock, hardenSessionStorage,
+    IDLE_ALARM, IDLE_CHECK_MINUTES,
+} from './session.js';
 
 const initializeStorage = async () => {
+    hardenSessionStorage();
     const { vaultData } = await chrome.storage.local.get('vaultData');
     state.hasPassword = !!vaultData;
 
-    try {
-        const session = await chrome.storage.session.get(['sessionPassword', 'lastActive']);
-        if (session.sessionPassword && session.lastActive) {
-            const ONE_HOUR = 60 * 60 * 1000;
-            if (Date.now() - session.lastActive < ONE_HOUR) {
-                const success = await auth.unlockWithSession(session.sessionPassword);
-                if (success) {
-                    await chrome.storage.session.set({ lastActive: Date.now() });
-                    await conn.syncDynamicScripts();
-                }
-            } else {
-                await chrome.storage.session.remove(['sessionPassword', 'lastActive']);
-            }
-        }
-    } catch (e) {
-        console.warn("Session restore failed", e);
+    // Resume from the cached vault KEY, never a stored password (audit M-4).
+    // readSession() applies the idle window and wipes an expired session, so an
+    // expired one can't be resumed here.
+    if (await auth.restoreSession()) {
+        await conn.syncDynamicScripts();
     }
 };
 // Initialize storage and capture promise
 let initPromise = initializeStorage();
+
+// Idle auto-lock (audit M-4). The old check ran ONLY inside initializeStorage,
+// i.e. only when the service worker happened to restart — while it stayed alive
+// nothing ever re-checked and the vault stayed unlocked indefinitely. An alarm
+// wakes a sleeping worker, so the timeout is now actually enforced.
+chrome.alarms.create(IDLE_ALARM, { periodInMinutes: IDLE_CHECK_MINUTES });
+chrome.alarms.onAlarm.addListener((alarm) => {
+    if (alarm.name !== IDLE_ALARM) return;
+    (async () => {
+        if (await shouldIdleLock()) await auth.lockWithSession();
+    })();
+});
+
+// Dismissing the approval window is a refusal: settle everything it was asking
+// about (audit M-6). Previously those promises never settled and their Map
+// entries were never removed.
+chrome.windows.onRemoved.addListener(handleWindowClosed);
 
 // Message Handler
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     (async () => {
         try {
             await initPromise; // Wait for initialization to complete
-            updateActivity();
+
+            // Only the extension's own pages count as USER activity (audit M-4).
+            // This used to run for EVERY message, so any connected page could
+            // hold the vault open forever by pinging GET_STATUS on a timer —
+            // no user present, and the idle timeout unreachable.
+            if (isInternalSender(sender)) touchActivity();
 
             switch (request.type) {
                 // --- Security ---
@@ -90,55 +107,72 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
                 }
 
                 // --- Approval Handling ---
+                //
+                // Every other internal handler carried a sender guard; these two
+                // — the ONLY pair that approves a signature or a decryption —
+                // had none (audit M-5). Not reachable today (the ISOLATED-world
+                // content script relays a fixed type list, and
+                // externally_connectable declares no ids), but a missing guard
+                // on the approval path is the worst place to rely on that.
+                //
+                // isInternalSender, not `sender.id === chrome.runtime.id`: a
+                // content script also carries the extension's id, so the id
+                // alone would treat any connected page as the popup.
                 case 'GET_PENDING_REQUEST': {
-                    const req = state.pendingRequests.get(request.requestId);
-                    if (!req) {
+                    if (!isInternalSender(sender)) throw new Error("Unauthorized: Internal use only");
+                    // No requestId => the next queued request. Lets the popup
+                    // walk the queue instead of stranding whatever arrived while
+                    // it was busy (audit M-6).
+                    const pending = peekApproval(request.requestId);
+                    if (!pending) {
                         sendResponse({ success: false, error: "Request not found" });
                     } else {
-                        sendResponse({ success: true, request: { type: req.type, data: req.data } });
+                        sendResponse({ success: true, request: pending });
                     }
                     break;
                 }
                 case 'RESOLVE_REQUEST': {
-                    const req = state.pendingRequests.get(request.requestId);
-                    if (!req) return sendResponse({ success: false });
-
-                    if (request.approved) {
-                        req.resolve();
-                    } else {
-                        req.reject();
-                    }
-                    state.pendingRequests.delete(request.requestId);
-                    sendResponse({ success: true });
+                    if (!isInternalSender(sender)) throw new Error("Unauthorized: Internal use only");
+                    const { ok, next } = settleApproval(request.requestId, request.approved);
+                    sendResponse({ success: ok, next });
                     break;
                 }
 
                 // --- Trusted Sites ---
+                //
+                // Everything below is popup-only, and every one of these guards
+                // used to read `sender.id !== chrome.runtime.id` — which a
+                // CONTENT SCRIPT passes, because it also runs under the
+                // extension's id. Same defect as audit M-5, twelve more times,
+                // and it covered DELETE_ACCOUNT and EXPORT_KEYS. What kept it
+                // unreachable was the ISOLATED-world relay's fixed type list,
+                // not the check itself. isInternalSender additionally requires
+                // the extension-page URL, which only the popup/dashboard has.
                 case 'GET_TRUSTED_SITES': {
-                    if (sender.id !== chrome.runtime.id) throw new Error("Unauthorized");
+                    if (!isInternalSender(sender)) throw new Error("Unauthorized");
                     sendResponse({ success: true, sites: conn.getTrustedSites() });
                     break;
                 }
                 case 'ADD_TRUSTED_SITE': {
-                    if (sender.id !== chrome.runtime.id) throw new Error("Unauthorized");
+                    if (!isInternalSender(sender)) throw new Error("Unauthorized");
                     const addRes = await conn.handleAddTrustedSite(request.origin, request.tabId);
                     sendResponse(addRes);
                     break;
                 }
                 case 'REMOVE_TRUSTED_SITE': {
-                    if (sender.id !== chrome.runtime.id) throw new Error("Unauthorized");
+                    if (!isInternalSender(sender)) throw new Error("Unauthorized");
                     const removeRes = await conn.handleRemoveTrustedSite(request.origin);
                     sendResponse(removeRes);
                     break;
                 }
                 case 'SET_SITE_AUTOSIGN': {
-                    if (sender.id !== chrome.runtime.id) throw new Error("Unauthorized");
+                    if (!isInternalSender(sender)) throw new Error("Unauthorized");
                     const autoRes = await conn.handleSetSiteAutoSign(request.origin, request.enabled);
                     sendResponse(autoRes);
                     break;
                 }
                 case 'AUTHORIZE_CURRENT_TAB': {
-                    if (sender.id !== chrome.runtime.id) throw new Error("Unauthorized");
+                    if (!isInternalSender(sender)) throw new Error("Unauthorized");
                     try {
                         const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
                         if (!tab?.url) {
@@ -156,19 +190,19 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
 
                 // --- Accounts ---
                 case 'CREATE_ACCOUNT': {
-                    if (sender.id !== chrome.runtime.id) throw new Error("Unauthorized: Internal use only");
+                    if (!isInternalSender(sender)) throw new Error("Unauthorized: Internal use only");
                     const account = await acct.createAccount(request.name);
                     sendResponse({ success: true, account });
                     break;
                 }
                 case 'GET_ACCOUNTS': {
-                    if (sender.id !== chrome.runtime.id) throw new Error("Unauthorized: Internal use only");
+                    if (!isInternalSender(sender)) throw new Error("Unauthorized: Internal use only");
                     const accounts = acct.getAccounts();
                     sendResponse({ success: true, accounts });
                     break;
                 }
                 case 'SET_ACTIVE_ACCOUNT': {
-                    if (sender.id !== chrome.runtime.id) throw new Error("Unauthorized: Internal use only");
+                    if (!isInternalSender(sender)) throw new Error("Unauthorized: Internal use only");
                     await acct.setActiveAccount(request.id);
                     sendResponse({ success: true });
                     break;
@@ -193,7 +227,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
                     break;
                 }
                 case 'DELETE_ACCOUNT': {
-                    if (sender.id !== chrome.runtime.id) throw new Error("Unauthorized: Internal use only");
+                    if (!isInternalSender(sender)) throw new Error("Unauthorized: Internal use only");
                     try {
                         await acct.deleteAccount(request.id);
                         sendResponse({ success: true });
@@ -203,29 +237,34 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
                     break;
                 }
                 case 'EXPORT_KEYS': {
-                    if (sender.id !== chrome.runtime.id) throw new Error("Unauthorized: Internal use only");
+                    if (!isInternalSender(sender)) throw new Error("Unauthorized: Internal use only");
                     // Export the ACTIVE account only (see accounts.requireActiveAccount).
                     const active = await acct.exportActiveAccount(request.password);
                     sendResponse({ success: true, accounts: [active] });
                     break;
                 }
                 case 'EXPORT_KEYS_ENCRYPTED': {
-                    if (sender.id !== chrome.runtime.id) throw new Error("Unauthorized: Internal use only");
+                    if (!isInternalSender(sender)) throw new Error("Unauthorized: Internal use only");
                     const blob = await acct.exportEncryptedVault(request.password, request.passphrase);
                     sendResponse({ success: true, blob });
                     break;
                 }
                 case 'IMPORT_KEYS': {
-                    if (sender.id !== chrome.runtime.id) throw new Error("Unauthorized: Internal use only");
+                    if (!isInternalSender(sender)) throw new Error("Unauthorized: Internal use only");
 
                     const vaultObj = request.accounts ? { accounts: request.accounts } : request.data;
-                    const password = request.password || getSessionPassword();
+                    // No session password to fall back to any more (audit M-4):
+                    // an import with no explicit password re-seals under the
+                    // unlocked session's key. See accounts.importVault.
+                    const password = request.password;
 
                     if (!vaultObj) {
                         return sendResponse({ success: false, error: "No vault data received" });
                     }
 
-                    if (!password) return sendResponse({ success: false, error: "Session locked" });
+                    if (!password && state.isLocked) {
+                        return sendResponse({ success: false, error: "Session locked" });
+                    }
 
                     try {
                         const existingCount = acct.getAccounts().length;
@@ -299,6 +338,11 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
                     await crypto.handleDecryptManyAsync(request, sender, sendResponse);
                     break;
                 }
+                default:
+                    // Always answer (audit M-6). An unknown type used to fall out
+                    // of the switch without calling sendResponse, leaving the
+                    // caller's promise pending until the channel was torn down.
+                    sendResponse({ success: false, error: `Unknown message type: ${request.type}` });
             }
         } catch (error) {
             console.error('Background error:', error);

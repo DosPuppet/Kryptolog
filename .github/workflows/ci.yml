@@ -77,7 +77,7 @@ jobs:
         working-directory: frontend
 
   extension:
-    name: trustkeys extension (build)
+    name: trustkeys extension (tests + build)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
@@ -93,14 +93,18 @@ jobs:
       - name: Install extension deps
         run: npm ci
         working-directory: trustkeys
+      - name: Unit tests (vitest)
+        run: npx vitest run
+        working-directory: trustkeys
       - name: Build
         run: npx vite build
         working-directory: trustkeys
-      - name: Lint (advisory — 26 known errors, see note)
+      - name: Lint (advisory — 23 known errors, see note)
         # Adding the webextension globals cleared 70 bogus `chrome` no-undef
-        # errors; the 26 that remain are real but unrelated code cleanups
+        # errors; the 23 that remain are real but unrelated code cleanups
         # (unused catch bindings, case-block declarations, two hook ordering
         # issues). Fix those and flip this to blocking like the frontend job.
+        # 15 of the 23 are the case-block declarations in src/content/index.js.
         run: npx eslint .
         working-directory: trustkeys
         continue-on-error: true

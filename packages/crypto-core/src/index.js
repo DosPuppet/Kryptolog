@@ -39,7 +39,13 @@ import { ml_dsa44 } from '@noble/post-quantum/ml-dsa.js';
 //        • messageSigningBody now also covers `gid` and a digest of the key
 //          envelope (`keysh`), and is async — audit M-8. Signatures produced
 //          before this no longer verify.
-export const CRYPTO_CORE_VERSION = '1.4.0';
+// 1.5.0: ADDITIVE — no wire or storage format change. deriveVaultKeyBits() /
+//        importVaultKey() expose the vault KDF's raw output so the extension can
+//        resume a session without keeping the password anywhere (audit M-4).
+//        deriveKey() is now composed from them and produces the identical key;
+//        the byte-compat suite pins the KDF output as a golden vector so that
+//        equivalence cannot regress silently.
+export const CRYPTO_CORE_VERSION = '1.5.0';
 
 // Helper: Uint8Array/Array <-> Hex. Deliberately Buffer-free so this package
 // stays a pure, runtime-agnostic ESM module (Node, browser SPA, MV3 extension)
@@ -561,29 +567,56 @@ export const decryptChunk = async (ivHex, ciphertextHex, keyHex, aad) => {
 
 // --- Vault Security ---
 
-// Helper to derive key
-export async function deriveKey(password, salt) {
-    const enc = new TextEncoder();
-    const keyMaterial = await crypto.subtle.importKey(
-        "raw",
-        enc.encode(password),
-        { name: "PBKDF2" },
-        false,
-        ["deriveKey"]
-    );
+// One definition of the vault KDF, shared by the CryptoKey and raw-bits paths
+// below so the two can never drift apart.
+const VAULT_KDF = {
+    name: "PBKDF2",
+    iterations: 600000, // OWASP Recommended (was 100k)
+    hash: "SHA-512",    // Hardened from SHA-256
+};
+const VAULT_KEY_BITS = 256;
 
-    return crypto.subtle.deriveKey(
-        {
-            name: "PBKDF2",
-            salt: salt,
-            iterations: 600000, // OWASP Recommended (was 100k)
-            hash: "SHA-512"   // Hardened from SHA-256
-        },
-        keyMaterial,
-        { name: "AES-GCM", length: 256 },
-        false,
-        ["encrypt", "decrypt"]
+const vaultKeyMaterial = (password) => crypto.subtle.importKey(
+    "raw",
+    new TextEncoder().encode(password),
+    { name: "PBKDF2" },
+    false,
+    ["deriveBits", "deriveKey"]
+);
+
+/**
+ * The vault key as RAW BYTES. Same KDF and same output as deriveKey() — this
+ * just hands back the material instead of a sealed CryptoKey.
+ *
+ * Exists so a session can be resumed without keeping the PASSWORD anywhere
+ * (audit M-4). A non-extractable CryptoKey cannot survive an MV3 service-worker
+ * restart — chrome.storage.session is JSON-serialized, not structured-clone —
+ * so the extension caches these bytes instead. Strictly less valuable to an
+ * attacker than the password: the password is the KDF *input*, survives a salt
+ * change, and is the thing a user is likely to have reused elsewhere.
+ */
+export const deriveVaultKeyBits = async (password, salt) => {
+    const material = await vaultKeyMaterial(password);
+    const bits = await crypto.subtle.deriveBits(
+        { ...VAULT_KDF, salt }, material, VAULT_KEY_BITS
     );
+    return new Uint8Array(bits);
+};
+
+/** Import raw vault-key bytes as a non-extractable AES-GCM key. */
+export const importVaultKey = async (keyBytes) => crypto.subtle.importKey(
+    "raw",
+    keyBytes,
+    { name: "AES-GCM", length: VAULT_KEY_BITS },
+    false,
+    ["encrypt", "decrypt"]
+);
+
+// Helper to derive key. Composed from the two above rather than calling
+// crypto.subtle.deriveKey directly, so there is exactly one KDF in the file and
+// the bytes path is provably the same key (byte-compat test pins both).
+export async function deriveKey(password, salt) {
+    return importVaultKey(await deriveVaultKeyBits(password, salt));
 }
 
 /**

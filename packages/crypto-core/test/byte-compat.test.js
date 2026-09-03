@@ -184,6 +184,42 @@ describe('randomized envelope round-trips', () => {
         await expect(core.decryptVault(vault, 'wrong')).rejects.toThrow();
     });
 
+    // The vault KDF is pinned as a golden vector because deriveKey() is now
+    // COMPOSED from deriveVaultKeyBits() + importVaultKey() (v1.5.0, audit M-4).
+    // That refactor must not have moved the key by a single byte — every vault
+    // already on disk was written under the old one-shot deriveKey.
+    it('vault KDF output is byte-exact (PBKDF2-SHA512, 600k, 256 bits)', async () => {
+        const salt = core.fromHex('000102030405060708090a0b0c0d0e0f');
+        const bits = await core.deriveVaultKeyBits('correct horse battery staple', salt);
+        expect(core.toHex(bits))
+            .toBe('1cf30a518878f44aecb75c0e0d0d69a02ac5f9181a53b5292092e10a3c0cbb41');
+        expect(bits).toBeInstanceOf(Uint8Array);
+        expect(bits.length).toBe(32);
+    });
+
+    it('the bytes path and deriveKey produce the same key (either can open the vault)', async () => {
+        // Resuming a session from cached key BYTES has to open a vault that was
+        // sealed by the password path, and vice versa — otherwise a worker
+        // restart would look exactly like a wrong password.
+        const salt = crypto.getRandomValues(new Uint8Array(16));
+        const fromPassword = await core.deriveKey('hunter2', salt);
+        const fromBytes = await core.importVaultKey(await core.deriveVaultKeyBits('hunter2', salt));
+
+        const sealed = await core.encryptVaultWithKey({ a: 1 }, fromPassword, salt);
+        expect(await core.decryptVaultWithKey(sealed, fromBytes)).toEqual({ a: 1 });
+
+        const resealed = await core.encryptVaultWithKey({ b: 2 }, fromBytes, salt);
+        expect(await core.decryptVaultWithKey(resealed, fromPassword)).toEqual({ b: 2 });
+    });
+
+    it('a different password or salt yields a different vault key', async () => {
+        const salt = core.fromHex('000102030405060708090a0b0c0d0e0f');
+        const other = core.fromHex('0f0e0d0c0b0a09080706050403020100');
+        const base = core.toHex(await core.deriveVaultKeyBits('pw', salt));
+        expect(core.toHex(await core.deriveVaultKeyBits('pw2', salt))).not.toBe(base);
+        expect(core.toHex(await core.deriveVaultKeyBits('pw', other))).not.toBe(base);
+    });
+
     it('vault: pre-derived key encrypt -> decrypt', async () => {
         const salt = crypto.getRandomValues(new Uint8Array(16));
         const key = await core.deriveKey('pw', salt);
@@ -288,6 +324,6 @@ describe('encryption-key attestation (audit M-1, v1.3.0)', () => {
 
 describe('single-source / version guard', () => {
     it('exports a version both app builds can assert against', () => {
-        expect(core.CRYPTO_CORE_VERSION).toBe('1.4.0');
+        expect(core.CRYPTO_CORE_VERSION).toBe('1.5.0');
     });
 });
