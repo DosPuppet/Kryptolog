@@ -100,6 +100,31 @@ wire-format boundary) → WP8+WP10 → WP9.
 
 Record the commit SHA in the status column as each lands.
 
+**All eleven work packages are done.** The audit's Immediate + Short Term tiers are
+closed; structural debt (O-2…O-6, L-4, L-7, L-12, L-14) is untouched and still
+deferred. `roadmap/AUDIT-REMEDIATION.md` has been deleted now that every item in it
+landed — `AUDIT.md` section 0 carries the finding-by-finding status, and this table
+carries the commits.
+
+### Still open from the remediation
+
+- **End-to-end recipe not run.** Everything is covered by automated tests except the
+  manual pass, which needs a running stack and a browser: two accounts exchanging DMs;
+  the WebSocket connecting through the corrected nginx `/api/` block; a multi-chunk
+  file round-tripping to confirm the AAD binding; locking/unlocking the extension to
+  confirm the idle alarm fires. Do this before any real deployment.
+- **Three cutover breaks are cumulative.** `CRYPTO_CORE_VERSION` went 1.3.0 → 1.6.0.
+  Existing chunk uploads no longer decrypt, existing message signatures no longer
+  verify, and unsigned legacy messages no longer decrypt at all. Fine for a
+  pre-production system; a decision if there is real data.
+- **Mixed-script usernames are grandfathered.** The new rule applies on write; existing
+  rows are only NFKC-normalized. Migration `f6a7b8c9d0e5` reports collisions but
+  deliberately does not rename anyone. If the directory already holds such names, that
+  needs an operator pass.
+- **`conftest.py` patches `auth.verify_message_signature` to `True` as `autouse`,** so
+  no backend test exercises a real login signature. Flipping it to opt-out was scoped
+  as a follow-up with its own blast radius, and was not done.
+
 ### Known issues, not yet scoped
 
 - **Port 5432 may be held by a native PostgreSQL** that lacks the `kryptolog` role, in
