@@ -26,6 +26,14 @@
 # header is needed.
 # ─────────────────────────────────────────────────────────────────────────────
 
+# Forward the Upgrade header only when the client actually sent one. Upgrade and
+# Connection are hop-by-hop: setting `Connection: upgrade` unconditionally would
+# apply it to every ordinary API request too.
+map $http_upgrade $connection_upgrade {
+    default upgrade;
+    ''      close;
+}
+
 # Redirect HTTP → HTTPS
 server {
     listen 80;
@@ -34,17 +42,37 @@ server {
 }
 
 server {
-    listen 443 ssl http2;
+    # `listen ... http2` has been deprecated since nginx 1.25 (it warns, and is
+    # slated for removal); `http2 on` is the supported spelling.
+    listen 443 ssl;
+    http2 on;
     server_name your-domain.com;
 
     ssl_certificate     /etc/letsencrypt/live/your-domain.com/fullchain.pem;
     ssl_certificate_key /etc/letsencrypt/live/your-domain.com/privkey.pem;
     ssl_protocols       TLSv1.2 TLSv1.3;
+    # ssl_prefer_server_ciphers only means something if the server states an
+    # order to prefer; on its own it defers to whatever the OpenSSL default
+    # happens to be on the host. TLS 1.3 suites are not configurable here and
+    # need no list — this constrains the TLS 1.2 fallback.
     ssl_prefer_server_ciphers on;
+    ssl_ciphers ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-GCM-SHA256:ECDHE-ECDSA-AES256-GCM-SHA384:ECDHE-RSA-AES256-GCM-SHA384:ECDHE-ECDSA-CHACHA20-POLY1305:ECDHE-RSA-CHACHA20-POLY1305;
 
     # Serve the Vite build
     root  /var/www/kryptolog/frontend/dist;
     index index.html;
+
+    # Request-header buffers, sized for ML-DSA addresses: 2624 hex characters,
+    # and they travel in URLs (GET /auth/nonce/{address}). The default 1k
+    # header buffer rejects those with a 414 before the request ever reaches
+    # FastAPI.
+    #
+    # These live in `server`, not in `location /api/`. nginx only accepts them
+    # in http/server context, so the previous placement inside the location
+    # block made the whole file fail `nginx -t` — the very command step 4 of the
+    # setup instructions tells you to run.
+    client_header_buffer_size    16k;
+    large_client_header_buffers  4 16k;
 
     # ── Security headers ───────────────────────────────────────────────────
     add_header Strict-Transport-Security "max-age=63072000; includeSubDomains; preload" always;
@@ -91,10 +119,29 @@ server {
     # Strips the /api prefix before forwarding to FastAPI.
     # e.g. GET /api/auth/nonce/0x1234 → GET /auth/nonce/0x1234 on port 8000.
     #
-    # Dilithium JWTs are ~2-3 KB. Buffer sizes are increased accordingly.
+    # THE WEBSOCKET ARRIVES HERE, not at `location /ws` below (audit M-10).
+    # The documented build sets VITE_API_BASE_URL=https://your-domain.com/api,
+    # so the SPA opens wss://your-domain.com/api/ws — which matches this prefix
+    # block, and nginx never reaches the carefully-configured /ws block further
+    # down. Without the upgrade headers here the handshake was answered as a
+    # plain HTTP request and the messenger's real-time channel simply never
+    # connected in a stock deployment.
+    #
+    # The rewrite above already maps /api/ws → /ws upstream, so this block only
+    # needed to stop stripping the upgrade. `$connection_upgrade` comes from the
+    # map at the top of this file: hop-by-hop headers must only be forwarded
+    # when the client actually asked for an upgrade, so a hardcoded
+    # `Connection: upgrade` on every API request would be wrong.
+    #
+    # ML-DSA addresses are 2624 hex chars and travel in URLs (e.g.
+    # /auth/nonce/{address}), so the header buffers are sized for them.
     location /api/ {
         rewrite ^/api/(.*) /$1 break;
         proxy_pass http://127.0.0.1:8000;
+
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade           $http_upgrade;
+        proxy_set_header Connection        $connection_upgrade;
 
         proxy_set_header Host              $host;
         # X-Real-IP is used by the backend rate limiter to identify the real
@@ -103,24 +150,33 @@ server {
         proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
         proxy_set_header X-Forwarded-Proto $scheme;
 
+        # Long-lived upgraded connections must not be closed by the read timeout
+        # that suits ordinary API calls.
+        proxy_read_timeout 86400;
+
         client_max_body_size         64M;
         proxy_buffer_size            64k;
         proxy_buffers                8 64k;
         proxy_busy_buffers_size      128k;
-        client_header_buffer_size    16k;
-        large_client_header_buffers  4 16k;
     }
 
     # ── WebSocket proxy ────────────────────────────────────────────────────
-    # Messenger real-time channel. Must be proxied separately from HTTP.
+    # Messenger real-time channel, for a frontend built to talk to the API at
+    # the ROOT of this domain rather than under /api. With the documented
+    # VITE_API_BASE_URL=.../api build the connection matches `location /api/`
+    # above instead and never arrives here (audit M-10) — both are configured so
+    # either build works.
     location /ws {
         proxy_pass http://127.0.0.1:8000/ws;
 
         proxy_http_version 1.1;
-        proxy_set_header Upgrade    $http_upgrade;
-        proxy_set_header Connection "upgrade";
-        proxy_set_header Host       $host;
-        proxy_set_header X-Real-IP  $remote_addr;
+        proxy_set_header Upgrade           $http_upgrade;
+        proxy_set_header Connection        $connection_upgrade;
+        proxy_set_header Host              $host;
+        proxy_set_header X-Real-IP         $remote_addr;
+        proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
+        # Without this the backend cannot tell a wss:// client from a ws:// one.
+        proxy_set_header X-Forwarded-Proto $scheme;
 
         proxy_read_timeout 86400;  # Keep long-lived WS connections alive
     }

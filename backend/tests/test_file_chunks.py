@@ -2,6 +2,8 @@ import pytest
 from unittest.mock import patch
 from uuid import uuid4
 
+from conftest import TEST_USER_ADDRESS_2
+
 # Chunk payloads must be real hex (audit M-2): FileChunkUpload rejects anything
 # else, and upload_chunk's size accounting divides length by 2 to get bytes,
 # which only means anything for hex. These helpers keep the fixtures honest.
@@ -199,7 +201,7 @@ class TestFileChunks:
         # User 1 shares with User 2
         share_res = client.post("/secrets/share", headers=auth_headers, json={
             "secret_id": secret_id,
-            "grantee_address": "pqc_test_user_" + "b" * 100, # Matches TEST_USER_ADDRESS_2 in conftest
+            "grantee_address": TEST_USER_ADDRESS_2,  # the constant itself, not a hand-copy of it
             "encrypted_key": "shared_key"
         })
         assert share_res.status_code == 200
@@ -316,12 +318,12 @@ class TestMultisigChunkAccess:
 
     def test_recipient_blocked_before_completion(self, client, user1, user2):
         """A recipient should NOT access chunks while the workflow is still pending."""
-        from conftest import do_login, TEST_ENCRYPTION_KEY
+        from conftest import do_login, TEST_ENCRYPTION_KEY, TEST_USER_ADDRESS_3
         token1, _ = user1
         _, u2 = user2
 
         # Create a third user as recipient
-        token3, u3 = do_login(client, "pqc_test_user_" + "d" * 100, TEST_ENCRYPTION_KEY, "Recipient")
+        token3, u3 = do_login(client, TEST_USER_ADDRESS_3, TEST_ENCRYPTION_KEY, "Recipient")
 
         secret_id, wf_id = self._create_workflow_with_chunk(client, token1, u2["address"], u3["address"])
 
@@ -332,12 +334,12 @@ class TestMultisigChunkAccess:
 
     def test_recipient_can_access_after_completion(self, client, user1, user2):
         """After all signers sign, the recipient should be able to access chunks."""
-        from conftest import do_login, TEST_ENCRYPTION_KEY
+        from conftest import do_login, TEST_ENCRYPTION_KEY, TEST_USER_ADDRESS_3
         token1, _ = user1
         token2, u2 = user2
 
         # Create a third user as recipient
-        token3, u3 = do_login(client, "pqc_test_user_" + "d" * 100, TEST_ENCRYPTION_KEY, "Recipient")
+        token3, u3 = do_login(client, TEST_USER_ADDRESS_3, TEST_ENCRYPTION_KEY, "Recipient")
 
         secret_id, wf_id = self._create_workflow_with_chunk(client, token1, u2["address"], u3["address"])
 

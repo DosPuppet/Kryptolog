@@ -6,7 +6,23 @@ import { sha256Hex } from '../../utils/crypto';
 // workflow (M1), so the proof carries secret_id + the ciphertext hash for the
 // auditor to rebuild and verify their approval messages. The creator's
 // signature is over the plaintext content (verified separately).
-export const downloadMultisigProof = async ({ workflow, creatorSignature, creatorSignedContent, rawDecryptedContent }) => {
+export const downloadMultisigProof = async ({
+    workflow, creatorSignature, creatorSignedContent, rawDecryptedContent, verificationStatus,
+}) => {
+    // The proof labels the creator's signature with workflow.owner_address, but
+    // that attribution was never checked against the key the signature actually
+    // verifies under (audit L-3) — so the exported artifact asserted authorship
+    // it had no basis for, to an auditor who by definition cannot see the
+    // workflow. Refuse to export rather than emit a claim we cannot stand
+    // behind; interpretDecryptedContent reports 'mismatch' for exactly this.
+    if (creatorSignature && verificationStatus !== 'verified') {
+        throw new Error(
+            "Refusing to export a proof: the creator's signature does not verify " +
+            "against this workflow's owner. Exporting it would attribute the " +
+            "document to someone the signature does not name."
+        );
+    }
+
     // Build signer list: virtual creator + explicit signers
     const signatures = [];
 

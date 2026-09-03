@@ -17,7 +17,7 @@ from sqlalchemy.exc import IntegrityError
 
 import models
 from conftest import (
-    TEST_ENCRYPTION_KEY, TestingSessionLocal, auth_header, do_login,
+    TEST_ENCRYPTION_KEY, TestingSessionLocal, auth_header, do_login, synthetic_address,
 )
 from main import app
 
@@ -53,7 +53,7 @@ def signers(client):
     """Four distinct signer identities."""
     out = []
     for i in range(4):
-        addr = f"pqc_signer_{i}_" + chr(ord('a') + i) * 100
+        addr = synthetic_address(f"concurrency-signer-{i}")
         token, user = do_login(client, addr, TEST_ENCRYPTION_KEY, f"Signer{i}")
         out.append((token, user["address"]))
     return out
@@ -121,7 +121,7 @@ class TestConcurrentSigning:
         """
         owner_token, _ = user1
         _, recipient_user = do_login(
-            client, "pqc_recip_" + "z" * 100, TEST_ENCRYPTION_KEY, "Recip"
+            client, synthetic_address("conc-recip-1"), TEST_ENCRYPTION_KEY, "Recip"
         )
         recipient = recipient_user["address"]
         addrs = [a for _, a in signers[:2]]
@@ -175,7 +175,7 @@ class TestConcurrentSigning:
         and releases. Under the lock this must stay deterministic."""
         owner_token, _ = user1
         _, recipient_user = do_login(
-            client, "pqc_recip2_" + "y" * 100, TEST_ENCRYPTION_KEY, "Recip2"
+            client, synthetic_address("conc-recip-2"), TEST_ENCRYPTION_KEY, "Recip2"
         )
         recipient = recipient_user["address"]
         addrs = [a for _, a in signers[:2]]
@@ -269,7 +269,7 @@ class TestConcurrentRejectAndSign:
     ):
         owner_token, _ = user1
         _, recipient_user = do_login(
-            client, "pqc_rr_recip_" + "y" * 100, TEST_ENCRYPTION_KEY, "RRRecip"
+            client, synthetic_address("conc-rr-recip"), TEST_ENCRYPTION_KEY, "RRRecip"
         )
         recipient = recipient_user["address"]
         # 1-of-2: signer[0]'s signature completes it outright, so it races

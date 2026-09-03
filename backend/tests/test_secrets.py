@@ -205,21 +205,16 @@ class TestGetSecretAccess:
         assert resp.status_code == 403
 
 
-class TestDocuments:
-    def test_create_document(self, client, user1):
-        token, user = user1
-        resp = client.post("/documents", json={
-            "name": "TestDoc", "content_hash": "abc123hash", "signature": "sig_data",
-        }, headers=auth_header(token))
-        assert resp.status_code == 200
-        assert resp.json()["name"] == "TestDoc"
-        assert resp.json()["owner_address"] == user["address"]
+class TestDocumentsAreGone:
+    """The /documents endpoints were removed (audit L-10).
 
-    def test_get_own_documents(self, client, user1):
+    POST /documents stored an arbitrary `content_hash` and `signature` with no
+    verification of either and no rate limit, and no client ever called it.
+    """
+
+    def test_documents_endpoints_are_removed(self, client, user1):
         token, _ = user1
-        client.post("/documents", json={
-            "name": "Doc1", "content_hash": "h1", "signature": "s1",
-        }, headers=auth_header(token))
-        resp = client.get("/documents", headers=auth_header(token))
-        assert resp.status_code == 200
-        assert len(resp.json()) >= 1
+        assert client.post("/documents", json={
+            "name": "TestDoc", "content_hash": "abc123hash", "signature": "sig_data",
+        }, headers=auth_header(token)).status_code == 404
+        assert client.get("/documents", headers=auth_header(token)).status_code == 404

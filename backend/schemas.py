@@ -127,23 +127,6 @@ class AccessGrantResponse(BaseModel):
 
     model_config = ConfigDict(from_attributes=True)
 
-class DocumentBase(BaseModel):
-    name: str = Field(..., max_length=200)
-    content_hash: str = Field(..., max_length=500)
-    # 64KB to support potential embedded PQC signatures (Dilithium) safely
-    signature: str = Field(..., max_length=64_000)
-
-class DocumentCreate(DocumentBase):
-    pass
-
-class DocumentResponse(DocumentBase):
-    id: int
-    owner_address: str
-    created_at: datetime
-    signature: str # Relax output limit for legacy docs
-
-    model_config = ConfigDict(from_attributes=True)
-
 class LoginRequest(BaseModel):
     address: str = Field(..., max_length=MAX_ADDRESS_LEN)
     signature: str = Field(..., max_length=64_000)

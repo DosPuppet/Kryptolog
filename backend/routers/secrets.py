@@ -238,23 +238,12 @@ def get_shared_secrets(request: Request, current_user: models.User = Depends(get
         models.MultisigWorkflow.id == None
     ).all()
 
-# Documents (Keep in secrets router as per plan implication or separate if desired. "Move secrets and sharing endpoints here." Documents are kind of secrets.)
-@router.post("/documents", response_model=schemas.DocumentResponse)
-def create_document(doc: schemas.DocumentCreate, current_user: models.User = Depends(get_current_user), db: Session = Depends(get_db)):
-    new_doc = models.Document(
-        owner_address=current_user.address,
-        name=doc.name,
-        content_hash=doc.content_hash,
-        signature=doc.signature
-    )
-    db.add(new_doc)
-    db.commit()
-    db.refresh(new_doc)
-    return new_doc
-
-@router.get("/documents", response_model=List[schemas.DocumentResponse])
-def get_documents(current_user: models.User = Depends(get_current_user), db: Session = Depends(get_db)):
-    return db.query(models.Document).filter(models.Document.owner_address == current_user.address).all()
+# NOTE: the /documents endpoints were removed (audit L-10). POST /documents
+# accepted an arbitrary `content_hash` and `signature`, verified neither, and
+# carried no rate limit — an authenticated write endpoint storing unvalidated
+# text under the user's name. No client ever called it, in the SPA or the
+# extension, so there was no feature to preserve by hardening it instead.
+# The table is dropped in migration a7b8c9d0e5f6.
 
 
 # --- File Chunks ---

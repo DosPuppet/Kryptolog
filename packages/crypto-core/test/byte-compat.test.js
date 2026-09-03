@@ -108,6 +108,16 @@ describe('golden constants (wire/storage format contract)', () => {
         const bytes = new Uint8Array([0, 1, 254, 255]);
         expect(core.toHex(bytes)).toBe('0001feff');
         expect(Array.from(core.fromHex('0001feff'))).toEqual([0, 1, 254, 255]);
+        expect(Array.from(core.fromHex('0001FEFF'))).toEqual([0, 1, 254, 255]);
+    });
+
+    it('fromHex rejects malformed input instead of decoding it to zeros (L-9)', () => {
+        // The failure this replaces: 'zz' -> parseInt NaN -> stored as 0, so a
+        // corrupted public key became a VALID key of zeros. A decoder that
+        // answers "valid and different" is worse than one that answers "no".
+        for (const bad of ['zz', 'nothex', '0001fe f', 'abc', '', '0x0102', null, undefined, 1234]) {
+            expect(() => core.fromHex(bad)).toThrow(/hex/i);
+        }
     });
 });
 
@@ -324,6 +334,6 @@ describe('encryption-key attestation (audit M-1, v1.3.0)', () => {
 
 describe('single-source / version guard', () => {
     it('exports a version both app builds can assert against', () => {
-        expect(core.CRYPTO_CORE_VERSION).toBe('1.5.0');
+        expect(core.CRYPTO_CORE_VERSION).toBe('1.6.0');
     });
 });

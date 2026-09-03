@@ -67,7 +67,12 @@ export const NotificationProvider = ({ children }) => {
         setError(null);
         // Clear opt-out flag since user is explicitly subscribing
         localStorage.removeItem('kryptolog_push_disabled');
-        const authToken = token || localStorage.getItem('token');
+        // The token comes from AuthContext only (audit L-8). The
+        // localStorage.getItem('token') fallback that used to be here was dead
+        // code — AuthContext never persists the token, by design ("Session is
+        // transient") — and a dead read invites someone to make it live by
+        // adding the write, which is precisely the architecture this avoids.
+        const authToken = token;
 
         try {
             const registration = await navigator.serviceWorker.ready;
@@ -157,7 +162,7 @@ export const NotificationProvider = ({ children }) => {
 
         try {
             // Unsubscribe from backend first
-            const authToken = token || localStorage.getItem('token');
+            const authToken = token;  // never persisted — see the note in subscribe (audit L-8)
             await fetch(`${API_ENDPOINTS.NOTIFICATIONS.UNSUBSCRIBE}?endpoint=${encodeURIComponent(subscription.endpoint)}`, {
                 method: 'POST',
                 headers: {

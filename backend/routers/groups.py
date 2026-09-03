@@ -40,7 +40,11 @@ async def create_group(
     found_addrs = {u.address for u in users}
     missing = set(member_addrs) - found_addrs
     if missing:
-        raise HTTPException(status_code=404, detail=f"Users not found: {', '.join(missing)}")
+        # Generic on purpose (audit L-6): naming the addresses that were not
+        # found turns group creation into an account-existence oracle — probe
+        # with a candidate address, read whether it came back. /auth/login is
+        # already generic for the same reason.
+        raise HTTPException(status_code=404, detail="One or more users could not be found")
 
     # Validate all members have PQC keys (Messenger requirement)
     for u in users:

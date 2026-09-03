@@ -3,7 +3,7 @@
 
 Seeds admin invite codes directly into the database so the first users can
 register when KRYPTOLOG_REQUIRE_INVITE is enabled. Run from the backend dir so
-it picks up the same SQLite DB the app uses.
+it picks up the same PostgreSQL database the app uses (DATABASE_URL).
 
 Examples:
     python generate_invites.py                 # 1 single-use code, no expiry

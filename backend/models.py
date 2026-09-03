@@ -16,7 +16,7 @@ class User(Base):
     __tablename__ = "users"
 
     address = Column(String, primary_key=True, index=True) # Identity public key (ML-DSA-44, lowercase hex)
-    username = Column(String, nullable=True, unique=True)
+    username = Column(String, nullable=True)
     encryption_public_key = Column(String, nullable=True) # ML-KEM-768 public key (hex)
     # Stamped whenever encryption_public_key changes for an existing identity
     # (audit S1: key-directory transparency). Lets clients surface "this contact's
@@ -33,12 +33,21 @@ class User(Base):
     token_version = Column(Integer, nullable=False, default=0, server_default="0")
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
 
-    # Usernames are unique case-INSENSITIVELY: the column's own `unique=True` is
+    # Usernames are unique case-INSENSITIVELY: a plain unique index is
     # case-sensitive on PostgreSQL, which would let "alice" and "Alice" exist as
     # two identities — impersonation in a directory people pick recipients from.
     # Matches migration d4e5f6a7b8c3 and the lower() predicate in
     # security/usernames.py.
+    #
+    # Both indexes are declared, and as INDEXES rather than a column-level
+    # `unique=True`. That flag renders as a unique CONSTRAINT in the metadata
+    # while the database holds a unique INDEX, so autogenerate saw a permanent
+    # remove_index/add_constraint pair and `alembic check` could never be used
+    # as a drift gate. The plain index is redundant next to the functional one
+    # (which is strictly stronger) but it exists on live databases, so the model
+    # states that rather than pretending otherwise.
     __table_args__ = (
+        Index("ix_users_username_unique", username, unique=True),
         Index("ix_users_username_lower_unique", func.lower(username), unique=True),
     )
 
@@ -71,19 +80,6 @@ class AccessGrant(Base):
 
     secret = relationship("Secret", back_populates="access_grants")
     grantee = relationship("User", back_populates="access_grants")
-
-class Document(Base):
-    __tablename__ = "documents"
-
-    id = Column(Integer, primary_key=True, index=True)
-    owner_address = Column(String, ForeignKey("users.address"))
-    name = Column(String)
-    content_hash = Column(String) # Hash of the document content
-    signature = Column(String) # The user's signature of the hash
-    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
-
-    owner = relationship("User", back_populates="documents")
-
 
 class MultisigWorkflow(Base):
     __tablename__ = "multisig_workflows"
@@ -153,7 +149,6 @@ class Message(Base):
     recipient = relationship("User", foreign_keys=[recipient_address], back_populates="received_messages")
 
 # Relationships added post-definition to avoid forward-reference issues
-User.documents = relationship("Document", back_populates="owner")
 User.workflows = relationship("MultisigWorkflow", back_populates="owner")
 User.sent_messages = relationship("Message", foreign_keys=[Message.sender_address], back_populates="sender")
 User.received_messages = relationship("Message", foreign_keys=[Message.recipient_address], back_populates="recipient")
