@@ -45,7 +45,11 @@ import { ml_dsa44 } from '@noble/post-quantum/ml-dsa.js';
 //        deriveKey() is now composed from them and produces the identical key;
 //        the byte-compat suite pins the KDF output as a golden vector so that
 //        equivalence cannot regress silently.
-export const CRYPTO_CORE_VERSION = '1.5.0';
+// 1.6.0: ADDITIVE/hardening — no wire or storage format change. fromHex() now
+//        THROWS on malformed input (audit L-9) instead of decoding non-hex to
+//        zero bytes and truncating odd-length strings, which turned a corrupted
+//        key into a valid-looking different one.
+export const CRYPTO_CORE_VERSION = '1.6.0';
 
 // Helper: Uint8Array/Array <-> Hex. Deliberately Buffer-free so this package
 // stays a pure, runtime-agnostic ESM module (Node, browser SPA, MV3 extension)
@@ -60,7 +64,19 @@ export const toHex = (arr) => {
     for (let i = 0; i < bytes.length; i++) hex += _HEX[bytes[i]];
     return hex;
 };
+// Throws rather than guessing (audit L-9). This used to feed every character
+// pair to parseInt(_, 16) and store the result, so a non-hex pair became NaN,
+// NaN stored into a Uint8Array became 0, and a corrupted public key silently
+// decoded to a key of ZEROS instead of raising. An odd-length string quietly
+// lost its last character the same way. Both turn "this data is damaged" into
+// "this data is valid and different", which is the worst answer a decoder can
+// give — every caller here is decoding a key, iv, salt or ciphertext, and none
+// of them can act on a silently substituted one. Matches the backend's is_hex.
+const _HEX_ONLY = /^[0-9a-fA-F]+$/;
 export const fromHex = (hex) => {
+    if (typeof hex !== 'string' || hex.length === 0 || hex.length % 2 !== 0 || !_HEX_ONLY.test(hex)) {
+        throw new Error('fromHex: expected a non-empty, even-length hex string');
+    }
     const len = hex.length >> 1;
     const out = new Uint8Array(len);
     for (let i = 0; i < len; i++) out[i] = parseInt(hex.substr(i * 2, 2), 16);

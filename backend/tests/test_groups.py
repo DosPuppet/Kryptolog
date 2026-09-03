@@ -2,16 +2,42 @@
 Tests for the Group Channels feature.
 """
 import pytest
-from conftest import do_login, auth_header, TEST_USER_ADDRESS, TEST_USER_ADDRESS_2, TEST_ENCRYPTION_KEY
+from conftest import (
+    do_login, auth_header,
+    TEST_USER_ADDRESS, TEST_USER_ADDRESS_2, TEST_USER_ADDRESS_3, TEST_ENCRYPTION_KEY,
+)
 
 
-TEST_USER_ADDRESS_3 = "pqc_test_user_" + "d" * 100
+
 
 
 @pytest.fixture()
 def user3(client):
     token, user = do_login(client, TEST_USER_ADDRESS_3, TEST_ENCRYPTION_KEY, "TestUser3")
     return token, user
+
+
+class TestMemberLookupIsNotAnOracle:
+    """L-6: the 404 used to name the addresses it could not find.
+
+    That turns group creation into an account-existence oracle — probe with a
+    candidate address and read whether it comes back in the message. /auth/login
+    is already generic for the same reason.
+    """
+
+    def test_error_does_not_reveal_which_addresses_exist(self, client, user1):
+        from conftest import synthetic_address
+        token, u1 = user1
+        absent = synthetic_address("never-registered")
+
+        resp = client.post("/groups", json={
+            "name": "probe", "member_addresses": [u1["address"], absent],
+        }, headers=auth_header(token))
+
+        assert resp.status_code == 404
+        detail = resp.json()["detail"]
+        assert absent not in detail
+        assert u1["address"] not in detail
 
 
 class TestCreateGroup:

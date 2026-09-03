@@ -2,8 +2,8 @@
 
 Helpers for minting and atomically consuming invite codes. The consume path is a
 single guarded SQL UPDATE so concurrent redemptions of the same code can't
-over-spend it (no read-then-write race). Times are naive UTC to match how the
-rest of the app stores/reads datetimes through SQLite.
+over-spend it (no read-then-write race). Times are naive UTC to match the
+DateTime columns elsewhere, which are declared without timezone=True.
 """
 import secrets
 from datetime import datetime, timezone, timedelta
@@ -16,7 +16,7 @@ import models
 
 def _utcnow() -> datetime:
     # Naive UTC, consistent with the other datetime columns as read back from
-    # SQLite (avoids mixing aware/naive in the expiry comparison).
+    # the database (avoids mixing aware/naive in the expiry comparison).
     return datetime.now(timezone.utc).replace(tzinfo=None)
 
 

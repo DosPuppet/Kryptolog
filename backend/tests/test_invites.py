@@ -8,7 +8,7 @@ import pytest
 
 from conftest import (
     TEST_USER_ADDRESS, TEST_USER_ADDRESS_2, TEST_ENCRYPTION_KEY,
-    get_nonce, do_login, auth_header,
+    get_nonce, do_login, auth_header, synthetic_address,
 )
 import invites
 from database import get_db
@@ -88,7 +88,7 @@ class TestInvitesRequired:
         assert _login_with(client, TEST_USER_ADDRESS, code=code).status_code == 200
         assert _login_with(client, TEST_USER_ADDRESS_2, code=code).status_code == 200
         # Third distinct identity exceeds max_uses.
-        third = "pqc_test_user_" + "e" * 100
+        third = synthetic_address("invite-third")
         assert _login_with(client, third, code=code).status_code == 403
 
     def test_expired_code_is_rejected(self, client, require_invites):
@@ -105,7 +105,7 @@ class TestInvitesRequired:
 
     def test_username_clash_does_not_consume_code(self, client, require_invites):
         # An existing user occupies the username "Taken".
-        occupier = "pqc_test_user_" + "g" * 100
+        occupier = synthetic_address("invite-occupier")
         nonce = get_nonce(client, occupier)
         assert client.post("/auth/login", json={
             "address": occupier, "signature": "fake", "nonce": nonce,
@@ -115,7 +115,7 @@ class TestInvitesRequired:
 
         # A brand-new identity requests the same username with a valid code → 409.
         code = _mint(count=1)[0]
-        clash = "pqc_test_user_" + "f" * 100
+        clash = synthetic_address("invite-clash")
         resp = client.post("/auth/login", json={
             "address": clash, "signature": "fake", "nonce": get_nonce(client, clash),
             "encryption_public_key": TEST_ENCRYPTION_KEY,
@@ -123,4 +123,4 @@ class TestInvitesRequired:
         })
         assert resp.status_code == 409
         # The code wasn't burned: another new identity can still redeem it.
-        assert _login_with(client, "pqc_test_user_" + "h" * 100, code=code).status_code == 200
+        assert _login_with(client, synthetic_address("invite-fresh"), code=code).status_code == 200

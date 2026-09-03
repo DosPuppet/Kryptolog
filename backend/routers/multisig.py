@@ -75,11 +75,16 @@ def create_multisig_workflow(request: Request, workflow: schemas.MultisigWorkflo
     db.commit()
     db.refresh(new_workflow)
 
-    # 3. Add Signers with their per-workflow encrypted keys
+    # 3. Add Signers with their per-workflow encrypted keys.
+    # Addresses are lowercase everywhere, so the key maps are lowered ONCE here
+    # rather than per iteration — and the recipient map below is lowered the
+    # same way, which it previously was not (audit L-2).
+    signer_keys = {k.lower(): v for k, v in (workflow.signer_keys or {}).items()}
+    recipient_keys = {k.lower(): v for k, v in (workflow.recipient_keys or {}).items()}
+
     for signer_addr in workflow.signers:
         s_addr = signer_addr.lower()
-        normalized_keys = {k.lower(): v for k, v in workflow.signer_keys.items()}
-        key = normalized_keys.get(s_addr)
+        key = signer_keys.get(s_addr)
 
         signer_entry = models.MultisigWorkflowSigner(
             workflow_id=new_workflow.id,
@@ -92,7 +97,7 @@ def create_multisig_workflow(request: Request, workflow: schemas.MultisigWorkflo
     # 4. Add Recipients (keys released only upon workflow completion)
     for recipient_addr in workflow.recipients:
         r_addr = recipient_addr.lower()
-        key = workflow.recipient_keys.get(r_addr)
+        key = recipient_keys.get(r_addr)
 
         recipient_entry = models.MultisigWorkflowRecipient(
             workflow_id=new_workflow.id,
@@ -216,6 +221,56 @@ def get_multisig_workflow(request: Request, workflow_id: int, current_user: mode
             
     return wf_response
 
+def _release_recipient_keys(db: Session, wf, supplied):
+    """Attach recipients' wrapped keys as part of the completing signature.
+
+    Addresses are lowercased on BOTH sides (audit L-2). The creation path
+    normalized the signer map but not the recipient map, and this lookup matched
+    `user_address == r_addr` on the raw value — so a client sending a mixed-case
+    address matched no row, `if recipient:` was simply false, and the loop passed
+    in silence. The workflow then completed with a recipient holding no key,
+    which is not recoverable: the secret is released to nobody, and a completed
+    workflow cannot be deleted.
+
+    So the completing signature is now REFUSED when a declared recipient would
+    end up with no key. Failing the request leaves the workflow signable again;
+    letting it through leaves it permanently stuck.
+    """
+    recipients = db.query(models.MultisigWorkflowRecipient).filter(
+        models.MultisigWorkflowRecipient.workflow_id == wf.id
+    ).all()
+    if not recipients:
+        return
+
+    normalized = {addr.lower(): key for addr, key in (supplied or {}).items()}
+    by_address = {r.user_address.lower(): r for r in recipients}
+
+    unknown = sorted(set(normalized) - set(by_address))
+    if unknown:
+        raise HTTPException(
+            status_code=400,
+            detail="Recipient keys supplied for addresses that are not recipients of this workflow",
+        )
+
+    for address, recipient in by_address.items():
+        if address in normalized:
+            recipient.encrypted_key = normalized[address]
+
+    # A recipient may already hold a key from creation time, so this checks the
+    # END state rather than what this request supplied.
+    missing = sorted(addr for addr, r in by_address.items() if not r.encrypted_key)
+    if missing:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "Cannot complete: no encrypted key for recipient(s) "
+                + ", ".join(missing)
+                + ". Completing without them would release the secret to nobody and "
+                "leave a workflow that can no longer be signed or deleted."
+            ),
+        )
+
+
 @router.post("/workflow/{workflow_id}/sign", response_model=schemas.MultisigWorkflowResponse)
 @limiter.limit("20/minute")
 def sign_multisig_workflow(request: Request, workflow_id: int, sig_req: schemas.MultisigSignatureRequest, current_user: models.User = Depends(get_current_user), db: Session = Depends(get_db)):
@@ -296,14 +351,8 @@ def sign_multisig_workflow(request: Request, workflow_id: int, sig_req: schemas.
     signer.signed_at = datetime.now(timezone.utc)
 
     # Store Recipient Keys (Release Mechanism) — only on the completing signature.
-    if is_completing and sig_req.recipient_keys:
-        for r_addr, enc_key in sig_req.recipient_keys.items():
-            recipient = db.query(models.MultisigWorkflowRecipient).filter(
-                models.MultisigWorkflowRecipient.workflow_id == wf.id,
-                models.MultisigWorkflowRecipient.user_address == r_addr
-            ).first()
-            if recipient:
-                recipient.encrypted_key = enc_key
+    if is_completing:
+        _release_recipient_keys(db, wf, sig_req.recipient_keys)
 
     # Status transition happens in the SAME transaction as the signature.
     # Previously the signature was committed first and `status = "completed"`

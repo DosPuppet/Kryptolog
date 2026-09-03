@@ -161,6 +161,15 @@ jobs:
         # breakage (incl. the users.address btree-index-size risk) on every push.
         run: alembic upgrade head
         working-directory: backend
+      - name: Check for model/migration drift
+        # Blocking now that the users.username discrepancy is resolved (audit
+        # WP9): the column declared `unique=True`, which renders as a unique
+        # CONSTRAINT, while the database holds a unique INDEX — so autogenerate
+        # reported a permanent remove_index/add_constraint pair and this gate
+        # could never be switched on. Fails if a model change ships without its
+        # migration.
+        run: alembic check
+        working-directory: backend
       - name: Run tests
         # A fresh venv has none of the Ethereum-era packages, so the stale
         # pytest_ethereum plugin (audit F-5, local-only) never loads here.
