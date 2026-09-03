@@ -101,7 +101,7 @@ export const importVault = async (vaultObj, password, passphrase) => {
     if (typeof importedVault === 'string') {
         try {
             importedVault = JSON.parse(importedVault);
-        } catch (e) {
+        } catch {
             throw new Error("Invalid import format (not JSON)");
         }
     }
@@ -129,12 +129,10 @@ export const importVault = async (vaultObj, password, passphrase) => {
         state.vault = decryptedImport;
     } else {
         const existingIds = new Set(state.vault.accounts.map(a => a.id));
-        let addedCount = 0;
 
         for (const account of decryptedImport.accounts) {
             if (!existingIds.has(account.id)) {
                 state.vault.accounts.push(account);
-                addedCount++;
             }
         }
     }

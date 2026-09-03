@@ -9,8 +9,7 @@ name: CI
 #   • extension   — TrustKeys MV3 build.
 #   • backend     — pytest, incl. the noble<->liboqs interop tests (liboqs is
 #     compiled from source, so the job installs cmake + a C toolchain).
-# Frontend lint is a blocking gate. The extension's lint stays advisory until
-# its remaining 26 errors are cleared (see the note on that step).
+# Frontend and extension lint are both blocking gates.
 #
 # A separate Security workflow (.github/workflows/security.yml) carries the
 # AppSec gate: pip-audit, npm audit, gitleaks and CodeQL.
@@ -99,15 +98,13 @@ jobs:
       - name: Build
         run: npx vite build
         working-directory: trustkeys
-      - name: Lint (advisory — 23 known errors, see note)
-        # Adding the webextension globals cleared 70 bogus `chrome` no-undef
-        # errors; the 23 that remain are real but unrelated code cleanups
-        # (unused catch bindings, case-block declarations, two hook ordering
-        # issues). Fix those and flip this to blocking like the frontend job.
-        # 15 of the 23 are the case-block declarations in src/content/index.js.
+      - name: Lint
+        # Blocking, like the frontend job. Getting here took two steps: the
+        # webextension globals in eslint.config.js cleared 70 bogus `chrome`
+        # no-undef errors, then the 23 real ones behind them (unused catch
+        # bindings, case-block declarations, two hook-ordering issues) were fixed.
         run: npx eslint .
         working-directory: trustkeys
-        continue-on-error: true
 
   backend:
     name: backend (pytest + PQC interop)

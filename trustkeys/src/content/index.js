@@ -31,24 +31,32 @@ window.addEventListener('message', async (event) => {
 
     try {
         let result;
+        // Each arm is braced so its `const` is scoped to that case rather than to
+        // the whole switch block (no-case-declarations): without the braces every
+        // binding here shares one scope and is visible — in the temporal dead zone —
+        // to the arms above it.
         switch (type) {
-            case 'TRUSTKEYS_GET_ACCOUNT':
+            case 'TRUSTKEYS_GET_ACCOUNT': {
                 const accRes = await callBackground('GET_ACTIVE_ACCOUNT');
                 result = accRes.account;
                 break;
-            case 'TRUSTKEYS_SIGN':
+            }
+            case 'TRUSTKEYS_SIGN': {
                 const signRes = await callBackground('SIGN', { message: payload.message });
                 result = signRes.signature;
                 break;
-            case 'TRUSTKEYS_SIGN_MESSAGE':
+            }
+            case 'TRUSTKEYS_SIGN_MESSAGE': {
                 const signMsgRes = await callBackground('SIGN_MESSAGE', { message: payload.message });
                 result = signMsgRes.signature;
                 break;
-            case 'TRUSTKEYS_GET_KEY_ATTESTATION':
+            }
+            case 'TRUSTKEYS_GET_KEY_ATTESTATION': {
                 const attRes = await callBackground('GET_KEY_ATTESTATION');
                 result = attRes.attestation;
                 break;
-            case 'TRUSTKEYS_VERIFY':
+            }
+            case 'TRUSTKEYS_VERIFY': {
                 const verifyRes = await callBackground('VERIFY', {
                     message: payload.message,
                     signature: payload.signature,
@@ -56,47 +64,58 @@ window.addEventListener('message', async (event) => {
                 });
                 result = verifyRes.isValid;
                 break;
-            case 'TRUSTKEYS_ENCRYPT':
+            }
+            case 'TRUSTKEYS_ENCRYPT': {
                 const encRes = await callBackground('ENCRYPT', { message: payload.message, publicKey: payload.publicKey });
                 result = encRes.result;
                 break;
-            case 'TRUSTKEYS_DECRYPT':
+            }
+            case 'TRUSTKEYS_DECRYPT': {
                 // Payload from API is { data }
                 const decRes = await callBackground('DECRYPT', { data: payload.data });
                 result = decRes.decrypted;
                 break;
-            case 'TRUSTKEYS_CONNECT':
+            }
+            case 'TRUSTKEYS_CONNECT': {
                 const connRes = await callBackground('CONNECT', { origin: window.location.origin });
                 result = connRes.success;
                 break;
-            case 'TRUSTKEYS_CHECK_CONNECTION':
+            }
+            case 'TRUSTKEYS_CHECK_CONNECTION': {
                 const checkRes = await callBackground('CHECK_CONNECTION', { origin: window.location.origin });
                 result = checkRes.connected;
                 break;
-            case 'TRUSTKEYS_HANDSHAKE':
+            }
+            case 'TRUSTKEYS_HANDSHAKE': {
                 const shakeRes = await callBackground('HANDSHAKE');
                 result = shakeRes.extensionId;
                 break;
-            case 'TRUSTKEYS_GENERATE_SESSION_KEY':
+            }
+            case 'TRUSTKEYS_GENERATE_SESSION_KEY': {
                 const genRes = await callBackground('GENERATE_SESSION_KEY');
                 result = genRes.key;
                 break;
-            case 'TRUSTKEYS_WRAP_SESSION_KEY':
+            }
+            case 'TRUSTKEYS_WRAP_SESSION_KEY': {
                 const wrapRes = await callBackground('WRAP_SESSION_KEY', { sessionKey: payload.sessionKey, publicKey: payload.publicKey });
                 result = wrapRes.wrappedKey;
                 break;
-            case 'TRUSTKEYS_UNWRAP_SESSION_KEY':
+            }
+            case 'TRUSTKEYS_UNWRAP_SESSION_KEY': {
                 const unwrapRes = await callBackground('UNWRAP_SESSION_KEY', { wrappedKey: payload.wrappedKey });
                 result = unwrapRes.sessionKey;
                 break;
-            case 'TRUSTKEYS_UNWRAP_MANY_SESSION_KEYS':
+            }
+            case 'TRUSTKEYS_UNWRAP_MANY_SESSION_KEYS': {
                 const unwrapManyRes = await callBackground('UNWRAP_MANY_SESSION_KEYS', { wrappedKeys: payload.wrappedKeys });
                 result = unwrapManyRes.sessionKeys;
                 break;
-            case 'TRUSTKEYS_DECRYPT_MANY':
+            }
+            case 'TRUSTKEYS_DECRYPT_MANY': {
                 const decManyRes = await callBackground('DECRYPT_MANY', { items: payload.items });
                 result = decManyRes.results;
                 break;
+            }
             default:
                 return; // Ignore unknown types
         }
