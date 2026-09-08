@@ -86,7 +86,12 @@ jobs:
           # Full history: a key committed and later removed is still exposed,
           # so scanning only the tip would miss exactly the cases that matter.
           fetch-depth: 0
-      - uses: gitleaks/gitleaks-action@ff98106e4c7b2bc287b24eaf42907196329070c7 # v2
+      # v3 only migrates the action runtime node20 -> node24; inputs, outputs and
+      # the gitleaks binary it installs (8.24.3) are unchanged. Not cosmetic: the
+      # runners drop Node 20 entirely on 2026-09-16, which would stop v2 running at
+      # all. Suppressions live in .gitleaks.toml, which is written against the
+      # quirks of that exact binary version — re-verify it if this pin moves.
+      - uses: gitleaks/gitleaks-action@e0c47f4f8be36e29cdc102c57e68cb5cbf0e8d1e # v3.0.0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 

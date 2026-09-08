@@ -1,0 +1,36 @@
+# Gitleaks configuration for the secret-scan gate in .github/workflows/security.yml.
+#
+# The scan runs over full history (fetch-depth: 0), so a finding cannot be retracted
+# by editing the working tree — the commit that introduced it stays scannable forever.
+# Suppressions therefore live here rather than as `gitleaks:allow` source comments.
+#
+# Two behaviours of gitleaks 8.24.3 (the version the pinned action installs) shape
+# this file, both verified against that binary:
+#
+#   - The plural `[[allowlists]]` table is silently ignored when extending the default
+#     config; only the singular `[allowlist]` below takes effect. A rule written the
+#     other way looks correct and suppresses nothing.
+#   - `condition = "AND"` is not honoured here — clauses combine as OR, so *any* one
+#     of them suppresses the finding on its own. That is why this allowlist carries a
+#     `regexes` entry and deliberately no `paths` entry: a path clause would OR in and
+#     blind the scanner to every future secret committed to that file.
+#
+# Keep entries matched to an exact known-public value, never to a location.
+
+[extend]
+# Inherit the upstream rule set; this file only subtracts from it.
+useDefault = true
+
+[allowlist]
+description = """
+Golden test vector, not a credential: sha256("null") — the digest of an absent key
+envelope in the v1.4.0 message signing body (audit M-8), asserted in
+packages/crypto-core/test/byte-compat.test.js. It is the fixed output of a public
+function over a public input; the assertion on the next line recomputes it with
+createHash to prove exactly that. High entropy over a 64-hex constant is what trips
+the generic-api-key rule.
+
+Scoped to this literal value, so a real key committed to that same test file is
+still caught.
+"""
+regexes = ['''74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b''']
