@@ -102,11 +102,31 @@ export const launchPopup = async (route, params = {}) => {
 // must not be trusted for permission checks.
 
 // True only for the extension's own pages (popup / dashboard index.html).
+//
 // Note: content scripts also have sender.id === chrome.runtime.id, so the id
-// alone is NOT sufficient — we additionally require the extension-page URL.
-export const isInternalSender = (sender) =>
-    !!sender && sender.id === chrome.runtime.id &&
-    !!sender.url && sender.url.includes('index.html');
+// alone is NOT sufficient — we additionally require the sender's URL to be one
+// of OUR pages.
+//
+// That URL test has to be a check on the extension ORIGIN, never a substring
+// (audit N-1). It used to be `sender.url.includes('index.html')`, and for a
+// content-script message `sender.url` is the URL of the PAGE — a string the
+// site chooses. Any connected site served from a path containing 'index.html'
+// therefore passed as internal, which handed it approval-free SIGN in every
+// context (login, multisig, content — only SIGN_MESSAGE is domain-restricted),
+// silent SIGN_MESSAGE without an autoSign grant, and a touchActivity() on
+// every message, which held the vault open forever and reopened M-4.
+//
+// getURL('') is 'chrome-extension://<id>/' ('moz-extension://…' on Firefox):
+// a scheme and origin no web page can ever be served from, so a page URL
+// cannot start with it. Fails closed if getURL is unavailable — a fallback to
+// a weaker check is the downgrade path this project deliberately avoids.
+const EXTENSION_PAGE = 'index.html';
+
+export const isInternalSender = (sender) => {
+    if (!sender || sender.id !== chrome.runtime.id || !sender.url) return false;
+    const base = chrome.runtime.getURL?.('');
+    return !!base && sender.url.startsWith(`${base}${EXTENSION_PAGE}`);
+};
 
 // The authoritative origin of the sender, or null if Chrome didn't provide one
 // (in which case callers must deny, not fall back to a payload-supplied origin).

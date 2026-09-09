@@ -33,10 +33,36 @@ describe('isInternalSender', () => {
         expect(utils.isInternalSender({ id: EXT_ID })).toBe(false); // no url
     });
 
-    it('is not fooled by a page URL that merely mentions index.html', () => {
-        // The id has to match too — a page cannot forge that.
+    // audit N-1. This is the case the guard actually has to survive, and the
+    // test that used to stand here missed it: it passed `id: 'not-us'`, so the
+    // guard rejected on the ID and the URL half was never exercised. A content
+    // script carries OUR id, and its sender.url is the PAGE's url — a string
+    // the site picks. Under the old `url.includes('index.html')` every
+    // assertion below returned true, i.e. approval-free signing for any
+    // connected site willing to serve itself from that path.
+    it('REJECTS a connected site that serves itself from an index.html path', () => {
+        for (const url of [
+            'https://evil.example/index.html',
+            'https://evil.example/index.html?route=sign',
+            'https://evil.example/app/index.html#/x',
+            'https://evil.example/index.html/deeper',
+        ]) {
+            expect(utils.isInternalSender({ id: EXT_ID, origin: 'https://evil.example', url })).toBe(false);
+        }
+    });
+
+    it('REJECTS a page URL that merely embeds the extension origin', () => {
+        // startsWith, not includes — the extension origin has to be the URL's
+        // actual scheme+host, not a substring parked in a path or query.
         expect(utils.isInternalSender({
-            id: 'not-us', url: `https://evil.example/index.html`,
+            id: EXT_ID,
+            url: `https://evil.example/?u=chrome-extension://${EXT_ID}/index.html`,
+        })).toBe(false);
+    });
+
+    it('rejects a foreign extension even on a real extension-page URL', () => {
+        expect(utils.isInternalSender({
+            id: 'not-us', url: `chrome-extension://${EXT_ID}/index.html`,
         })).toBe(false);
     });
 });

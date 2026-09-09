@@ -54,6 +54,10 @@ export const installChrome = ({ local: localSeed = {}, session: sessionSeed = {}
         runtime: {
             id: EXT_ID,
             lastError: null,
+            // 'chrome-extension://<id>/' + path, exactly like the real API. The
+            // internal-sender guard is a prefix test against getURL(''), so the
+            // mock has to model the trailing slash (audit N-1).
+            getURL: (path = '') => `chrome-extension://${EXT_ID}/${path}`,
             getManifest: () => ({
                 content_scripts: [
                     { world: 'MAIN', js: ['src/content/api_main.js'] },
