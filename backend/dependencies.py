@@ -70,10 +70,22 @@ else:
 # in_memory_fallback_enabled: if the shared store (Redis) becomes unreachable,
 # degrade to in-memory limiting rather than erroring out or dropping limits
 # entirely — limits stay enforced (per-process) until Redis recovers.
+#
+# key_style="endpoint": slowapi's DEFAULT is "url", which buckets the counter by
+# the CONCRETE url — so /auth/nonce/<a> and /auth/nonce/<b> were separate quotas
+# and any limit on a path-parameterized route was bypassed by rotating the
+# parameter (audit N-2). That silently voided most of the M-7 limits, including
+# the two that exist to stop enumeration: GET /users/{address} (an account
+# existence oracle) and the unauthenticated GET /auth/nonce/{address} (one row
+# written per distinct address). Keying on the endpoint FUNCTION makes one
+# quota per route per client, which is what every one of those decorators
+# already claims to do. Routes with no path parameter were always correct,
+# which is why the tests — all of which hit a fixed url — never caught it.
 limiter = Limiter(
     key_func=client_ip,
     storage_uri=_STORAGE_URI,
     in_memory_fallback_enabled=True,
+    key_style="endpoint",
 )
 
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="auth/login")
