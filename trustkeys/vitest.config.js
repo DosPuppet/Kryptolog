@@ -16,5 +16,12 @@ export default defineConfig({
   test: {
     environment: 'node',
     include: ['test/**/*.test.js'],
+    // The vault KDF is 600k PBKDF2 iterations BY DESIGN, and a test that boots
+    // a vault pays it more than once — the .kvault round-trip derives on
+    // export, on import and on the re-save. That blows vitest's 5s default on
+    // an unremarkable machine, so the suite failed locally while CI called it
+    // green (audit N-3). The slowness is the product working; the budget was
+    // just never raised to match.
+    testTimeout: 30000,
   },
 });
