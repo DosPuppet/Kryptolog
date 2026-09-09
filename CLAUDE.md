@@ -101,8 +101,12 @@ wire-format boundary) → WP8+WP10 → WP9.
 Record the commit SHA in the status column as each lands.
 
 **All eleven work packages are done.** The audit's Immediate + Short Term tiers are
-closed; structural debt (O-2…O-6, L-4, L-7, L-12, L-14) is untouched and still
-deferred. `roadmap/AUDIT-REMEDIATION.md` has been deleted now that every item in it
+closed; structural debt (O-2…O-6, L-4, L-7, L-12) is untouched and still
+deferred. **L-14 is done** — `start_all.sh` and `backend/run_dev.sh` no longer
+`source` the env file; they parse it through `scripts/load_env.sh`, covered by
+`backend/tests/test_env_loader.py`.
+
+`roadmap/AUDIT-REMEDIATION.md` has been deleted now that every item in it
 landed — `AUDIT.md` section 0 carries the finding-by-finding status, and this table
 carries the commits.
 

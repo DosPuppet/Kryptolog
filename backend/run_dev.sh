@@ -1,18 +1,24 @@
 #!/bin/bash
 # Run FastAPI backend with hot-reload
 
+# Ensure we are in the script's directory (backend). This has to happen BEFORE
+# the .env load below, which looks for a relative ./.env — run from the repo
+# root, the old ordering silently found no file and loaded nothing.
+cd "$(dirname "$0")"
+
 # Set allow origins for development (Vite default + Self)
 export ALLOWED_ORIGINS="http://localhost:5173,http://127.0.0.1:5173"
 
-# Load environment variables from .env
-if [ -f .env ]; then
-  set -a
-  source .env
-  set +a
+# Parsed as data, never executed (audit L-14) — same defect and same fix as
+# start_all.sh; see scripts/load_env.sh for what `source .env` allowed through.
+if ! source ../scripts/load_env.sh; then
+    echo "ERROR: scripts/load_env.sh is missing — refusing to start rather than"
+    echo "  running with a silently unloaded environment."
+    exit 1
 fi
-
-# Ensure we are in the script's directory (backend)
-cd "$(dirname "$0")"
+if [ -f .env ]; then
+  kryptolog_load_env .env
+fi
 
 # JWTs are HS256-signed (PyJWT). For a persistent dev secret, run
 # `python generate_server_keys.py` and set KRYPTOLOG_JWT_SECRET in .env.

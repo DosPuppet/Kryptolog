@@ -13,12 +13,17 @@ if ! command -v pm2 &> /dev/null; then
 fi
 
 # 2. Setup Environment Variables
-# Load from .env if it exists
+# Parsed as data, never executed (audit L-14): `set -a; source backend/.env`
+# ran the env file as bash, so any $(...) or backtick in a pasted secret
+# executed here, with the whole ecosystem about to start. See scripts/load_env.sh.
+if ! source scripts/load_env.sh; then
+    echo "ERROR: scripts/load_env.sh is missing — refusing to start rather than"
+    echo "  running with a silently unloaded environment (no DATABASE_URL, no JWT secret)."
+    exit 1
+fi
 if [ -f backend/.env ]; then
   echo "Loading variables from backend/.env"
-  set -a
-  source backend/.env
-  set +a
+  kryptolog_load_env backend/.env
 fi
 
 # Apply Development Defaults if not set
