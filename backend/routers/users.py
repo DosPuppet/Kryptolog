@@ -1,11 +1,10 @@
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
-from dependencies import limiter
 from sqlalchemy.orm import Session
 from sqlalchemy import func
 from typing import List
 import models, schemas
 from database import get_db
-from dependencies import get_current_user
+from dependencies import limiter, get_current_user
 from security.crypto_validation import LEGACY_MIN_KEY_LEN
 from security.usernames import InvalidUsername, normalize_username, username_taken
 

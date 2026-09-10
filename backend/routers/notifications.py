@@ -1,9 +1,8 @@
 from fastapi import APIRouter, Depends, HTTPException, Request
-from dependencies import limiter
 from sqlalchemy.orm import Session
 import models, schemas
 from database import get_db
-from dependencies import get_current_user
+from dependencies import limiter, get_current_user
 from security.url_guard import UnsafeUrlError, validate_push_endpoint
 
 router = APIRouter(

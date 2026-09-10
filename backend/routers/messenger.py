@@ -1,5 +1,4 @@
 from fastapi import APIRouter, Depends, HTTPException, Query, WebSocket, WebSocketDisconnect, status, Request
-from dependencies import limiter
 from sqlalchemy import or_, func, case
 from sqlalchemy.orm import Session, defer, joinedload
 from typing import List
@@ -8,7 +7,7 @@ import asyncio
 import logging
 import models, schemas, config
 from database import get_db, SessionLocal
-from dependencies import get_current_user, user_for_token
+from dependencies import limiter, get_current_user, user_for_token
 from websocket_manager import manager
 from utils.push import notify_user_push_async
 from security.crypto_validation import is_usable_encryption_key

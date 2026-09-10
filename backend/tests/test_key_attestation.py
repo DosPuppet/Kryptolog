@@ -8,7 +8,6 @@ ML-DSA-44 round-trip through the endpoint (liboqs, no mocks).
 """
 
 import sys, os
-import pytest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 

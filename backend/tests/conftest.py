@@ -34,7 +34,7 @@ os.environ["VAPID_PRIVATE_KEY"] = "fake_priv"
 os.environ["VAPID_SUBJECT"] = "mailto:test@test.com"
 
 from fastapi.testclient import TestClient
-from sqlalchemy import create_engine, event
+from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
 from models import Base

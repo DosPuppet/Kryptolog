@@ -1,5 +1,4 @@
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
-from dependencies import limiter
 from sqlalchemy.orm import Session, defer, joinedload
 from sqlalchemy import func
 from sqlalchemy.exc import IntegrityError
@@ -7,7 +6,7 @@ from typing import List
 from datetime import datetime, timezone, timedelta
 import models, schemas
 from database import get_db
-from dependencies import get_current_user
+from dependencies import limiter, get_current_user
 from websocket_manager import manager
 from utils.push import notify_user_push_async
 from security import authorization
@@ -90,15 +89,22 @@ def get_secrets(
     # ship every ciphertext to the worker for Pydantic to discard — the bytes
     # this endpoint was criticised for moving would simply move one step less
     # far. Content comes from GET /secrets/{id}.
-    results = db.query(models.Secret, models.AccessGrant.encrypted_key)\
-        .options(joinedload(models.Secret.owner), defer(models.Secret.encrypted_data))\
-        .join(models.AccessGrant, (models.AccessGrant.secret_id == models.Secret.id) & (models.AccessGrant.grantee_address == current_user.address))\
-        .outerjoin(models.MultisigWorkflow, models.MultisigWorkflow.secret_id == models.Secret.id)\
-        .filter(models.Secret.owner_address == current_user.address)\
-        .filter(models.MultisigWorkflow.id == None)\
-        .order_by(models.Secret.id.desc())\
-        .limit(limit).offset(offset)\
+    results = (
+        db.query(models.Secret, models.AccessGrant.encrypted_key)
+        .options(joinedload(models.Secret.owner), defer(models.Secret.encrypted_data))
+        .join(
+            models.AccessGrant,
+            (models.AccessGrant.secret_id == models.Secret.id)
+            & (models.AccessGrant.grantee_address == current_user.address),
+        )
+        .outerjoin(models.MultisigWorkflow, models.MultisigWorkflow.secret_id == models.Secret.id)
+        .filter(models.Secret.owner_address == current_user.address)
+        .filter(models.MultisigWorkflow.id.is_(None))
+        .order_by(models.Secret.id.desc())
+        .limit(limit)
+        .offset(offset)
         .all()
+    )
 
     response = []
     for secret, key in results:
@@ -115,7 +121,7 @@ def update_secret(request: Request, secret_id: int, secret_update: schemas.Secre
         raise HTTPException(status_code=404, detail="Secret not found")
     
     if not authorization.can_manage_secret(db, secret, current_user.address):
-         raise HTTPException(status_code=403, detail="Not authorized")
+        raise HTTPException(status_code=403, detail="Not authorized")
 
     # Prevent editing a workflow-managed secret directly
     workflow = db.query(models.MultisigWorkflow).filter(models.MultisigWorkflow.secret_id == secret_id).first()
@@ -250,13 +256,13 @@ def get_secret_access(
         raise HTTPException(status_code=404, detail="Secret not found")
         
     if not authorization.can_manage_secret(db, secret, current_user.address):
-         raise HTTPException(status_code=403, detail="Not authorized")
+        raise HTTPException(status_code=403, detail="Not authorized")
 
     # Bulk-delete expired grants in one SQL roundtrip
     now = datetime.now(timezone.utc)
     db.query(models.AccessGrant).filter(
         models.AccessGrant.secret_id == secret_id,
-        models.AccessGrant.expires_at != None,
+        models.AccessGrant.expires_at.isnot(None),
         models.AccessGrant.expires_at <= now
     ).delete(synchronize_session="fetch")
     db.commit()
@@ -279,7 +285,7 @@ def get_shared_secrets(
     # Bulk-delete expired grants for this user
     db.query(models.AccessGrant).filter(
         models.AccessGrant.grantee_address == current_user.address,
-        models.AccessGrant.expires_at != None,
+        models.AccessGrant.expires_at.isnot(None),
         models.AccessGrant.expires_at <= now
     ).delete(synchronize_session="fetch")
     db.commit()
@@ -291,12 +297,14 @@ def get_shared_secrets(
             .defer(models.Secret.encrypted_data)
             .joinedload(models.Secret.owner),
         joinedload(models.AccessGrant.grantee)
-    ).join(models.Secret)\
-    .outerjoin(models.MultisigWorkflow, models.MultisigWorkflow.secret_id == models.Secret.id)\
-    .filter(
+    ).join(
+        models.Secret
+    ).outerjoin(
+        models.MultisigWorkflow, models.MultisigWorkflow.secret_id == models.Secret.id
+    ).filter(
         models.AccessGrant.grantee_address == current_user.address,
         models.Secret.owner_address != current_user.address,
-        models.MultisigWorkflow.id == None
+        models.MultisigWorkflow.id.is_(None),
     ).order_by(models.AccessGrant.id.desc()).limit(limit).offset(offset).all()
 
 

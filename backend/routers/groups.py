@@ -1,12 +1,11 @@
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
-from dependencies import limiter
 from sqlalchemy import func
 from sqlalchemy.orm import Session, joinedload
 from typing import List
 import uuid
 import models, schemas
 from database import get_db
-from dependencies import get_current_user
+from dependencies import limiter, get_current_user
 from websocket_manager import manager
 from utils.push import notify_many_push_async
 from security.crypto_validation import is_usable_encryption_key
