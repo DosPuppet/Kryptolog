@@ -60,15 +60,33 @@ class SecretBase(BaseModel):
 class SecretCreate(SecretBase):
     pass
 
-class SecretResponse(SecretBase):
+class SecretSummaryResponse(BaseModel):
+    """A secret WITHOUT its ciphertext — what the list endpoints return.
+
+    Listing every secret with its `encrypted_data` inline shipped up to 500 KB
+    per row for content the list never renders: the dashboard draws itself from
+    `name` and `encrypted_key`, and the payload is read in exactly one place,
+    on demand, for one secret at a time (audit O-3). Content now comes from
+    `GET /secrets/{id}`.
+
+    A separate model rather than `encrypted_data: Optional[str]` on
+    SecretResponse: an optional field cannot tell "not sent" from "empty", so a
+    caller that forgets to fetch the detail decrypts nothing and says nothing.
+    Omitting the field structurally makes that a KeyError at the first attempt.
+    """
     id: int
     owner_address: str
     created_at: datetime
-    encrypted_data: str # Relax output limit for legacy secrets 
+    name: str
+    type: str
     encrypted_key: Optional[str] = None # The specific key for the requesting user (joined from AccessGrant)
     owner: UserResponse
 
     model_config = ConfigDict(from_attributes=True)
+
+class SecretResponse(SecretSummaryResponse):
+    """One secret WITH its ciphertext. Detail endpoints only."""
+    encrypted_data: str # Relax output limit for legacy secrets
 
 class FileChunkUpload(BaseModel):
     secret_id: int
@@ -116,16 +134,31 @@ class AccessGrantCreate(BaseModel):
     expires_in: Optional[int] = None # Seconds
 
 class AccessGrantResponse(BaseModel):
+    """A grant on its own — who holds access, and until when.
+
+    No nested secret at all (audit O-3). `GET /secrets/{id}/access` lists one
+    secret's grantees, so embedding the secret meant N copies of the same
+    ciphertext to answer a question that is entirely about the grantees; the
+    share modal reads only the grantee, the expiry and the id.
+    """
     id: int
     secret_id: int
     grantee_address: str
     encrypted_key: str
     created_at: datetime
     expires_at: Optional[datetime]
-    secret: SecretResponse
     grantee: Optional[UserResponse]
 
     model_config = ConfigDict(from_attributes=True)
+
+class SharedSecretResponse(AccessGrantResponse):
+    """A grant plus the secret it points at, for `GET /secrets/shared-with-me`.
+
+    Unlike the ACL listing this one is a secrets list — it has to render a
+    title and an owner — so it carries the summary. Still no ciphertext: the
+    content comes from `GET /secrets/{id}` like any other secret.
+    """
+    secret: SecretSummaryResponse
 
 class LoginRequest(BaseModel):
     address: str = Field(..., max_length=MAX_ADDRESS_LEN)
@@ -168,7 +201,15 @@ class MultisigWorkflowRecipientResponse(BaseModel):
 
     model_config = ConfigDict(from_attributes=True)
 
-class MultisigWorkflowResponse(MultisigWorkflowBase):
+class MultisigWorkflowSummaryResponse(MultisigWorkflowBase):
+    """A workflow WITHOUT its secret's ciphertext — the listing shape (O-3).
+
+    Everything a client needs to draw the list and decide whether the user owes
+    a signature: status, threshold, and the signer/recipient rows. The
+    ciphertext a signer approves comes from `GET /multisig/workflow/{id}`,
+    which is also the copy that must be hashed — the server recomputes that
+    hash from the stored row, so signing a stale list copy could only fail.
+    """
     id: int
     secret_id: int
     owner_address: str
@@ -177,12 +218,16 @@ class MultisigWorkflowResponse(MultisigWorkflowBase):
     rejected_by: Optional[str] = None
     created_at: datetime
     owner: UserResponse
-    secret: SecretResponse # Include Secret Data so signers can access encrypted_data
+    secret: SecretSummaryResponse
     owner_encrypted_key: Optional[str] = None # Explicitly pass owner key here to avoid nesting issues
     signers: List[MultisigWorkflowSignerResponse]
     recipients: List[MultisigWorkflowRecipientResponse]
 
     model_config = ConfigDict(from_attributes=True)
+
+class MultisigWorkflowResponse(MultisigWorkflowSummaryResponse):
+    """One workflow WITH its secret's ciphertext — signers need it to approve."""
+    secret: SecretResponse
 
 class MultisigSignatureRequest(BaseModel):
     # 64KB limit for PQC signatures

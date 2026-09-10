@@ -15,6 +15,9 @@ export const API_ENDPOINTS = {
     },
     SECRETS: {
         LIST: `${API_BASE_URL}/secrets`,
+        // The lists return metadata only (audit O-3) — a secret's ciphertext
+        // comes from here, one secret at a time, when the user opens it.
+        GET: (secretId) => `${API_BASE_URL}/secrets/${secretId}`,
         CREATE: `${API_BASE_URL}/secrets`,
         SHARE: `${API_BASE_URL}/secrets/share`,
         SHARED_WITH: `${API_BASE_URL}/secrets/shared-with-me`,

@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { X, Shield, AlertTriangle, Eye, EyeOff } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import { usePQC } from '../context/PQCContext';
@@ -9,9 +9,22 @@ import { downloadMultisigProof } from './multisig/proof';
 import { SignersList, RecipientsList } from './multisig/WorkflowLists';
 import DecryptedContentPanel from './multisig/DecryptedContentPanel';
 
-export default function MultisigWorkflow({ workflow, onClose, onUpdate, onDelete, setUploadProgress, setStatusMessage }) {
+export default function MultisigWorkflow({ workflow: listWorkflow, onClose, onUpdate, onDelete, setUploadProgress, setStatusMessage }) {
     const { user, token } = useAuth();
     const { encrypt: encryptPQC, decrypt: decryptPQC, sign: signPQC } = usePQC();
+
+    // The workflow list no longer carries its secret's ciphertext (audit O-3),
+    // so this modal — the only place that needs it — fetches the full workflow
+    // when it opens. The list row still draws the header while that lands.
+    //
+    // Signing benefits beyond the byte count: the approval message is the hash
+    // of the STORED ciphertext, which the server recomputes from the row. A
+    // list copy that had gone stale could only ever produce "Invalid approval
+    // signature"; a freshly fetched one signs what is actually there.
+    const [detail, setDetail] = useState(null);
+    const [detailError, setDetailError] = useState('');
+    const workflow = detail || listWorkflow;
+    const contentReady = !!detail;
 
     const [isSigning, setIsSigning] = useState(false);
     const [isRejecting, setIsRejecting] = useState(false);
@@ -22,6 +35,29 @@ export default function MultisigWorkflow({ workflow, onClose, onUpdate, onDelete
     const [creatorSignature, setCreatorSignature] = useState(null);
     const [creatorSignedContent, setCreatorSignedContent] = useState(null);
     const [error, setError] = useState('');
+
+    useEffect(() => {
+        let cancelled = false;
+        setDetail(null);
+        setDetailError('');
+        (async () => {
+            try {
+                const res = await fetch(
+                    `${API_ENDPOINTS.SECRETS.LIST}/../multisig/workflow/${listWorkflow.id}`,
+                    { headers: { 'Authorization': `Bearer ${token}` } }
+                );
+                if (!res.ok) throw new Error(`Could not load workflow (${res.status})`);
+                const full = await res.json();
+                if (!cancelled) setDetail(full);
+            } catch (e) {
+                console.error("Workflow detail fetch failed", e);
+                if (!cancelled) setDetailError(e.message);
+            }
+        })();
+        // Ignore a response that arrives after the modal moved on to another
+        // workflow — it would hand the wrong ciphertext to the sign button.
+        return () => { cancelled = true; };
+    }, [listWorkflow.id, token]);
 
     const isOwner = workflow.owner_address.toLowerCase() === user.address.toLowerCase();
     const mySignerEntry = workflow.signers.find(s => s.user_address.toLowerCase() === user.address.toLowerCase());
@@ -107,6 +143,9 @@ export default function MultisigWorkflow({ workflow, onClose, onUpdate, onDelete
                 workflow, user, token, decryptPQC, signPQC, encryptPQC, onProgress
             });
             onUpdate(updatedWf);
+            // /sign returns the full workflow, so this keeps the open modal on
+            // the same footing as a fresh detail fetch.
+            setDetail(updatedWf);
             finishProgress();
             // Don't close, let them see success
         } catch (e) {
@@ -129,7 +168,9 @@ export default function MultisigWorkflow({ workflow, onClose, onUpdate, onDelete
                 body: JSON.stringify({})
             });
             if (res.ok) {
-                onUpdate(await res.json());
+                const updatedWf = await res.json();
+                onUpdate(updatedWf);
+                setDetail(updatedWf);
             } else {
                 const err = await res.json();
                 throw new Error(err.detail || "Failed to reject workflow");
@@ -213,10 +254,17 @@ export default function MultisigWorkflow({ workflow, onClose, onUpdate, onDelete
                     {canView && !decryptedContent && (
                         <button
                             onClick={fetchAndDecrypt}
-                            className="w-full border border-slate-300 dark:border-slate-600 hover:bg-slate-50 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-300 py-2 rounded-lg flex items-center justify-center gap-2"
+                            disabled={!contentReady}
+                            className="w-full border border-slate-300 dark:border-slate-600 hover:bg-slate-50 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-300 py-2 rounded-lg flex items-center justify-center gap-2 disabled:opacity-50"
                         >
-                            <Eye className="w-4 h-4" /> View Secret Content
+                            <Eye className="w-4 h-4" /> {contentReady ? 'View Secret Content' : 'Loading…'}
                         </button>
+                    )}
+
+                    {detailError && (
+                        <div className="p-3 bg-red-50 text-red-600 rounded-lg text-sm flex items-center gap-2">
+                            <AlertTriangle className="w-4 h-4" /> {detailError}
+                        </div>
                     )}
 
                     {decryptedContent && (
@@ -251,7 +299,9 @@ export default function MultisigWorkflow({ workflow, onClose, onUpdate, onDelete
                         <div className="flex gap-3">
                             <button
                                 onClick={handleSign}
-                                disabled={isSigning || isRejecting}
+                                // Signing hashes the ciphertext, so it waits
+                                // for the detail fetch (audit O-3).
+                                disabled={isSigning || isRejecting || !contentReady}
                                 className="flex-1 bg-indigo-600 hover:bg-indigo-500 text-white py-3 rounded-lg font-medium flex items-center justify-center gap-2 disabled:opacity-50"
                             >
                                 {isSigning ? 'Signing...' : (

@@ -134,6 +134,28 @@ Two structural items have been closed as well:
   nothing on screen to say so — `frontend/src/utils/paging.js` walks to the end
   and every list caller goes through it. Covered by
   `backend/tests/test_pagination.py` and `frontend/src/test/paging.test.js`.
+- **The O-3 byte follow-up is done too** — paging bounded rows, not bytes, so
+  the lists now return metadata and **`GET /secrets/{id}` returns content**.
+  Four list endpoints stopped embedding `encrypted_data`; `/secrets/{id}/access`
+  dropped its nested secret entirely (it was one full copy per grantee). Measured
+  at the schema's 500 KB ceiling: a page of 50 went 26.00 MB → **0.40 MB**.
+
+  Three things to know before touching this:
+  - **`GET /secrets/{secret_id}` must stay declared below every literal
+    `/secrets/...` route.** Above `/secrets/shared-with-me` it swallows that path
+    and returns a 422 on an int that was never an int. `test_secret_detail.py`
+    has a test for it because nothing about the failure points at route order.
+  - **Lists use `SecretSummaryResponse`, not an optional field**, and defer
+    `encrypted_data` in SQL as well — dropping it in the schema alone still ships
+    every ciphertext to the worker for Pydantic to discard.
+  - **The multisig modal hydrates on open** from `GET /multisig/workflow/{id}`;
+    it used to sign from the list copy. Signing needs the stored ciphertext's
+    hash, so a summary workflow is refused before any signature is produced
+    (`frontend/src/test/workflowContent.test.js`).
+
+  **Deploy the SPA and server together** — this is an API shape break. An old SPA
+  against a new server shows secrets it cannot decrypt. No `CRYPTO_CORE_VERSION`
+  bump: no crypto format changed, only the HTTP envelope.
 
 `roadmap/AUDIT-REMEDIATION.md` has been deleted now that every item in it
 landed — `AUDIT.md` section 0 carries the finding-by-finding status, and this table
@@ -141,12 +163,6 @@ carries the commits.
 
 ### Still open from the remediation
 
-- **`GET /secrets` still carries `encrypted_data`.** Pagination bounds the row
-  count, not the bytes: at the schema's 500 KB ceiling one page of 50 is still
-  ~26 MB. The complete fix is to drop the payload from the list and add a
-  `GET /secrets/{id}` — which does not exist today, so the list is currently the
-  only way to read a secret's content. That is a wire-format break for the SPA,
-  left as a deliberate follow-up rather than smuggled into the O-3 commit.
 - **End-to-end recipe not run.** Everything is covered by automated tests except the
   manual pass, which needs a running stack and a browser: two accounts exchanging DMs;
   the WebSocket connecting through the corrected nginx `/api/` block; a multi-chunk

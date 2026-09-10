@@ -1,6 +1,6 @@
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from dependencies import limiter
-from sqlalchemy.orm import Session, joinedload
+from sqlalchemy.orm import Session, defer, joinedload
 from sqlalchemy import func
 from sqlalchemy.exc import IntegrityError
 from typing import List
@@ -23,11 +23,30 @@ router = APIRouter(tags=["secrets"])
 # ceiling alone still let `?limit=-1` reach PostgreSQL as `LIMIT -1`, which is a
 # hard error rather than an empty page.
 #
-# Payload-bearing lists get the smaller ceiling; grant rows are metadata only.
+# The lists no longer carry `encrypted_data` at all (see SecretSummaryResponse),
+# so these bound row counts on responses that are metadata throughout.
 SECRET_PAGE_MAX = 100
 SECRET_PAGE_DEFAULT = 50
 GRANT_PAGE_MAX = 200
 GRANT_PAGE_DEFAULT = 100
+
+
+def _check_secret_access(secret_id: int, user_address: str, db: Session) -> models.Secret:
+    """Verify the user may read this secret, or raise.
+
+    The rules live in security.authorization so they cannot drift between the
+    endpoints that enforce them (KRY-001: expired grants used to keep unlocking
+    file chunks because only the listing endpoints checked expiry).
+    """
+    secret = db.query(models.Secret).filter(models.Secret.id == secret_id).first()
+    if not secret:
+        raise HTTPException(status_code=404, detail="Secret not found")
+
+    if not authorization.can_read_secret(db, secret, user_address):
+        raise HTTPException(status_code=403, detail="Not authorized")
+
+    return secret
+
 
 # Secrets
 @router.post("/secrets", response_model=schemas.SecretResponse)
@@ -57,7 +76,7 @@ def create_secret(request: Request, secret: schemas.SecretCreate, current_user: 
     new_secret.encrypted_key = secret.encrypted_key
     return new_secret
 
-@router.get("/secrets", response_model=List[schemas.SecretResponse])
+@router.get("/secrets", response_model=List[schemas.SecretSummaryResponse])
 @limiter.limit("60/minute")
 def get_secrets(
     request: Request,
@@ -66,8 +85,13 @@ def get_secrets(
     current_user: models.User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
+    # `encrypted_data` is deferred, not just absent from SecretSummaryResponse
+    # (audit O-3). Dropping it in the schema alone would still have Postgres
+    # ship every ciphertext to the worker for Pydantic to discard — the bytes
+    # this endpoint was criticised for moving would simply move one step less
+    # far. Content comes from GET /secrets/{id}.
     results = db.query(models.Secret, models.AccessGrant.encrypted_key)\
-        .options(joinedload(models.Secret.owner))\
+        .options(joinedload(models.Secret.owner), defer(models.Secret.encrypted_data))\
         .join(models.AccessGrant, (models.AccessGrant.secret_id == models.Secret.id) & (models.AccessGrant.grantee_address == current_user.address))\
         .outerjoin(models.MultisigWorkflow, models.MultisigWorkflow.secret_id == models.Secret.id)\
         .filter(models.Secret.owner_address == current_user.address)\
@@ -241,7 +265,7 @@ def get_secret_access(
         models.AccessGrant.secret_id == secret_id
     ).order_by(models.AccessGrant.id).limit(limit).offset(offset).all()
 
-@router.get("/secrets/shared-with-me", response_model=List[schemas.AccessGrantResponse])
+@router.get("/secrets/shared-with-me", response_model=List[schemas.SharedSecretResponse])
 @limiter.limit("60/minute")
 def get_shared_secrets(
     request: Request,
@@ -261,7 +285,11 @@ def get_shared_secrets(
     db.commit()
 
     return db.query(models.AccessGrant).options(
-        joinedload(models.AccessGrant.secret).joinedload(models.Secret.owner),
+        # Deferred for the same reason as GET /secrets: the schema drops the
+        # ciphertext, this stops it being fetched at all (audit O-3).
+        joinedload(models.AccessGrant.secret)
+            .defer(models.Secret.encrypted_data)
+            .joinedload(models.Secret.owner),
         joinedload(models.AccessGrant.grantee)
     ).join(models.Secret)\
     .outerjoin(models.MultisigWorkflow, models.MultisigWorkflow.secret_id == models.Secret.id)\
@@ -270,6 +298,38 @@ def get_shared_secrets(
         models.Secret.owner_address != current_user.address,
         models.MultisigWorkflow.id == None
     ).order_by(models.AccessGrant.id.desc()).limit(limit).offset(offset).all()
+
+
+# ORDERING MATTERS: this must stay BELOW every literal /secrets/... route.
+# FastAPI matches in declaration order, so a `{secret_id}` path declared above
+# `/secrets/shared-with-me` swallows it — the request never reaches the listing
+# and comes back as a 422 on an int that was never an int. Covered by a test,
+# because nothing else about the failure points at route order.
+@router.get("/secrets/{secret_id}", response_model=schemas.SecretResponse)
+@limiter.limit("120/minute")
+def get_secret(request: Request, secret_id: int,
+               current_user: models.User = Depends(get_current_user),
+               db: Session = Depends(get_db)):
+    """One secret with its ciphertext.
+
+    The lists stopped carrying `encrypted_data` (audit O-3) and this is where
+    it went. Same read rule as the chunk endpoints — owner, live grant, or
+    multisig participant — because it is the same question, asked through
+    `_check_secret_access` so the two cannot answer it differently (KRY-001).
+
+    The 120/min limit matches `get_chunk`: opening one secret is one request
+    here, and a client browsing its vault makes a burst of them.
+    """
+    secret = _check_secret_access(secret_id, current_user.address, db)
+
+    # The caller's own wrap, if they hold one. Multisig signers and recipients
+    # get theirs from the workflow instead, so this is legitimately None for
+    # them — `find_live_grant` also refuses an expired grant, which is the
+    # whole of KRY-001.
+    grant = authorization.find_live_grant(db, secret.id, current_user.address)
+    secret.encrypted_key = grant.encrypted_key if grant else None
+    return secret
+
 
 # NOTE: the /documents endpoints were removed (audit L-10). POST /documents
 # accepted an arbitrary `content_hash` and `signature`, verified neither, and
@@ -280,23 +340,6 @@ def get_shared_secrets(
 
 
 # --- File Chunks ---
-
-def _check_secret_access(secret_id: int, user_address: str, db: Session) -> models.Secret:
-    """Verify the user may read this secret, or raise.
-
-    The rules live in security.authorization so they cannot drift between the
-    endpoints that enforce them (KRY-001: expired grants used to keep unlocking
-    file chunks because only the listing endpoints checked expiry).
-    """
-    secret = db.query(models.Secret).filter(models.Secret.id == secret_id).first()
-    if not secret:
-        raise HTTPException(status_code=404, detail="Secret not found")
-
-    if not authorization.can_read_secret(db, secret, user_address):
-        raise HTTPException(status_code=403, detail="Not authorized")
-
-    return secret
-
 
 @router.post("/secrets/chunks", status_code=201)
 @limiter.limit("120/minute")

@@ -131,7 +131,7 @@ def create_multisig_workflow(request: Request, workflow: schemas.MultisigWorkflo
 
     return new_workflow
 
-@router.get("/workflows", response_model=List[schemas.MultisigWorkflowResponse])
+@router.get("/workflows", response_model=List[schemas.MultisigWorkflowSummaryResponse])
 @limiter.limit("60/minute")
 def list_multisig_workflows(
     request: Request,
@@ -154,7 +154,13 @@ def list_multisig_workflows(
             # selectinload for the collections: one extra query each, and
             # unlike a joined eager load it cannot interfere with LIMIT.
             joinedload(models.MultisigWorkflow.owner),
-            joinedload(models.MultisigWorkflow.secret).joinedload(models.Secret.owner),
+            # `encrypted_data` is deferred, not merely dropped from the response
+            # schema (audit O-3): without this the ciphertext still travels
+            # Postgres -> worker for every row of the page, and only Pydantic
+            # throws it away. The detail endpoint loads it normally.
+            joinedload(models.MultisigWorkflow.secret)
+                .defer(models.Secret.encrypted_data)
+                .joinedload(models.Secret.owner),
             selectinload(models.MultisigWorkflow.signers).joinedload(models.MultisigWorkflowSigner.user),
             selectinload(models.MultisigWorkflow.recipients).joinedload(models.MultisigWorkflowRecipient.user),
         )
@@ -180,7 +186,7 @@ def list_multisig_workflows(
         if not wf.secret:
             continue
 
-        val = schemas.MultisigWorkflowResponse.model_validate(wf)
+        val = schemas.MultisigWorkflowSummaryResponse.model_validate(wf)
 
         if wf.owner_address == current_user.address:
             key = owner_grants.get(wf.secret.id)

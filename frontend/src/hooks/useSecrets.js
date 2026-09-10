@@ -126,10 +126,24 @@ export function useSecrets(authType, encryptionPublicKey, pqcAccount, options = 
             const fileKey = await secureDecrypt(encKeyBlob);
             fileKeyCache.current[encKeyBlob] = fileKey; // future title renders are free
 
-            // 2. Decrypt Content
-            reportProgress(50, 'Decrypting Content...');
-            const encryptedDataHex = isShared ? item.secret.encrypted_data : item.encrypted_data;
+            // 2. Fetch the content, then decrypt it.
+            //
+            // The lists stopped carrying `encrypted_data` (audit O-3): they
+            // render titles, and shipping every ciphertext the account holds on
+            // every dashboard load was up to 500 KB per row nobody read. This
+            // is the only place in the SPA that needs a secret's content, so it
+            // is the only place that fetches it.
+            reportProgress(50, 'Fetching Content...');
+            const secretId = isShared ? item.secret.id : item.id;
+            const res = await fetch(API_ENDPOINTS.SECRETS.GET(secretId), {
+                headers: { 'Authorization': `Bearer ${token}` }
+            });
+            if (!res.ok) {
+                throw new Error(`Could not load secret content (${res.status})`);
+            }
+            const { encrypted_data: encryptedDataHex } = await res.json();
 
+            reportProgress(60, 'Decrypting Content...');
             const encDataObj = JSON.parse(encryptedDataHex);
             const decrypted = await decryptSymmetric(encDataObj, fileKey);
 
