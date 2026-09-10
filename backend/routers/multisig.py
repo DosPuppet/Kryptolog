@@ -8,6 +8,7 @@ import models, schemas, auth
 from database import get_db
 from dependencies import get_current_user
 from utils.push import notify_user_push
+from security import authorization
 
 router = APIRouter(
     prefix="/multisig",
@@ -127,29 +128,18 @@ def create_multisig_workflow(request: Request, workflow: schemas.MultisigWorkflo
 @router.get("/workflows", response_model=List[schemas.MultisigWorkflowResponse])
 @limiter.limit("60/minute")
 def list_multisig_workflows(request: Request, current_user: models.User = Depends(get_current_user), db: Session = Depends(get_db)):
-    # Return workflows where I am owner OR signer
-    # Using python filtering for simplicity unless perf is issue, OR union query.
-    # Simple Union query:
-    
-    # Owned - Eager load secret to avoid N+1 and ensure we have it for validation
-    owned = db.query(models.MultisigWorkflow).options(joinedload(models.MultisigWorkflow.secret)).filter(models.MultisigWorkflow.owner_address == current_user.address).all()
-    
-    # Helper to fetch workflows where I am signer
-    signed_subq = db.query(models.MultisigWorkflowSigner.workflow_id).filter(models.MultisigWorkflowSigner.user_address == current_user.address)
-    as_signer = db.query(models.MultisigWorkflow).options(joinedload(models.MultisigWorkflow.secret)).filter(models.MultisigWorkflow.id.in_(signed_subq)).all()
+    # One query, not three merged in Python. "Owner, signer, or recipient of
+    # something completed" is the same rule `can_read_workflow` applies to a
+    # single workflow, so it is spelled once in security.authorization instead
+    # of being rebuilt here in SQL (audit O-2).
+    workflows = (
+        authorization.readable_workflows(db, current_user.address)
+        .options(joinedload(models.MultisigWorkflow.secret))
+        .all()
+    )
 
-    # Helper to fetch workflows where I am recipient (ONLY COMPLETED)
-    recipient_subq = db.query(models.MultisigWorkflowRecipient.workflow_id).filter(models.MultisigWorkflowRecipient.user_address == current_user.address)
-    as_recipient = db.query(models.MultisigWorkflow).options(joinedload(models.MultisigWorkflow.secret)).filter(
-        models.MultisigWorkflow.id.in_(recipient_subq),
-        models.MultisigWorkflow.status == 'completed'
-    ).all()
-    
-    # Deduplicate (if I am owner AND signer?)
-    all_wf_orm = {w.id: w for w in owned + as_signer + as_recipient}
-    
-    # Batch-load owner grants for all owned workflows (eliminates N+1)
-    owned_secret_ids = [w.secret.id for w in all_wf_orm.values()
+    # Batch-load owner grants for the owned workflows (eliminates N+1)
+    owned_secret_ids = [w.secret.id for w in workflows
                         if w.secret and w.owner_address == current_user.address]
     owner_grants = {}
     if owned_secret_ids:
@@ -160,13 +150,13 @@ def list_multisig_workflows(request: Request, current_user: models.User = Depend
         owner_grants = {g.secret_id: g.encrypted_key for g in grants}
 
     response_list = []
-    for wf in all_wf_orm.values():
+    for wf in workflows:
         if not wf.secret:
             continue
 
         val = schemas.MultisigWorkflowResponse.model_validate(wf)
 
-        if wf.owner_address == current_user.address and wf.secret:
+        if wf.owner_address == current_user.address:
             key = owner_grants.get(wf.secret.id)
             if key:
                 val.owner_encrypted_key = key
@@ -184,23 +174,11 @@ def get_multisig_workflow(request: Request, workflow_id: int, current_user: mode
     if not wf:
         raise HTTPException(status_code=404, detail="Workflow not found")
         
-    # Check permissions (Owner/Signer/Recipient?)
-    is_owner = wf.owner_address == current_user.address
-    is_signer = db.query(models.MultisigWorkflowSigner).filter(
-        models.MultisigWorkflowSigner.workflow_id == wf.id,
-        models.MultisigWorkflowSigner.user_address == current_user.address
-    ).first() is not None
-
-    is_recipient = db.query(models.MultisigWorkflowRecipient).filter(
-        models.MultisigWorkflowRecipient.workflow_id == wf.id,
-        models.MultisigWorkflowRecipient.user_address == current_user.address
-    ).first() is not None
-    
-    # Access Logic: Owner/Signer always. Recipient ONLY if completed.
-    has_access = is_owner or is_signer or (is_recipient and wf.status == 'completed')
-
-    if not has_access:
-         raise HTTPException(status_code=403, detail="Not authorized")
+    # Owner/signer always, recipient only once completed — the rule lives in
+    # security.authorization because `can_read_secret` gates the secret behind
+    # this workflow on exactly the same three conditions (audit O-2).
+    if not authorization.can_read_workflow(db, wf, current_user.address):
+        raise HTTPException(status_code=403, detail="Not authorized")
 
     # Convert to Pydantic Response Model
     wf_response = schemas.MultisigWorkflowResponse.model_validate(wf)
@@ -294,11 +272,7 @@ def sign_multisig_workflow(request: Request, workflow_id: int, sig_req: schemas.
     if not wf:
         raise HTTPException(status_code=404, detail="Workflow not found")
 
-    signer = db.query(models.MultisigWorkflowSigner).filter(
-        models.MultisigWorkflowSigner.workflow_id == wf.id,
-        models.MultisigWorkflowSigner.user_address == current_user.address.lower()
-    ).first()
-
+    signer = authorization.find_workflow_signer(db, wf.id, current_user.address)
     if not signer:
         raise HTTPException(status_code=403, detail="You are not a signer for this workflow")
 
@@ -408,10 +382,7 @@ def reject_multisig_workflow(request: Request, workflow_id: int, reject_req: sch
     if not wf:
         raise HTTPException(status_code=404, detail="Workflow not found")
 
-    signer = db.query(models.MultisigWorkflowSigner).filter(
-        models.MultisigWorkflowSigner.workflow_id == wf.id,
-        models.MultisigWorkflowSigner.user_address == current_user.address.lower()
-    ).first()
+    signer = authorization.find_workflow_signer(db, wf.id, current_user.address)
     if not signer:
         raise HTTPException(status_code=403, detail="You are not a signer for this workflow")
 
@@ -445,11 +416,9 @@ def delete_multisig_workflow(request: Request, workflow_id: int, current_user: m
     if not wf:
         raise HTTPException(status_code=404, detail="Workflow not found")
 
-    # Only the initiator (owner) may delete, and only before release. A completed
-    # workflow has already handed the secret to recipients, so deletion is refused.
-    if wf.owner_address != current_user.address:
+    if not authorization.can_delete_workflow(wf, current_user.address):
         raise HTTPException(status_code=403, detail="Only the workflow owner may delete it")
-    if wf.status == "completed":
+    if not authorization.workflow_is_deletable(wf):
         raise HTTPException(status_code=400, detail="Cannot delete a completed workflow")
 
     # Remove signer/recipient rows, then the workflow, then the underlying secret

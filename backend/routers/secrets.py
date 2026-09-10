@@ -68,8 +68,7 @@ def update_secret(request: Request, secret_id: int, secret_update: schemas.Secre
     if not secret:
         raise HTTPException(status_code=404, detail="Secret not found")
     
-    # Check ownership
-    if secret.owner_address != current_user.address:
+    if not authorization.can_manage_secret(db, secret, current_user.address):
          raise HTTPException(status_code=403, detail="Not authorized")
 
     # Prevent editing a workflow-managed secret directly
@@ -90,7 +89,7 @@ def delete_secret(request: Request, secret_id: int, current_user: models.User = 
     if not secret:
         raise HTTPException(status_code=404, detail="Secret not found")
 
-    if secret.owner_address != current_user.address:
+    if not authorization.can_manage_secret(db, secret, current_user.address):
         raise HTTPException(status_code=403, detail="Not authorized")
 
     # Prevent deleting a workflow-managed secret directly
@@ -110,8 +109,7 @@ async def share_secret(request: Request, grant: schemas.AccessGrantCreate, curre
     if not secret:
         raise HTTPException(status_code=404, detail="Secret not found")
     
-    # Verify ownership
-    if secret.owner_address != current_user.address:
+    if not authorization.can_manage_secret(db, secret, current_user.address):
         raise HTTPException(status_code=403, detail="Not authorized")
 
     # Prevent sharing a workflow-managed secret directly
@@ -198,9 +196,9 @@ def get_secret_access(request: Request, secret_id: int, current_user: models.Use
     if not secret:
         raise HTTPException(status_code=404, detail="Secret not found")
         
-    if secret.owner_address != current_user.address:
+    if not authorization.can_manage_secret(db, secret, current_user.address):
          raise HTTPException(status_code=403, detail="Not authorized")
-         
+
     # Bulk-delete expired grants in one SQL roundtrip
     now = datetime.now(timezone.utc)
     db.query(models.AccessGrant).filter(

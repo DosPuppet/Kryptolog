@@ -116,6 +116,17 @@ Two low-severity items have been picked off since:
   do not overlap, so a mixed fleet mutually reads empty presence for 90s (worst
   case: a push to a user who has the app in front of them).
 
+One structural item has been closed as well:
+
+- **O-2 is done** — `security/authorization.py` now answers the group and
+  multisig questions too, instead of `groups.py` deriving membership three
+  different ways and `multisig.py` rebuilding owner/signer/recipient inline
+  next to a `can_read_secret` that already encoded the same rules. Two rules
+  genuinely need both a predicate and a query form (one row vs. a paged
+  listing); `backend/tests/test_authorization_drift.py` pins each pair against
+  the other over every configuration, which is the KRY-001 failure mode, and a
+  role/capability table there covers every group endpoint at once.
+
 `roadmap/AUDIT-REMEDIATION.md` has been deleted now that every item in it
 landed — `AUDIT.md` section 0 carries the finding-by-finding status, and this table
 carries the commits.

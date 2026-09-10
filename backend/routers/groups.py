@@ -10,12 +10,12 @@ from dependencies import get_current_user
 from websocket_manager import manager
 from utils.push import notify_many_push_async
 from security.crypto_validation import is_usable_encryption_key
+from security import authorization
 
 router = APIRouter(
     prefix="/groups",
     tags=["groups"]
 )
-
 
 # ── Create Group ────────────────────────────────────────────────
 
@@ -110,17 +110,14 @@ def list_groups(
     current_user: models.User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    # Find channels the user is a member of
-    memberships = (
-        db.query(models.GroupMember.channel_id)
-        .filter(models.GroupMember.user_address == current_user.address)
-        .scalar_subquery()
-    )
-
     channels = (
         db.query(models.GroupChannel)
         .options(joinedload(models.GroupChannel.members).joinedload(models.GroupMember.user))
-        .filter(models.GroupChannel.id.in_(memberships))
+        .filter(
+            models.GroupChannel.id.in_(
+                authorization.member_channel_ids(db, current_user.address)
+            )
+        )
         .all()
     )
 
@@ -178,8 +175,7 @@ def get_group(
     if not channel:
         raise HTTPException(status_code=404, detail="Group not found")
 
-    # Verify membership
-    if not any(m.user_address == current_user.address for m in channel.members):
+    if not authorization.is_group_member(db, channel_id, current_user.address):
         raise HTTPException(status_code=403, detail="Not a member of this group")
 
     return channel
@@ -208,7 +204,7 @@ async def send_group_message(
     if not channel:
         raise HTTPException(status_code=404, detail="Group not found")
 
-    if not any(m.user_address == current_user.address for m in channel.members):
+    if not authorization.is_group_member(db, channel_id, current_user.address):
         raise HTTPException(status_code=403, detail="Not a member of this group")
 
     msg = models.GroupMessage(
@@ -261,16 +257,7 @@ def get_group_history(
     current_user: models.User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    # Verify membership
-    membership = (
-        db.query(models.GroupMember)
-        .filter(
-            models.GroupMember.channel_id == channel_id,
-            models.GroupMember.user_address == current_user.address,
-        )
-        .first()
-    )
-    if not membership:
+    if not authorization.is_group_member(db, channel_id, current_user.address):
         raise HTTPException(status_code=403, detail="Not a member of this group")
 
     msgs = (
@@ -306,15 +293,13 @@ async def add_member(
     if not channel:
         raise HTTPException(status_code=404, detail="Group not found")
 
-    # Only owner/admin can add members
-    caller_member = next((m for m in channel.members if m.user_address == current_user.address), None)
-    if not caller_member or caller_member.role not in ("owner", "admin"):
+    caller_member = authorization.find_group_member(db, channel_id, current_user.address)
+    if not authorization.can_administer_group(caller_member):
         raise HTTPException(status_code=403, detail="Only owners/admins can add members")
 
     new_addr = data.user_address.lower()
 
-    # Check not already a member
-    if any(m.user_address == new_addr for m in channel.members):
+    if authorization.is_group_member(db, channel_id, new_addr):
         raise HTTPException(status_code=400, detail="User is already a member")
 
     # Verify user exists and has PQC key
@@ -381,18 +366,17 @@ async def remove_member(
         raise HTTPException(status_code=404, detail="Group not found")
 
     target_addr = member_address.lower()
-    caller_member = next((m for m in channel.members if m.user_address == current_user.address), None)
+    caller_member = authorization.find_group_member(db, channel_id, current_user.address)
 
     if not caller_member:
         raise HTTPException(status_code=403, detail="Not a member of this group")
 
-    target_member = next((m for m in channel.members if m.user_address == target_addr), None)
+    target_member = authorization.find_group_member(db, channel_id, target_addr)
     if not target_member:
         raise HTTPException(status_code=404, detail="Member not found in group")
 
-    # Permissions: anyone may remove themselves (leave); removing others needs owner/admin.
     is_self = target_addr == current_user.address
-    if not is_self and caller_member.role not in ("owner", "admin"):
+    if not authorization.can_remove_group_member(caller_member, target_addr):
         raise HTTPException(status_code=403, detail="Only owners/admins can remove members")
 
     # Capture everything we need BEFORE any delete/commit — reading attributes off a
@@ -495,12 +479,12 @@ async def update_member_role(
     if not channel:
         raise HTTPException(status_code=404, detail="Group not found")
 
-    caller_member = next((m for m in channel.members if m.user_address == current_user.address), None)
-    if not caller_member or caller_member.role != "owner":
+    caller_member = authorization.find_group_member(db, channel_id, current_user.address)
+    if not authorization.can_manage_group_roles(caller_member):
         raise HTTPException(status_code=403, detail="Only the owner can manage roles")
 
     target_addr = member_address.lower()
-    target_member = next((m for m in channel.members if m.user_address == target_addr), None)
+    target_member = authorization.find_group_member(db, channel_id, target_addr)
     if not target_member:
         raise HTTPException(status_code=404, detail="Member not found")
 
@@ -554,11 +538,9 @@ async def update_group(
     if not channel:
         raise HTTPException(status_code=404, detail="Group not found")
 
-    # Owner/admin (was owner-only): with E2EE names (audit M-3), whoever ADDS a
-    # member must also re-wrap the name blob for them via this endpoint — and
-    # adding is an owner/admin capability.
-    caller_member = next((m for m in channel.members if m.user_address == current_user.address), None)
-    if not caller_member or caller_member.role not in ("owner", "admin"):
+    # Owner/admin, not owner-only — see can_administer_group for why (audit M-3).
+    caller_member = authorization.find_group_member(db, channel_id, current_user.address)
+    if not authorization.can_administer_group(caller_member):
         raise HTTPException(status_code=403, detail="Only owners/admins can rename the group")
 
     channel.name = data.name.strip()
@@ -589,16 +571,7 @@ def mark_group_read(
     current_user: models.User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    # Verify membership
-    membership = (
-        db.query(models.GroupMember)
-        .filter(
-            models.GroupMember.channel_id == channel_id,
-            models.GroupMember.user_address == current_user.address,
-        )
-        .first()
-    )
-    if not membership:
+    if not authorization.is_group_member(db, channel_id, current_user.address):
         raise HTTPException(status_code=403, detail="Not a member of this group")
 
     # For now, just acknowledge. Full read tracking can be added with a
