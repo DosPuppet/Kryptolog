@@ -31,7 +31,6 @@ async def send_message(request: Request, msg: schemas.MessageCreate, current_use
     if not is_usable_encryption_key(recipient.encryption_public_key):
         raise HTTPException(status_code=400, detail="Recipient is not Messenger-capable (Missing PQC key)")
     
-    # Create message
     new_msg = models.Message(
         sender_address=current_user.address,
         recipient_address=recipient_addr, # Store lowercase
@@ -42,7 +41,6 @@ async def send_message(request: Request, msg: schemas.MessageCreate, current_use
     db.commit()
     db.refresh(new_msg)
     
-    # Real-time Broadcast
     msg_data = {
         "type": "NEW_MESSAGE",
         "message": {
@@ -55,10 +53,8 @@ async def send_message(request: Request, msg: schemas.MessageCreate, current_use
         }
     }
     
-    # Send to Recipient
     await manager.send_personal_message(msg_data, recipient_addr)
     
-    # Send Push Notification
     sender_name = current_user.username or f"{current_user.address[:8]}..."
     await notify_user_push_async(
         db,

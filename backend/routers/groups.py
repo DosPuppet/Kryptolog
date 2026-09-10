@@ -37,9 +37,7 @@ async def create_group(
     if len(data.member_addresses) > 50:
         raise HTTPException(status_code=400, detail="Maximum 50 members per group")
 
-    # Verify all members exist
     member_addrs = list({addr.lower() for addr in data.member_addresses})
-    # Always include creator
     if current_user.address not in member_addrs:
         member_addrs.append(current_user.address)
 
@@ -69,7 +67,6 @@ async def create_group(
     )
     db.add(channel)
 
-    # Add members
     for addr in member_addrs:
         role = "owner" if addr == current_user.address else "member"
         db.add(models.GroupMember(
@@ -81,7 +78,6 @@ async def create_group(
     db.commit()
     db.refresh(channel)
 
-    # Notify members that they have joined
     for addr in member_addrs:
         if addr != current_user.address:
             await manager.send_personal_message({
@@ -250,7 +246,6 @@ async def send_group_message(
     db.commit()
     db.refresh(msg)
 
-    # Real-time update
     msg_json = schemas.GroupMessageResponse.model_validate(msg).model_dump(mode="json")
     msg_data = {
         "type": "NEW_GROUP_MESSAGE",
@@ -336,7 +331,6 @@ async def add_member(
     if authorization.is_group_member(db, channel_id, new_addr):
         raise HTTPException(status_code=400, detail="User is already a member")
 
-    # Verify user exists and has PQC key
     target_user = db.query(models.User).filter(models.User.address == new_addr).first()
     if not target_user:
         raise HTTPException(status_code=404, detail="User not found")
@@ -356,7 +350,6 @@ async def add_member(
     db.commit()
     db.refresh(new_member)
 
-    # Notify all members
     event = {
         "type": "GROUP_MEMBER_ADDED",
         "channel_id": channel_id,
@@ -534,7 +527,6 @@ async def update_member_role(
     db.commit()
     db.refresh(target_member)
 
-    # Broadcast update
     event = {
         "type": "GROUP_MEMBER_UPDATED",
         "channel_id": channel_id,
@@ -582,7 +574,6 @@ async def update_group(
     db.commit()
     db.refresh(channel)
 
-    # Broadcast update
     event = {
         "type": "GROUP_UPDATED",
         "channel_id": channel_id,

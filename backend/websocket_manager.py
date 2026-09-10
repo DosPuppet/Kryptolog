@@ -47,9 +47,9 @@ PRESENCE_HEARTBEAT_SECONDS = 30  # refresh cadence — keep well under the TTL
 
 class ConnectionManager:
     def __init__(self, redis_url: Optional[str] = None):
-        # Map: user_address -> List[WebSocket] (Support multiple tabs/devices)
+        # A list per address: one identity may hold several tabs or devices.
         self.active_connections: Dict[str, List[WebSocket]] = {}
-        # Track which connections are focused (user is actively viewing the app)
+        # Focused = the app is in front of the user, so a push would be noise.
         self.focused_connections: Set[WebSocket] = set()
         # Shared mode: per-socket id + address for the Redis presence keys
         self._conn_ids: Dict[WebSocket, str] = {}

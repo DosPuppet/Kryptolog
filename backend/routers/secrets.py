@@ -47,11 +47,9 @@ def _check_secret_access(secret_id: int, user_address: str, db: Session) -> mode
     return secret
 
 
-# Secrets
 @router.post("/secrets", response_model=schemas.SecretResponse)
 @limiter.limit("20/minute")
 def create_secret(request: Request, secret: schemas.SecretCreate, current_user: models.User = Depends(get_current_user), db: Session = Depends(get_db)):
-    # 1. Create Secret (Content)
     new_secret = models.Secret(
         owner_address=current_user.address,
         name=secret.name,
@@ -61,7 +59,6 @@ def create_secret(request: Request, secret: schemas.SecretCreate, current_user: 
     db.add(new_secret)
     db.flush() # Flush to get ID
 
-    # 2. Create AccessGrant for Owner (Key)
     owner_grant = models.AccessGrant(
         secret_id=new_secret.id,
         grantee_address=current_user.address,
@@ -71,7 +68,8 @@ def create_secret(request: Request, secret: schemas.SecretCreate, current_user: 
     db.commit()
     db.refresh(new_secret)
     
-    # Manually attach encrypted_key for response
+    # Not a column: the response carries the caller's wrap, which lives on
+    # AccessGrant. Set on the instance so Pydantic can read it.
     new_secret.encrypted_key = secret.encrypted_key
     return new_secret
 
@@ -169,12 +167,10 @@ async def share_secret(request: Request, grant: schemas.AccessGrantCreate, curre
     if workflow:
         raise HTTPException(status_code=400, detail="Cannot manually share a secret managed by a Multisig Workflow")
 
-    # Verify grantee exists
     grantee = db.query(models.User).filter(models.User.address == grant.grantee_address.lower()).first()
     if not grantee:
         raise HTTPException(status_code=404, detail="Grantee not found")
 
-    # Check if already shared
     existing_grant = db.query(models.AccessGrant).filter(
         models.AccessGrant.secret_id == grant.secret_id,
         models.AccessGrant.grantee_address == grant.grantee_address.lower()
@@ -198,7 +194,6 @@ async def share_secret(request: Request, grant: schemas.AccessGrantCreate, curre
     db.commit()
     db.refresh(new_grant)
 
-    # Real-time Update
     await manager.send_personal_message({
         "type": "SECRET_SHARED",
         "data": {
@@ -208,7 +203,6 @@ async def share_secret(request: Request, grant: schemas.AccessGrantCreate, curre
         }
     }, grant.grantee_address.lower())
 
-    # Push Notification
     sender_name = current_user.username or f"{current_user.address[:8]}..."
     await notify_user_push_async(
         db,
@@ -228,7 +222,6 @@ def revoke_grant(request: Request, grant_id: int, current_user: models.User = De
     if not grant:
         raise HTTPException(status_code=404, detail="Grant not found")
     
-    # Check permissions: Caller must be Secret Owner OR Grantee
     if not authorization.can_manage_grant(db, grant, current_user.address):
         raise HTTPException(status_code=403, detail="Not authorized")
 
@@ -258,7 +251,6 @@ def get_secret_access(
     if not authorization.can_manage_secret(db, secret, current_user.address):
         raise HTTPException(status_code=403, detail="Not authorized")
 
-    # Bulk-delete expired grants in one SQL roundtrip
     now = datetime.now(timezone.utc)
     db.query(models.AccessGrant).filter(
         models.AccessGrant.secret_id == secret_id,
@@ -282,7 +274,6 @@ def get_shared_secrets(
 ):
     now = datetime.now(timezone.utc)
 
-    # Bulk-delete expired grants for this user
     db.query(models.AccessGrant).filter(
         models.AccessGrant.grantee_address == current_user.address,
         models.AccessGrant.expires_at.isnot(None),

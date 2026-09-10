@@ -23,7 +23,6 @@ WORKFLOW_PAGE_DEFAULT = 50
 @router.post("/workflow", response_model=schemas.MultisigWorkflowResponse)
 @limiter.limit("5/minute")
 def create_multisig_workflow(request: Request, workflow: schemas.MultisigWorkflowCreate, current_user: models.User = Depends(get_current_user), db: Session = Depends(get_db)):
-    # 0. Validate the N-of-M threshold against the signer set.
     if not workflow.signers:
         raise HTTPException(status_code=400, detail="At least one signer is required")
     if workflow.threshold < 1 or workflow.threshold > len(workflow.signers):
@@ -47,7 +46,6 @@ def create_multisig_workflow(request: Request, workflow: schemas.MultisigWorkflo
             detail="All signers and recipients must be registered users",
         )
 
-    # 1. Create the Secret (Owned by Creator)
     new_secret = models.Secret(
         owner_address=current_user.address,
         name=workflow.secret_data.name,
@@ -57,7 +55,6 @@ def create_multisig_workflow(request: Request, workflow: schemas.MultisigWorkflo
     db.add(new_secret)
     db.flush()
 
-    # 1.1 Create AccessGrant for Owner (Creator) - Envelope Logic
     # Schema validation ensures encrypted_key is present in secret_data
     owner_grant = models.AccessGrant(
         secret_id=new_secret.id,
@@ -69,7 +66,6 @@ def create_multisig_workflow(request: Request, workflow: schemas.MultisigWorkflo
     db.commit() # Commit secret and grant
     db.refresh(new_secret)
 
-    # 2. Create Workflow
     new_workflow = models.MultisigWorkflow(
         name=workflow.name,
         owner_address=current_user.address,
@@ -81,7 +77,6 @@ def create_multisig_workflow(request: Request, workflow: schemas.MultisigWorkflo
     db.commit()
     db.refresh(new_workflow)
 
-    # 3. Add Signers with their per-workflow encrypted keys.
     # Addresses are lowercase everywhere, so the key maps are lowered ONCE here
     # rather than per iteration — and the recipient map below is lowered the
     # same way, which it previously was not (audit L-2).
@@ -100,7 +95,7 @@ def create_multisig_workflow(request: Request, workflow: schemas.MultisigWorkflo
         )
         db.add(signer_entry)
 
-    # 4. Add Recipients (keys released only upon workflow completion)
+    # A recipient's key is withheld until the workflow completes.
     for recipient_addr in workflow.recipients:
         r_addr = recipient_addr.lower()
         key = recipient_keys.get(r_addr)
@@ -115,7 +110,6 @@ def create_multisig_workflow(request: Request, workflow: schemas.MultisigWorkflo
     db.commit()
     db.refresh(new_workflow)
     
-    # Notify Signers
     sender_name = current_user.username or f"{current_user.address[:8]}..."
     for signer_addr in workflow.signers:
         s_addr = signer_addr.lower()
@@ -211,21 +205,17 @@ def get_multisig_workflow(request: Request, workflow_id: int, current_user: mode
     if not authorization.can_read_workflow(db, wf, current_user.address):
         raise HTTPException(status_code=403, detail="Not authorized")
 
-    # Convert to Pydantic Response Model
     wf_response = schemas.MultisigWorkflowResponse.model_validate(wf)
 
-    # Populate encrypted_key for the secret response if available
     if wf.secret:
-        # Checking Grant for Secret
         grant = db.query(models.AccessGrant).filter(
             models.AccessGrant.secret_id == wf.secret.id,
             models.AccessGrant.grantee_address == current_user.address
         ).first()
         
         if grant:
-            # Update the Pydantic model response field
             wf_response.owner_encrypted_key = grant.encrypted_key
-            # Also try nested for consistency if possible, but rely on top-level
+            # Both shapes: older clients read the nested one.
             wf_response.secret.encrypted_key = grant.encrypted_key
             
     return wf_response
@@ -350,7 +340,6 @@ def sign_multisig_workflow(request: Request, workflow_id: int, sig_req: schemas.
             detail="Recipient keys may only be provided with the final signature",
         )
 
-    # Update Signer
     signer.has_signed = True
     signer.signature = sig_req.signature
     signer.signed_at = datetime.now(timezone.utc)
