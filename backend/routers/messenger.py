@@ -21,6 +21,7 @@ import schemas
 from database import SessionLocal, get_db
 from dependencies import get_current_user, limiter, user_for_token
 from security.crypto_validation import is_usable_encryption_key
+from utils.clock import to_wire_utc
 from utils.push import display_name, notify_user_push_async
 from websocket_manager import manager
 
@@ -66,7 +67,10 @@ async def send_message(
             "recipient_address": new_msg.recipient_address,
             "content": new_msg.content,
             "is_read": new_msg.is_read,
-            "created_at": new_msg.created_at.isoformat(),
+            # to_wire_utc, not .isoformat(): this payload never passes through a
+            # response model, so it has to mark UTC itself or the live message
+            # renders at the wrong local time until a refetch corrects it.
+            "created_at": to_wire_utc(new_msg.created_at),
         },
     }
 

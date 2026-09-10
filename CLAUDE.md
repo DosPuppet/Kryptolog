@@ -268,6 +268,42 @@ Still open: the message composer has no `maxLength`, so text past
 `MAX_MESSAGE_TEXT_CHARS` (10 000) is refused by the server rather than by the
 textarea. Readable now, but better caught client-side.
 
+### Found by the manual pass — datetimes lost their UTC marker on the wire
+
+Reported as "the time-bombed secret feature doesn't work: an expired secret is
+still accessible to the grantee". The expiry logic was never the problem — the
+server was still, correctly, honouring a grant that had **not** expired yet.
+The owner's browser only thought it had.
+
+Every `DateTime` column is naive UTC, and both renderers dropped that fact:
+Pydantic emits a naive value as `2026-09-10T15:06:06.550478`, with no offset.
+**ECMA-262 parses that form as LOCAL time**, so a UTC+2 browser reads back an
+instant two hours early. A grant with 11 minutes left rendered "Expired", while
+the grantee — correctly — still had access. It looked exactly like a broken
+security control.
+
+The same shift hit every timestamp the SPA shows (chat message times were 2h
+early until a refetch), but only on expiry did it read as a bug.
+
+`utils/clock.to_wire_utc()` is now the one renderer, because the readers are
+split and a fix to either half alone leaves the other broken:
+
+| Path | Was | Now |
+|---|---|---|
+| Response models (14 fields) | `created_at: datetime` | `created_at: UtcDateTime` — an `Annotated` alias carrying a `PlainSerializer` |
+| Four hand-built WebSocket payloads | `.isoformat()` on the column | `to_wire_utc(...)` |
+
+`tests/test_wire_datetimes.py` pins both: it serializes **every** model in
+`schemas.py` and fails on any datetime field that goes out without an offset,
+and it greps `routers/` for a bare `.isoformat()`. Both gates were
+mutation-tested. No migration and no `CRYPTO_CORE_VERSION` bump — the stored
+values were always right, only their rendering was lossy.
+
+**This is the naive-UTC convention's blind spot.** `test_clock.py` proved the
+columns and the comparisons agree; nothing checked what the convention looked
+like once it left the process. If a future field is aware, `to_wire_utc` passes
+its real offset through rather than stamping UTC over it.
+
 ### Still open from before, unchanged
 
 Everything under "Still open from the remediation" below still applies. The

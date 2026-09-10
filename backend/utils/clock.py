@@ -35,3 +35,26 @@ def as_naive_utc(value: datetime | None) -> datetime | None:
     if value.tzinfo is None:
         return value
     return value.astimezone(UTC).replace(tzinfo=None)
+
+
+def to_wire_utc(value: datetime | None) -> str | None:
+    """Render a stored datetime for the wire, with an explicit UTC offset.
+
+    Naive is right in the database and wrong on the wire. `datetime.isoformat()`
+    on a naive value emits no offset — `2026-09-10T15:06:06.550478` — and
+    ECMA-262 parses that form as LOCAL time, so every non-UTC browser reads back
+    an instant shifted by its own offset.
+
+    Found by the manual pass on the grant-expiry feature, where the shift was
+    not cosmetic: an hour-long share rendered "Expired" in a UTC+2 browser while
+    the server went on honouring it, which reads as a broken security control
+    rather than a broken clock.
+
+    Lives here, next to the writers, because the readers are split — Pydantic
+    response models go through schemas.UtcDateTime, and the four hand-built
+    WebSocket payloads (which never touch a response model) call this directly.
+    Two renderings of one convention is how the halves drift apart.
+    """
+    if value is None:
+        return None
+    return (value.replace(tzinfo=UTC) if value.tzinfo is None else value).isoformat()

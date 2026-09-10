@@ -1,8 +1,18 @@
 from datetime import datetime
+from typing import Annotated
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, PlainSerializer, field_validator
 
 from security.crypto_validation import is_hex
+from utils.clock import to_wire_utc
+
+# Use for EVERY datetime the API returns: naive on the way in, because that is
+# how the columns store it, and an explicit UTC offset on the way out, because
+# a browser parses an offset-less ISO string as LOCAL time. See
+# utils/clock.to_wire_utc for what that cost us. Applying this to some datetime
+# fields and not others is the failure mode, so test_wire_datetimes.py walks
+# every model in this file and fails on a bare `datetime`.
+UtcDateTime = Annotated[datetime, PlainSerializer(to_wire_utc, return_type=str)]
 
 # --- Input bounds (audit KRY-010) -------------------------------------------
 #
@@ -87,10 +97,10 @@ class UserUpdate(BaseModel):
 class UserResponse(UserBase):
     username: str | None
     encryption_public_key: str | None
-    created_at: datetime
+    created_at: UtcDateTime
     # When this identity's encryption key last changed (audit S1). Null = never
     # changed since creation. Clients use it to flag/verify key swaps.
-    key_changed_at: datetime | None = None
+    key_changed_at: UtcDateTime | None = None
     # Self-signed ML-KEM key attestation (audit M-1) — peers verify this against
     # the address before encrypting to encryption_public_key.
     encryption_key_attestation: str | None = None
@@ -130,7 +140,7 @@ class SecretSummaryResponse(BaseModel):
 
     id: int
     owner_address: str
-    created_at: datetime
+    created_at: UtcDateTime
     name: str
     type: str
     encrypted_key: str | None = (
@@ -200,8 +210,8 @@ class AccessGrantResponse(BaseModel):
     secret_id: int
     grantee_address: str
     encrypted_key: str
-    created_at: datetime
-    expires_at: datetime | None
+    created_at: UtcDateTime
+    expires_at: UtcDateTime | None
     grantee: UserResponse | None
 
     model_config = ConfigDict(from_attributes=True)
@@ -249,7 +259,7 @@ class MultisigWorkflowSignerResponse(BaseModel):
     user_address: str
     has_signed: bool
     signature: str | None = None
-    signed_at: datetime | None
+    signed_at: UtcDateTime | None
     encrypted_key: str | None
     user: UserResponse | None
 
@@ -280,7 +290,7 @@ class MultisigWorkflowSummaryResponse(MultisigWorkflowBase):
     status: str
     threshold: int | None = None  # N in N-of-M; NULL ⇒ N-of-N (= len(signers))
     rejected_by: str | None = None
-    created_at: datetime
+    created_at: UtcDateTime
     owner: UserResponse
     secret: SecretSummaryResponse
     owner_encrypted_key: str | None = None  # Explicitly pass owner key here to avoid nesting issues
@@ -317,7 +327,7 @@ class MessageResponse(MessageBase):
     id: int
     sender_address: str
     is_read: bool = False
-    created_at: datetime
+    created_at: UtcDateTime
     content: str  # Relax output limit for legacy messages
     sender: UserResponse | None
     recipient: UserResponse | None
@@ -332,7 +342,7 @@ class MessageSummaryResponse(BaseModel):
     sender_address: str
     recipient_address: str
     is_read: bool = False
-    created_at: datetime
+    created_at: UtcDateTime
     sender: UserResponse | None = None
     recipient: UserResponse | None = None
 
@@ -366,7 +376,7 @@ class GroupChannelCreate(BaseModel):
 class GroupMemberResponse(BaseModel):
     user_address: str
     role: str
-    joined_at: datetime
+    joined_at: UtcDateTime
     user: UserResponse | None = None
 
     model_config = ConfigDict(from_attributes=True)
@@ -376,7 +386,7 @@ class GroupChannelResponse(BaseModel):
     id: str
     name: str
     owner_address: str
-    created_at: datetime
+    created_at: UtcDateTime
     members: list[GroupMemberResponse] = []
 
     model_config = ConfigDict(from_attributes=True)
@@ -393,7 +403,7 @@ class GroupMessageResponse(BaseModel):
     channel_id: str
     sender_address: str
     content: str
-    created_at: datetime
+    created_at: UtcDateTime
     sender: UserResponse | None = None
 
     model_config = ConfigDict(from_attributes=True)
@@ -441,7 +451,7 @@ class KeyTransferCreate(BaseModel):
 
 class KeyTransferCreateResponse(BaseModel):
     id: str
-    expires_at: datetime
+    expires_at: UtcDateTime
 
 
 class KeyTransferResponse(BaseModel):
@@ -460,6 +470,6 @@ class PushSubscriptionCreate(BaseModel):
 class PushSubscriptionResponse(PushSubscriptionCreate):
     id: int
     user_address: str
-    created_at: datetime
+    created_at: UtcDateTime
 
     model_config = ConfigDict(from_attributes=True)

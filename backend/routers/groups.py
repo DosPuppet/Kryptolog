@@ -10,6 +10,7 @@ from database import get_db
 from dependencies import get_current_user, limiter
 from security import authorization
 from security.crypto_validation import is_usable_encryption_key
+from utils.clock import to_wire_utc
 from utils.push import display_name, notify_many_push_async
 from websocket_manager import manager
 
@@ -384,7 +385,7 @@ async def add_member(
             "user_address": new_member.user_address,
             "role": new_member.role,
             "username": target_user.username,
-            "joined_at": new_member.joined_at.isoformat(),
+            "joined_at": to_wire_utc(new_member.joined_at),
             "encryption_public_key": target_user.encryption_public_key,
         },
     }
@@ -429,7 +430,7 @@ def _succeed_owner(db, channel, caller_member, remaining, is_self):
         "user_address": successor.user_address,
         "role": "owner",
         "username": successor.user.username if successor.user else None,
-        "joined_at": successor.joined_at.isoformat(),
+        "joined_at": to_wire_utc(successor.joined_at),
     }, False
 
 
@@ -575,7 +576,7 @@ async def update_member_role(
             "user_address": target_member.user_address,
             "role": target_member.role,
             "username": target_member.user.username,
-            "joined_at": target_member.joined_at.isoformat(),
+            "joined_at": to_wire_utc(target_member.joined_at),
         },
     }
 
