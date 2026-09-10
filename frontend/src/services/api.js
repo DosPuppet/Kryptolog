@@ -20,14 +20,24 @@ export const authHeaders = (token, extra) => ({
 /**
  * Fetch `url` with the caller's bearer token.
  *
- * Sends and parses JSON by default. `body` is stringified for you, so passing
- * an object is enough. On a non-2xx the thrown Error's message is the server's
+ * Sends and parses JSON by default. `body` is stringified for you, so pass the
+ * OBJECT — a string body is refused rather than encoded twice. On a non-2xx the thrown Error's message is the server's
  * `detail` field when present, because that is the text worth showing a user.
  *
  * opts: { method?, body?, headers?, raw?, signal? }
  */
 export async function apiFetch(url, token, opts = {}) {
     const { method = 'GET', body, headers, raw = false, signal } = opts;
+
+    // A pre-stringified body would be encoded twice and reach the server as a
+    // JSON string rather than an object, which every endpoint rejects as a 422.
+    // That is silent at the call site and obvious only in the network tab, so
+    // it fails here instead, naming the fix.
+    if (typeof body === 'string') {
+        throw new TypeError(
+            'apiFetch encodes the body for you — pass the object, not JSON.stringify(...)'
+        );
+    }
 
     const res = await fetch(url, {
         method,

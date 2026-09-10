@@ -225,7 +225,7 @@ export const MessengerProvider = ({ children }) => {
         try {
             const rawMsgs = await api(`${API_ENDPOINTS.BASE}/messages/history`, {
                 method: 'POST',
-                body: JSON.stringify({ partner_address: partnerUser.address })
+                body: { partner_address: partnerUser.address }
             });
             const processed = await processMessages(rawMsgs, 'dm');
             setActiveConversation({ user: fullUser, messages: processed });
@@ -281,10 +281,10 @@ export const MessengerProvider = ({ children }) => {
 
             const newMsg = await api(`${API_ENDPOINTS.BASE}/messages`, {
                 method: 'POST',
-                body: JSON.stringify({
+                body: {
                     recipient_address: partnerUser.address,
                     content: JSON.stringify(payload)
-                })
+                }
             });
 
             const uiMsg = { ...newMsg, plainText: text, verified: true };
@@ -347,7 +347,7 @@ export const MessengerProvider = ({ children }) => {
         const encName = await buildGroupNameBlob(name, members);
         const channel = await api(`${API_ENDPOINTS.GROUPS.CREATE}`, {
             method: 'POST',
-            body: JSON.stringify({ name: encName, member_addresses: members.map(m => m.address) })
+            body: { name: encName, member_addresses: members.map(m => m.address) }
         });
         fetchGroupConversations();
         return { ...channel, display_name: name };
@@ -356,7 +356,7 @@ export const MessengerProvider = ({ children }) => {
     const addGroupMember = async (channelId, userAddress) => {
         const result = await api(`${API_ENDPOINTS.GROUPS.MEMBERS(channelId)}`, {
             method: 'POST',
-            body: JSON.stringify({ user_address: userAddress })
+            body: { user_address: userAddress }
         });
         // Add to local state synchronously (the response carries the member's
         // ML-KEM key) so the rekeyed next send wraps for them immediately, not
@@ -386,7 +386,7 @@ export const MessengerProvider = ({ children }) => {
                     const encName = await buildGroupNameBlob(plain, memberUsers);
                     await api(`${API_ENDPOINTS.GROUPS.DETAILS(channelId)}`, {
                         method: 'PUT',
-                        body: JSON.stringify({ name: encName })
+                        body: { name: encName }
                     });
                 }
             }
@@ -426,14 +426,14 @@ export const MessengerProvider = ({ children }) => {
     const updateGroupMemberRole = async (channelId, userAddress, role) => {
         return await api(`${API_ENDPOINTS.GROUPS.UPDATE_ROLE(channelId, userAddress)}`, {
             method: 'PUT',
-            body: JSON.stringify({ role })
+            body: { role }
         });
     };
 
     const updateGroup = async (channelId, data) => {
         return await api(`${API_ENDPOINTS.GROUPS.DETAILS(channelId)}`, {
             method: 'PUT',
-            body: JSON.stringify(data)
+            body: data
         });
     };
 
@@ -468,7 +468,7 @@ export const MessengerProvider = ({ children }) => {
 
             const rawMsgs = await api(`${API_ENDPOINTS.GROUPS.HISTORY(channel.id)}`, {
                 method: 'POST',
-                body: JSON.stringify({ limit: 50, offset: 0 })
+                body: { limit: 50, offset: 0 }
             });
             const processed = await processMessages(rawMsgs, 'group');
             setActiveGroupConversation({ channel: fullChannel, messages: processed });
@@ -542,7 +542,7 @@ export const MessengerProvider = ({ children }) => {
 
             const newMsg = await api(`${API_ENDPOINTS.GROUPS.MESSAGES(channelId)}`, {
                 method: 'POST',
-                body: JSON.stringify({ content: JSON.stringify(payload) })
+                body: { content: JSON.stringify(payload) }
             });
 
             const uiMsg = { ...newMsg, plainText: text, verified: true };
