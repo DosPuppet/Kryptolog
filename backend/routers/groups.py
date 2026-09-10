@@ -23,6 +23,30 @@ GROUP_PAGE_MAX = 100
 GROUP_PAGE_DEFAULT = 50
 
 
+def _load_channel_or_404(
+    db: Session, channel_id: str, *, with_users: bool = False
+) -> models.GroupChannel:
+    """Load a channel with its members, or raise 404.
+
+    Six endpoints spelled this out. `with_users` additionally eager-loads each
+    member's user row and is not cosmetic: the endpoints that broadcast a
+    member's username would otherwise lazy-load one user per member.
+    """
+    members = joinedload(models.GroupChannel.members)
+    if with_users:
+        members = members.joinedload(models.GroupMember.user)
+
+    channel = (
+        db.query(models.GroupChannel)
+        .options(members)
+        .filter(models.GroupChannel.id == channel_id)
+        .first()
+    )
+    if not channel:
+        raise HTTPException(status_code=404, detail="Group not found")
+    return channel
+
+
 # ── Create Group ────────────────────────────────────────────────
 
 
@@ -209,14 +233,7 @@ def get_group(
     current_user: models.User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    channel = (
-        db.query(models.GroupChannel)
-        .options(joinedload(models.GroupChannel.members).joinedload(models.GroupMember.user))
-        .filter(models.GroupChannel.id == channel_id)
-        .first()
-    )
-    if not channel:
-        raise HTTPException(status_code=404, detail="Group not found")
+    channel = _load_channel_or_404(db, channel_id, with_users=True)
 
     if not authorization.is_group_member(db, channel_id, current_user.address):
         raise HTTPException(status_code=403, detail="Not a member of this group")
@@ -236,14 +253,7 @@ async def send_group_message(
     current_user: models.User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    channel = (
-        db.query(models.GroupChannel)
-        .options(joinedload(models.GroupChannel.members))
-        .filter(models.GroupChannel.id == channel_id)
-        .first()
-    )
-    if not channel:
-        raise HTTPException(status_code=404, detail="Group not found")
+    channel = _load_channel_or_404(db, channel_id)
 
     if not authorization.is_group_member(db, channel_id, current_user.address):
         raise HTTPException(status_code=403, detail="Not a member of this group")
@@ -326,14 +336,7 @@ async def add_member(
     current_user: models.User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    channel = (
-        db.query(models.GroupChannel)
-        .options(joinedload(models.GroupChannel.members))
-        .filter(models.GroupChannel.id == channel_id)
-        .first()
-    )
-    if not channel:
-        raise HTTPException(status_code=404, detail="Group not found")
+    channel = _load_channel_or_404(db, channel_id)
 
     caller_member = authorization.find_group_member(db, channel_id, current_user.address)
     if not authorization.can_administer_group(caller_member):
@@ -399,14 +402,7 @@ async def remove_member(
     current_user: models.User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    channel = (
-        db.query(models.GroupChannel)
-        .options(joinedload(models.GroupChannel.members).joinedload(models.GroupMember.user))
-        .filter(models.GroupChannel.id == channel_id)
-        .first()
-    )
-    if not channel:
-        raise HTTPException(status_code=404, detail="Group not found")
+    channel = _load_channel_or_404(db, channel_id, with_users=True)
 
     target_addr = member_address.lower()
     caller_member = authorization.find_group_member(db, channel_id, current_user.address)
@@ -515,14 +511,7 @@ async def update_member_role(
     current_user: models.User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    channel = (
-        db.query(models.GroupChannel)
-        .options(joinedload(models.GroupChannel.members).joinedload(models.GroupMember.user))
-        .filter(models.GroupChannel.id == channel_id)
-        .first()
-    )
-    if not channel:
-        raise HTTPException(status_code=404, detail="Group not found")
+    channel = _load_channel_or_404(db, channel_id, with_users=True)
 
     caller_member = authorization.find_group_member(db, channel_id, current_user.address)
     if not authorization.can_manage_group_roles(caller_member):
@@ -574,14 +563,7 @@ async def update_group(
     current_user: models.User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    channel = (
-        db.query(models.GroupChannel)
-        .options(joinedload(models.GroupChannel.members).joinedload(models.GroupMember.user))
-        .filter(models.GroupChannel.id == channel_id)
-        .first()
-    )
-    if not channel:
-        raise HTTPException(status_code=404, detail="Group not found")
+    channel = _load_channel_or_404(db, channel_id, with_users=True)
 
     # Owner/admin, not owner-only — see can_administer_group for why (audit M-3).
     caller_member = authorization.find_group_member(db, channel_id, current_user.address)

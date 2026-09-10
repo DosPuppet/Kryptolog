@@ -22,6 +22,29 @@ WORKFLOW_PAGE_MAX = 100
 WORKFLOW_PAGE_DEFAULT = 50
 
 
+def _load_workflow_or_404(
+    db: Session, workflow_id: int, *, for_update: bool = False, with_secret: bool = False
+) -> models.MultisigWorkflow:
+    """Load a workflow, or raise 404.
+
+    `for_update` takes the row lock that /sign and /reject both need. Those two
+    decide the terminal status, so they must serialize against each other
+    (KRY-005); the lock stays a parameter here rather than a separate helper so
+    a reader can see which endpoints take it.
+    """
+    query = db.query(models.MultisigWorkflow)
+    if with_secret:
+        query = query.options(joinedload(models.MultisigWorkflow.secret))
+    query = query.filter(models.MultisigWorkflow.id == workflow_id)
+    if for_update:
+        query = query.with_for_update()
+
+    workflow = query.first()
+    if not workflow:
+        raise HTTPException(status_code=404, detail="Workflow not found")
+    return workflow
+
+
 @router.post("/workflow", response_model=schemas.MultisigWorkflowResponse)
 @limiter.limit("5/minute")
 def create_multisig_workflow(
@@ -197,15 +220,7 @@ def get_multisig_workflow(
     current_user: models.User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    # Eager load secret to ensure it's available for schema
-    wf = (
-        db.query(models.MultisigWorkflow)
-        .options(joinedload(models.MultisigWorkflow.secret))
-        .filter(models.MultisigWorkflow.id == workflow_id)
-        .first()
-    )
-    if not wf:
-        raise HTTPException(status_code=404, detail="Workflow not found")
+    wf = _load_workflow_or_404(db, workflow_id, with_secret=True)
 
     # Owner/signer always, recipient only once completed — the rule lives in
     # security.authorization because `can_read_secret` gates the secret behind
@@ -305,14 +320,7 @@ def sign_multisig_workflow(
     # FOR UPDATE is a no-op on SQLite, which serializes writes at the file
     # level anyway; on PostgreSQL (the deployment target) it is what actually
     # closes the race.
-    wf = (
-        db.query(models.MultisigWorkflow)
-        .filter(models.MultisigWorkflow.id == workflow_id)
-        .with_for_update()
-        .first()
-    )
-    if not wf:
-        raise HTTPException(status_code=404, detail="Workflow not found")
+    wf = _load_workflow_or_404(db, workflow_id, for_update=True)
 
     signer = authorization.find_workflow_signer(db, wf.id, current_user.address)
     if not signer:
@@ -423,14 +431,7 @@ def reject_multisig_workflow(
     # it, a reject that read `pending` could commit "rejected" AFTER the
     # completing signature released the recipient keys (a workflow both blocked
     # and released), or be silently overwritten by it.
-    wf = (
-        db.query(models.MultisigWorkflow)
-        .filter(models.MultisigWorkflow.id == workflow_id)
-        .with_for_update()
-        .first()
-    )
-    if not wf:
-        raise HTTPException(status_code=404, detail="Workflow not found")
+    wf = _load_workflow_or_404(db, workflow_id, for_update=True)
 
     signer = authorization.find_workflow_signer(db, wf.id, current_user.address)
     if not signer:
@@ -468,9 +469,7 @@ def delete_multisig_workflow(
     current_user: models.User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    wf = db.query(models.MultisigWorkflow).filter(models.MultisigWorkflow.id == workflow_id).first()
-    if not wf:
-        raise HTTPException(status_code=404, detail="Workflow not found")
+    wf = _load_workflow_or_404(db, workflow_id)
 
     if not authorization.can_delete_workflow(wf, current_user.address):
         raise HTTPException(status_code=403, detail="Only the workflow owner may delete it")
