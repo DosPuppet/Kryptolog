@@ -33,21 +33,35 @@ GRANT_PAGE_MAX = 200
 GRANT_PAGE_DEFAULT = 100
 
 
-def _check_secret_access(secret_id: int, user_address: str, db: Session) -> models.Secret:
-    """Verify the user may read this secret, or raise.
+def _load_secret(
+    secret_id: int, user_address: str, db: Session, requires=authorization.can_read_secret
+) -> models.Secret:
+    """Load a secret the caller is allowed to touch, or raise 404/403.
 
     The rules live in security.authorization so they cannot drift between the
     endpoints that enforce them (KRY-001: expired grants used to keep unlocking
-    file chunks because only the listing endpoints checked expiry).
+    file chunks because only the listing endpoints checked expiry). `requires`
+    picks which question to ask — read, write, or manage — because five
+    endpoints below used to inline this block with their own predicate, which
+    is how the two copies get to disagree in the first place.
     """
     secret = db.query(models.Secret).filter(models.Secret.id == secret_id).first()
     if not secret:
         raise HTTPException(status_code=404, detail="Secret not found")
 
-    if not authorization.can_read_secret(db, secret, user_address):
+    if not requires(db, secret, user_address):
         raise HTTPException(status_code=403, detail="Not authorized")
 
     return secret
+
+
+def _refuse_if_workflow_managed(db: Session, secret_id: int, verb: str) -> None:
+    """Block direct mutation of a secret a multisig workflow owns."""
+    if authorization.is_workflow_managed(db, secret_id):
+        raise HTTPException(
+            status_code=400,
+            detail=f"Cannot {verb} a secret managed by a Multisig Workflow",
+        )
 
 
 @router.post("/secrets", response_model=schemas.SecretResponse)
@@ -130,23 +144,8 @@ def update_secret(
     current_user: models.User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    secret = db.query(models.Secret).filter(models.Secret.id == secret_id).first()
-    if not secret:
-        raise HTTPException(status_code=404, detail="Secret not found")
-
-    if not authorization.can_manage_secret(db, secret, current_user.address):
-        raise HTTPException(status_code=403, detail="Not authorized")
-
-    # Prevent editing a workflow-managed secret directly
-    workflow = (
-        db.query(models.MultisigWorkflow)
-        .filter(models.MultisigWorkflow.secret_id == secret_id)
-        .first()
-    )
-    if workflow:
-        raise HTTPException(
-            status_code=400, detail="Cannot edit a secret managed by a Multisig Workflow"
-        )
+    secret = _load_secret(secret_id, current_user.address, db, authorization.can_manage_secret)
+    _refuse_if_workflow_managed(db, secret_id, "edit")
 
     secret.name = secret_update.name
     secret.encrypted_data = secret_update.encrypted_data
@@ -163,23 +162,8 @@ def delete_secret(
     current_user: models.User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    secret = db.query(models.Secret).filter(models.Secret.id == secret_id).first()
-    if not secret:
-        raise HTTPException(status_code=404, detail="Secret not found")
-
-    if not authorization.can_manage_secret(db, secret, current_user.address):
-        raise HTTPException(status_code=403, detail="Not authorized")
-
-    # Prevent deleting a workflow-managed secret directly
-    workflow = (
-        db.query(models.MultisigWorkflow)
-        .filter(models.MultisigWorkflow.secret_id == secret_id)
-        .first()
-    )
-    if workflow:
-        raise HTTPException(
-            status_code=400, detail="Cannot delete a secret managed by a Multisig Workflow"
-        )
+    secret = _load_secret(secret_id, current_user.address, db, authorization.can_manage_secret)
+    _refuse_if_workflow_managed(db, secret_id, "delete")
 
     db.query(models.AccessGrant).filter(models.AccessGrant.secret_id == secret_id).delete()
     db.delete(secret)
@@ -197,23 +181,10 @@ async def share_secret(
 ):
     grantee_address = authorization.normalize_address(grant.grantee_address)
 
-    secret = db.query(models.Secret).filter(models.Secret.id == grant.secret_id).first()
-    if not secret:
-        raise HTTPException(status_code=404, detail="Secret not found")
-
-    if not authorization.can_manage_secret(db, secret, current_user.address):
-        raise HTTPException(status_code=403, detail="Not authorized")
-
-    # Prevent sharing a workflow-managed secret directly
-    workflow = (
-        db.query(models.MultisigWorkflow)
-        .filter(models.MultisigWorkflow.secret_id == grant.secret_id)
-        .first()
+    secret = _load_secret(
+        grant.secret_id, current_user.address, db, authorization.can_manage_secret
     )
-    if workflow:
-        raise HTTPException(
-            status_code=400, detail="Cannot manually share a secret managed by a Multisig Workflow"
-        )
+    _refuse_if_workflow_managed(db, grant.secret_id, "manually share")
 
     grantee = db.query(models.User).filter(models.User.address == grantee_address).first()
     if not grantee:
@@ -286,17 +257,7 @@ def revoke_grant(
     if not authorization.can_manage_grant(db, grant, current_user.address):
         raise HTTPException(status_code=403, detail="Not authorized")
 
-    # Prevent revoking a workflow-managed secret grant directly
-    workflow = (
-        db.query(models.MultisigWorkflow)
-        .filter(models.MultisigWorkflow.secret_id == grant.secret_id)
-        .first()
-    )
-    if workflow:
-        raise HTTPException(
-            status_code=400,
-            detail="Cannot manually revoke access to a secret managed by a Multisig Workflow",
-        )
+    _refuse_if_workflow_managed(db, grant.secret_id, "manually revoke access to")
 
     db.delete(grant)
     db.commit()
@@ -313,20 +274,8 @@ def get_secret_access(
     current_user: models.User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    secret = db.query(models.Secret).filter(models.Secret.id == secret_id).first()
-    if not secret:
-        raise HTTPException(status_code=404, detail="Secret not found")
-
-    if not authorization.can_manage_secret(db, secret, current_user.address):
-        raise HTTPException(status_code=403, detail="Not authorized")
-
-    now = utcnow_naive()
-    db.query(models.AccessGrant).filter(
-        models.AccessGrant.secret_id == secret_id,
-        models.AccessGrant.expires_at.isnot(None),
-        models.AccessGrant.expires_at <= now,
-    ).delete(synchronize_session="fetch")
-    db.commit()
+    _load_secret(secret_id, current_user.address, db, authorization.can_manage_secret)
+    authorization.purge_expired_grants(db, secret_id=secret_id)
 
     return (
         db.query(models.AccessGrant)
@@ -347,14 +296,7 @@ def get_shared_secrets(
     current_user: models.User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    now = utcnow_naive()
-
-    db.query(models.AccessGrant).filter(
-        models.AccessGrant.grantee_address == current_user.address,
-        models.AccessGrant.expires_at.isnot(None),
-        models.AccessGrant.expires_at <= now,
-    ).delete(synchronize_session="fetch")
-    db.commit()
+    authorization.purge_expired_grants(db, grantee=current_user.address)
 
     return (
         db.query(models.AccessGrant)
@@ -403,7 +345,7 @@ def get_secret(
     The 120/min limit matches `get_chunk`: opening one secret is one request
     here, and a client browsing its vault makes a burst of them.
     """
-    secret = _check_secret_access(secret_id, current_user.address, db)
+    secret = _load_secret(secret_id, current_user.address, db)
 
     # The caller's own wrap, if they hold one. Multisig signers and recipients
     # get theirs from the workflow instead, so this is legitimately None for
@@ -497,7 +439,7 @@ def get_chunk(
     db: Session = Depends(get_db),
 ):
     """Download a single encrypted chunk by index."""
-    _check_secret_access(secret_id, current_user.address, db)
+    _load_secret(secret_id, current_user.address, db)
 
     chunk = (
         db.query(models.FileChunk)

@@ -59,6 +59,47 @@ def find_live_grant(db: Session, secret_id: int, user_address: str) -> models.Ac
     )
 
 
+def purge_expired_grants(
+    db: Session, *, secret_id: int | None = None, grantee: str | None = None
+) -> int:
+    """Delete grants that have passed their expiry, and commit. Returns the count.
+
+    The listing endpoints did this inline, spelling the predicate as the
+    negation of `_live_grant_filter` with a different NULL check and a different
+    "now". That is KRY-001's exact shape: the same rule written twice, one edit
+    away from being two rules. Here the two forms sit next to each other.
+
+    Scope by `secret_id` (one secret's ACL) or `grantee` (one user's inbox).
+    """
+    query = db.query(models.AccessGrant).filter(
+        models.AccessGrant.expires_at.isnot(None),
+        models.AccessGrant.expires_at <= utcnow_naive(),
+    )
+    if secret_id is not None:
+        query = query.filter(models.AccessGrant.secret_id == secret_id)
+    if grantee is not None:
+        query = query.filter(models.AccessGrant.grantee_address == normalize_address(grantee))
+    deleted = query.delete(synchronize_session="fetch")
+    db.commit()
+    return deleted
+
+
+def is_workflow_managed(db: Session, secret_id: int) -> bool:
+    """True if a multisig workflow owns this secret.
+
+    A managed secret may not be edited, deleted, shared or revoked directly:
+    the workflow decides who holds a key and when. Four endpoints asked this
+    inline, each with its own wording of the refusal, which is the kind of
+    rule that belongs beside `can_manage_secret` rather than next to it.
+    """
+    return (
+        db.query(models.MultisigWorkflow.id)
+        .filter(models.MultisigWorkflow.secret_id == secret_id)
+        .first()
+        is not None
+    )
+
+
 def can_read_secret(db: Session, secret: models.Secret, user_address: str) -> bool:
     """Read access: owner, holder of a live grant, or a multisig participant.
 

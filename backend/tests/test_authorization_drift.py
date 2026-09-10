@@ -15,12 +15,14 @@ protect against a missing check; they protect against a one-sided edit.
 """
 
 import uuid
+from datetime import timedelta
 
 import pytest
 from conftest import TEST_ENCRYPTION_KEY, auth_header, synthetic_address
 
 import models
 from security import authorization
+from utils.clock import utcnow_naive
 
 STATUSES = ("pending", "completed", "rejected")
 ROLES = ("owner", "signer", "recipient", "signer+recipient", "stranger")
@@ -247,3 +249,78 @@ class TestGroupRoleLadder:
         assert resp.status_code in (403, 404), (
             f"a non-member reached {capability}: {resp.status_code} {resp.text}"
         )
+
+
+class TestGrantExpiryHasOneSpelling:
+    """`purge_expired_grants` must delete exactly what `find_live_grant` refuses.
+
+    These are the two halves of one rule, written as complements: the filter
+    selects `expires_at IS NULL OR expires_at > now`, the purge deletes
+    `expires_at IS NOT NULL AND expires_at <= now`. The routers used to spell
+    the second one inline, with a different NULL check and a different "now" —
+    KRY-001 in miniature. If either side is edited alone, one of these fails.
+    """
+
+    @pytest.mark.parametrize(
+        "offset_seconds, expect_live",
+        [(None, True), (3600, True), (-3600, False), (-1, False)],
+    )
+    def test_purge_removes_exactly_the_grants_that_are_not_live(
+        self, db_session, offset_seconds, expect_live
+    ):
+        owner = _user(db_session, f"purge-owner-{offset_seconds}")
+        grantee = _user(db_session, f"purge-grantee-{offset_seconds}")
+
+        secret = models.Secret(owner_address=owner, name="s", type="note", encrypted_data="ab")
+        db_session.add(secret)
+        db_session.flush()
+
+        expires_at = None
+        if offset_seconds is not None:
+            expires_at = utcnow_naive() + timedelta(seconds=offset_seconds)
+        db_session.add(
+            models.AccessGrant(
+                secret_id=secret.id,
+                grantee_address=grantee,
+                encrypted_key="k",
+                expires_at=expires_at,
+            )
+        )
+        db_session.commit()
+
+        was_live = authorization.find_live_grant(db_session, secret.id, grantee) is not None
+        assert was_live is expect_live
+
+        authorization.purge_expired_grants(db_session, secret_id=secret.id)
+        survived = (
+            db_session.query(models.AccessGrant).filter_by(secret_id=secret.id).first() is not None
+        )
+        assert survived is expect_live, "purge and find_live_grant disagree about this grant"
+
+    def test_purge_scopes_to_the_key_it_is_given(self, db_session):
+        """A purge for one user must not touch another user's expired rows."""
+        owner = _user(db_session, "purge-scope-owner")
+        mine = _user(db_session, "purge-scope-mine")
+        theirs = _user(db_session, "purge-scope-theirs")
+
+        secret = models.Secret(owner_address=owner, name="s", type="note", encrypted_data="ab")
+        db_session.add(secret)
+        db_session.flush()
+        stale = utcnow_naive() - timedelta(hours=1)
+        for who in (mine, theirs):
+            db_session.add(
+                models.AccessGrant(
+                    secret_id=secret.id,
+                    grantee_address=who,
+                    encrypted_key="k",
+                    expires_at=stale,
+                )
+            )
+        db_session.commit()
+
+        authorization.purge_expired_grants(db_session, grantee=mine)
+        remaining = {
+            g.grantee_address
+            for g in db_session.query(models.AccessGrant).filter_by(secret_id=secret.id)
+        }
+        assert remaining == {theirs}
