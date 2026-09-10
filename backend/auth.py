@@ -129,17 +129,18 @@ def verify_message_signature(address: str, message: str, signature: str) -> bool
     that was signed."""
     try:
         with oqs.Signature(SIG_ALG) as verifier:
-            return verifier.verify(message.encode("utf-8"),
-                                   bytes.fromhex(signature),
-                                   bytes.fromhex(address))
+            return verifier.verify(
+                message.encode("utf-8"), bytes.fromhex(signature), bytes.fromhex(address)
+            )
     except Exception as e:
         # Verification failures are expected/attacker-triggerable — keep at debug.
         logger.debug("Message signature verification failed: %s", e)
         return False
 
 
-def verify_pqc_signature(public_key: str, nonce: str, signature: str,
-                         encryption_public_key: str | None = None) -> bool:
+def verify_pqc_signature(
+    public_key: str, nonce: str, signature: str, encryption_public_key: str | None = None
+) -> bool:
     """Verify a client login challenge: ML-DSA-44 over the (key-bound) login message.
     `public_key` and `signature` are hex; the client signs with @noble/post-quantum."""
     try:
@@ -153,8 +154,9 @@ def verify_pqc_signature(public_key: str, nonce: str, signature: str,
         return False
 
 
-def verify_signature(address: str, nonce: str, signature: str,
-                     encryption_public_key: str | None = None) -> bool:
+def verify_signature(
+    address: str, nonce: str, signature: str, encryption_public_key: str | None = None
+) -> bool:
     """Verify a login challenge. Identities are ML-DSA-44 public keys, so this is
     a thin wrapper over verify_pqc_signature (kept for call-site stability)."""
     return verify_pqc_signature(address, nonce, signature, encryption_public_key)
@@ -165,9 +167,7 @@ ACCESS_TOKEN_EXPIRE_MINUTES = 30
 
 def create_access_token(data: dict, expires_delta: timedelta | None = None):
     to_encode = data.copy()
-    expire = datetime.now(UTC) + (
-        expires_delta or timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
-    )
+    expire = datetime.now(UTC) + (expires_delta or timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES))
     to_encode["exp"] = expire  # PyJWT serializes datetime -> numeric exp claim
     try:
         return jwt.encode(to_encode, _load_jwt_secret(), algorithm=JWT_ALG)

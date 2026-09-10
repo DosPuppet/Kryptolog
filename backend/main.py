@@ -20,18 +20,22 @@ from routers import auth, groups, messenger, multisig, notifications, secrets, t
 
 # ── App & Middleware (initialised FIRST so CORS always works) ───
 
+
 @asynccontextmanager
 async def _lifespan(app: FastAPI):
     # Shared WebSocket fan-out + presence (Redis pub/sub, audit P0). No-op
     # without REDIS_URL — the manager stays in single-process local mode.
     from websocket_manager import manager as ws_manager
+
     await ws_manager.startup()
     yield
     await ws_manager.shutdown()
 
+
 app = FastAPI(lifespan=_lifespan)
 app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+
 
 class SecurityHeadersMiddleware(BaseHTTPMiddleware):
     """Security headers for API responses (audit KRY-009).
@@ -72,10 +76,9 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
         # In production the proxy sets this too — matching values, so whichever
         # one lands is correct.
         if request.url.scheme == "https" or request.headers.get("x-forwarded-proto") == "https":
-            response.headers["Strict-Transport-Security"] = (
-                "max-age=63072000; includeSubDomains"
-            )
+            response.headers["Strict-Transport-Security"] = "max-age=63072000; includeSubDomains"
         return response
+
 
 app.add_middleware(SecurityHeadersMiddleware)
 
@@ -136,7 +139,7 @@ app.include_router(groups.router)
 app.include_router(notifications.router)
 app.include_router(transfers.router)
 
+
 @app.get("/")
 def read_root():
     return {"status": "running"}
-

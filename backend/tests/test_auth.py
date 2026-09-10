@@ -48,30 +48,39 @@ class TestLogin:
 
     def test_login_returns_bearer_token(self, client):
         nonce = get_nonce(client, TEST_USER_ADDRESS)
-        resp = client.post("/auth/login", json={
-            "address": TEST_USER_ADDRESS,
-            "signature": "fake",
-            "nonce": nonce,
-            "encryption_public_key": TEST_ENCRYPTION_KEY,
-        })
+        resp = client.post(
+            "/auth/login",
+            json={
+                "address": TEST_USER_ADDRESS,
+                "signature": "fake",
+                "nonce": nonce,
+                "encryption_public_key": TEST_ENCRYPTION_KEY,
+            },
+        )
         data = resp.json()
         assert data["token_type"] == "bearer"
 
     def test_login_with_wrong_nonce_fails(self, client):
         get_nonce(client, TEST_USER_ADDRESS)
-        resp = client.post("/auth/login", json={
-            "address": TEST_USER_ADDRESS,
-            "signature": "fake",
-            "nonce": "wrong_nonce_value",
-        })
+        resp = client.post(
+            "/auth/login",
+            json={
+                "address": TEST_USER_ADDRESS,
+                "signature": "fake",
+                "nonce": "wrong_nonce_value",
+            },
+        )
         assert resp.status_code == 400
 
     def test_login_without_requesting_nonce_fails(self, client):
-        resp = client.post("/auth/login", json={
-            "address": TEST_USER_ADDRESS,
-            "signature": "fake",
-            "nonce": "whatever",
-        })
+        resp = client.post(
+            "/auth/login",
+            json={
+                "address": TEST_USER_ADDRESS,
+                "signature": "fake",
+                "nonce": "whatever",
+            },
+        )
         assert resp.status_code == 400
 
     def test_nonce_consumed_after_login(self, client):
@@ -135,19 +144,25 @@ class TestRegistrationUsernameCollision:
         do_login(client, TEST_USER_ADDRESS, TEST_ENCRYPTION_KEY, "alice")
 
         nonce = get_nonce(client, self.OTHER_ADDRESS)
-        resp = client.post("/auth/login", json={
-            "address": self.OTHER_ADDRESS,
-            "signature": "fake",
-            "nonce": nonce,
-            "encryption_public_key": TEST_ENCRYPTION_KEY,
-            "username": "ALICE",
-        })
+        resp = client.post(
+            "/auth/login",
+            json={
+                "address": self.OTHER_ADDRESS,
+                "signature": "fake",
+                "nonce": nonce,
+                "encryption_public_key": TEST_ENCRYPTION_KEY,
+                "username": "ALICE",
+            },
+        )
         assert resp.status_code == 409
 
     def test_distinct_username_still_registers(self, client):
         do_login(client, TEST_USER_ADDRESS, TEST_ENCRYPTION_KEY, "alice")
         _, user = do_login(
-            client, self.OTHER_ADDRESS, TEST_ENCRYPTION_KEY, "bob",
+            client,
+            self.OTHER_ADDRESS,
+            TEST_ENCRYPTION_KEY,
+            "bob",
         )
         assert user["username"] == "bob"
 

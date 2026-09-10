@@ -9,6 +9,7 @@ Separately (not in the audit): the signature and the `completed` status used
 to be committed one after the other, so a crash between them stranded a
 fully-signed workflow in `pending` with no recovery path.
 """
+
 import threading
 
 import pytest
@@ -30,23 +31,30 @@ def _create_workflow(client, token, signers, recipients=None, threshold=None):
     recipients = recipients or []
     if threshold is None:
         threshold = len(signers)
-    return client.post("/multisig/workflow", json={
-        "name": "ConcurrentWorkflow",
-        "secret_data": {
-            "name": "S", "type": "standard",
-            "encrypted_data": "payload", "encrypted_key": "owner_key",
+    return client.post(
+        "/multisig/workflow",
+        json={
+            "name": "ConcurrentWorkflow",
+            "secret_data": {
+                "name": "S",
+                "type": "standard",
+                "encrypted_data": "payload",
+                "encrypted_key": "owner_key",
+            },
+            "signers": signers,
+            "recipients": recipients,
+            "signer_keys": {a: f"k_{a}" for a in signers},
+            "recipient_keys": {a: f"k_{a}" for a in recipients},
+            "threshold": threshold,
         },
-        "signers": signers,
-        "recipients": recipients,
-        "signer_keys": {a: f"k_{a}" for a in signers},
-        "recipient_keys": {a: f"k_{a}" for a in recipients},
-        "threshold": threshold,
-    }, headers=auth_header(token))
+        headers=auth_header(token),
+    )
 
 
 @pytest.fixture(autouse=True)
 def _no_rate_limits():
     from dependencies import limiter
+
     limiter.enabled = False
     yield
     limiter.enabled = True
@@ -99,13 +107,19 @@ class TestConcurrentSigning:
 
         db = TestingSessionLocal()
         try:
-            signed = db.query(models.MultisigWorkflowSigner).filter(
-                models.MultisigWorkflowSigner.workflow_id == wf["id"],
-                models.MultisigWorkflowSigner.has_signed.is_(True),
-            ).count()
-            row = db.query(models.MultisigWorkflow).filter(
-                models.MultisigWorkflow.id == wf["id"]
-            ).first()
+            signed = (
+                db.query(models.MultisigWorkflowSigner)
+                .filter(
+                    models.MultisigWorkflowSigner.workflow_id == wf["id"],
+                    models.MultisigWorkflowSigner.has_signed.is_(True),
+                )
+                .count()
+            )
+            row = (
+                db.query(models.MultisigWorkflow)
+                .filter(models.MultisigWorkflow.id == wf["id"])
+                .first()
+            )
 
             # Signing is closed once status leaves "pending", so no more than
             # the quorum may ever be recorded.
@@ -143,8 +157,7 @@ class TestConcurrentSigning:
                 barrier.wait(timeout=10)
                 results[i] = c.post(
                     f"/multisig/workflow/{wf['id']}/sign",
-                    json={"signature": "sig",
-                          "recipient_keys": {recipient: f"key_from_{i}"}},
+                    json={"signature": "sig", "recipient_keys": {recipient: f"key_from_{i}"}},
                     headers=auth_header(token),
                 )
             except Exception as exc:
@@ -164,10 +177,14 @@ class TestConcurrentSigning:
 
         db = TestingSessionLocal()
         try:
-            row = db.query(models.MultisigWorkflowRecipient).filter(
-                models.MultisigWorkflowRecipient.workflow_id == wf["id"],
-                models.MultisigWorkflowRecipient.user_address == recipient,
-            ).first()
+            row = (
+                db.query(models.MultisigWorkflowRecipient)
+                .filter(
+                    models.MultisigWorkflowRecipient.workflow_id == wf["id"],
+                    models.MultisigWorkflowRecipient.user_address == recipient,
+                )
+                .first()
+            )
             assert not (row.encrypted_key or "").startswith("key_from_"), (
                 "a non-completing signer released recipient keys"
             )
@@ -189,7 +206,8 @@ class TestConcurrentSigning:
 
         first = client.post(
             f"/multisig/workflow/{wf['id']}/sign",
-            json={"signature": "sig"}, headers=auth_header(signers[0][0]),
+            json={"signature": "sig"},
+            headers=auth_header(signers[0][0]),
         )
         assert first.status_code == 200, first.text
 
@@ -202,10 +220,14 @@ class TestConcurrentSigning:
 
         db = TestingSessionLocal()
         try:
-            row = db.query(models.MultisigWorkflowRecipient).filter(
-                models.MultisigWorkflowRecipient.workflow_id == wf["id"],
-                models.MultisigWorkflowRecipient.user_address == recipient,
-            ).first()
+            row = (
+                db.query(models.MultisigWorkflowRecipient)
+                .filter(
+                    models.MultisigWorkflowRecipient.workflow_id == wf["id"],
+                    models.MultisigWorkflowRecipient.user_address == recipient,
+                )
+                .first()
+            )
             assert row.encrypted_key == "released"
         finally:
             db.close()
@@ -228,13 +250,19 @@ class TestCompletionIsAtomic:
 
         db = TestingSessionLocal()
         try:
-            row = db.query(models.MultisigWorkflow).filter(
-                models.MultisigWorkflow.id == wf["id"]
-            ).first()
-            signed = db.query(models.MultisigWorkflowSigner).filter(
-                models.MultisigWorkflowSigner.workflow_id == wf["id"],
-                models.MultisigWorkflowSigner.has_signed.is_(True),
-            ).count()
+            row = (
+                db.query(models.MultisigWorkflow)
+                .filter(models.MultisigWorkflow.id == wf["id"])
+                .first()
+            )
+            signed = (
+                db.query(models.MultisigWorkflowSigner)
+                .filter(
+                    models.MultisigWorkflowSigner.workflow_id == wf["id"],
+                    models.MultisigWorkflowSigner.has_signed.is_(True),
+                )
+                .count()
+            )
             # Quorum reached => status must already reflect it.
             assert signed == 2
             assert row.status == "completed"
@@ -247,12 +275,18 @@ class TestCompletionIsAtomic:
         wf = _create_workflow(client, owner_token, addrs, threshold=2).json()
 
         for token, _ in signers[:2]:
-            client.post(f"/multisig/workflow/{wf['id']}/sign",
-                        json={"signature": "sig"}, headers=auth_header(token))
+            client.post(
+                f"/multisig/workflow/{wf['id']}/sign",
+                json={"signature": "sig"},
+                headers=auth_header(token),
+            )
 
         # Third signer arrives after the quorum closed the workflow.
-        late = client.post(f"/multisig/workflow/{wf['id']}/sign",
-                           json={"signature": "sig"}, headers=auth_header(signers[2][0]))
+        late = client.post(
+            f"/multisig/workflow/{wf['id']}/sign",
+            json={"signature": "sig"},
+            headers=auth_header(signers[2][0]),
+        )
         assert late.status_code == 400
         assert "completed" in late.text
 
@@ -319,13 +353,19 @@ class TestConcurrentRejectAndSign:
 
         db = TestingSessionLocal()
         try:
-            row = db.query(models.MultisigWorkflow).filter(
-                models.MultisigWorkflow.id == wf["id"]
-            ).first()
-            rec = db.query(models.MultisigWorkflowRecipient).filter(
-                models.MultisigWorkflowRecipient.workflow_id == wf["id"],
-                models.MultisigWorkflowRecipient.user_address == recipient,
-            ).first()
+            row = (
+                db.query(models.MultisigWorkflow)
+                .filter(models.MultisigWorkflow.id == wf["id"])
+                .first()
+            )
+            rec = (
+                db.query(models.MultisigWorkflowRecipient)
+                .filter(
+                    models.MultisigWorkflowRecipient.workflow_id == wf["id"],
+                    models.MultisigWorkflowRecipient.user_address == recipient,
+                )
+                .first()
+            )
 
             assert row.status in ("completed", "rejected")
             # The decisive invariant: keys are released if and ONLY if the
@@ -350,9 +390,13 @@ class TestParticipantUniqueness:
 
         db = TestingSessionLocal()
         try:
-            db.add(models.MultisigWorkflowSigner(
-                workflow_id=wf["id"], user_address=addr, has_signed=False,
-            ))
+            db.add(
+                models.MultisigWorkflowSigner(
+                    workflow_id=wf["id"],
+                    user_address=addr,
+                    has_signed=False,
+                )
+            )
             with pytest.raises(IntegrityError):
                 db.commit()
         finally:

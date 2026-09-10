@@ -19,6 +19,7 @@ Defence, in layers:
 
 Steps 1-2 alone are a TOCTOU race; 3 is what actually closes it.
 """
+
 import ipaddress
 import logging
 import socket
@@ -34,15 +35,15 @@ ALLOWED_SCHEMES = ("https",)
 
 # Belt and braces around `is_global`: these ranges must never be reachable.
 _BLOCKED_NETWORKS = [
-    ipaddress.ip_network("169.254.0.0/16"),   # link-local / cloud metadata
-    ipaddress.ip_network("127.0.0.0/8"),      # loopback
-    ipaddress.ip_network("10.0.0.0/8"),       # RFC1918
-    ipaddress.ip_network("172.16.0.0/12"),    # RFC1918
-    ipaddress.ip_network("192.168.0.0/16"),   # RFC1918
-    ipaddress.ip_network("100.64.0.0/10"),    # CGNAT
-    ipaddress.ip_network("::1/128"),          # IPv6 loopback
-    ipaddress.ip_network("fc00::/7"),         # IPv6 unique-local
-    ipaddress.ip_network("fe80::/10"),        # IPv6 link-local
+    ipaddress.ip_network("169.254.0.0/16"),  # link-local / cloud metadata
+    ipaddress.ip_network("127.0.0.0/8"),  # loopback
+    ipaddress.ip_network("10.0.0.0/8"),  # RFC1918
+    ipaddress.ip_network("172.16.0.0/12"),  # RFC1918
+    ipaddress.ip_network("192.168.0.0/16"),  # RFC1918
+    ipaddress.ip_network("100.64.0.0/10"),  # CGNAT
+    ipaddress.ip_network("::1/128"),  # IPv6 loopback
+    ipaddress.ip_network("fc00::/7"),  # IPv6 unique-local
+    ipaddress.ip_network("fe80::/10"),  # IPv6 link-local
 ]
 
 MAX_ENDPOINT_LENGTH = 2000
@@ -89,9 +90,7 @@ def resolve_safe_addresses(hostname: str, port: int) -> list[str]:
         except ValueError:
             raise UnsafeUrlError(f"Unparseable address for host: {hostname}")
         if not _address_is_safe(ip):
-            raise UnsafeUrlError(
-                f"Host {hostname} resolves to a non-public address ({addr})"
-            )
+            raise UnsafeUrlError(f"Host {hostname} resolves to a non-public address ({addr})")
         addresses.append(addr)
 
     return addresses

@@ -28,7 +28,10 @@ def load(env_text, tmp_path, want=()):
     # NUL-separated so values containing spaces or newlines survive the trip.
     script += "".join(f'printf "%s\\0" "${{{name}-<unset>}}";\n' for name in want)
     proc = subprocess.run(
-        ["bash", "-c", script], capture_output=True, text=True, cwd=tmp_path,
+        ["bash", "-c", script],
+        capture_output=True,
+        text=True,
+        cwd=tmp_path,
     )
     assert proc.returncode == 0, proc.stderr
     values = proc.stdout.split("\0")[:-1] if want else []
@@ -77,25 +80,31 @@ def test_angle_bracket_placeholder_loads_instead_of_redirecting(tmp_path):
     """
     values, _ = load(
         "VAPID_PUBLIC_KEY=<your-vapid-public-key>\nAFTER=reached\n",
-        tmp_path, ["VAPID_PUBLIC_KEY", "AFTER"],
+        tmp_path,
+        ["VAPID_PUBLIC_KEY", "AFTER"],
     )
     assert values["VAPID_PUBLIC_KEY"] == "<your-vapid-public-key>"
     assert values["AFTER"] == "reached", "parsing stopped at the placeholder line"
 
 
-@pytest.mark.parametrize("line,expected", [
-    ("DB=postgresql+psycopg://u:p@localhost:5432/kryptolog",
-     "postgresql+psycopg://u:p@localhost:5432/kryptolog"),
-    ("B64=aGVsbG8td29ybGQ=", "aGVsbG8td29ybGQ="),          # '=' inside the value
-    ("HASH=postgres://user:pa#ss@host", "postgres://user:pa#ss@host"),  # bare '#' kept
-    ("INLINE=real # comment", "real"),                      # ' #' is a comment
-    ('DQ="spaced "', "spaced "),                            # quoted: verbatim
-    ("SQ='single $HOME'", "single $HOME"),
-    ('HASHQ="#notacomment"', "#notacomment"),
-    ("export EXPORTED=works", "works"),
-    ("  INDENTED=trimmed  ", "trimmed"),
-    ("EMPTY=", ""),
-])
+@pytest.mark.parametrize(
+    "line,expected",
+    [
+        (
+            "DB=postgresql+psycopg://u:p@localhost:5432/kryptolog",
+            "postgresql+psycopg://u:p@localhost:5432/kryptolog",
+        ),
+        ("B64=aGVsbG8td29ybGQ=", "aGVsbG8td29ybGQ="),  # '=' inside the value
+        ("HASH=postgres://user:pa#ss@host", "postgres://user:pa#ss@host"),  # bare '#' kept
+        ("INLINE=real # comment", "real"),  # ' #' is a comment
+        ('DQ="spaced "', "spaced "),  # quoted: verbatim
+        ("SQ='single $HOME'", "single $HOME"),
+        ('HASHQ="#notacomment"', "#notacomment"),
+        ("export EXPORTED=works", "works"),
+        ("  INDENTED=trimmed  ", "trimmed"),
+        ("EMPTY=", ""),
+    ],
+)
 def test_real_world_values_round_trip(line, expected, tmp_path):
     """The formats the shipped .env.example actually uses must be unchanged."""
     name = line.replace("export ", "").strip().split("=")[0]
@@ -111,7 +120,9 @@ def test_value_on_a_final_line_without_a_newline(tmp_path):
 def test_malformed_lines_are_reported_and_skipped(tmp_path):
     """A bad line must not abort the file — the good ones after it still load."""
     values, stderr = load(
-        "BAD-NAME=nope\n=nokey\nnoequals\nGOOD=loaded\n", tmp_path, ["GOOD", "BAD_NAME"],
+        "BAD-NAME=nope\n=nokey\nnoequals\nGOOD=loaded\n",
+        tmp_path,
+        ["GOOD", "BAD_NAME"],
     )
     assert values["GOOD"] == "loaded"
     assert values["BAD_NAME"] == "<unset>"
@@ -128,8 +139,7 @@ def test_startup_scripts_do_not_source_the_env_file():
     root = Path(__file__).resolve().parents[2]
     for script in (root / "start_all.sh", root / "backend" / "run_dev.sh"):
         code = "\n".join(
-            line for line in script.read_text().splitlines()
-            if not line.lstrip().startswith("#")
+            line for line in script.read_text().splitlines() if not line.lstrip().startswith("#")
         )
         assert "kryptolog_load_env" in code, f"{script.name} no longer uses the parser"
         for forbidden in ("source .env", "source backend/.env", ". .env"):

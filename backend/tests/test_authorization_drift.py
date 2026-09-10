@@ -13,6 +13,7 @@ is exactly the shape KRY-001 came in, so the pairs are pinned against each
 other here over every configuration a caller can be in. These tests do not
 protect against a missing check; they protect against a one-sided edit.
 """
+
 import uuid
 
 import pytest
@@ -37,16 +38,21 @@ def _workflow(db_session, owner, *, status, signer=None, recipient=None):
     secret = models.Secret(owner_address=owner, name="s", type="note", encrypted_data="ab")
     db_session.add(secret)
     db_session.flush()
-    wf = models.MultisigWorkflow(name="wf", owner_address=owner, secret_id=secret.id,
-                                 status=status, threshold=1)
+    wf = models.MultisigWorkflow(
+        name="wf", owner_address=owner, secret_id=secret.id, status=status, threshold=1
+    )
     db_session.add(wf)
     db_session.flush()
     if signer:
-        db_session.add(models.MultisigWorkflowSigner(
-            workflow_id=wf.id, user_address=signer, has_signed=False))
+        db_session.add(
+            models.MultisigWorkflowSigner(workflow_id=wf.id, user_address=signer, has_signed=False)
+        )
     if recipient:
-        db_session.add(models.MultisigWorkflowRecipient(
-            workflow_id=wf.id, user_address=recipient, encrypted_key="33cc"))
+        db_session.add(
+            models.MultisigWorkflowRecipient(
+                workflow_id=wf.id, user_address=recipient, encrypted_key="33cc"
+            )
+        )
     db_session.commit()
     return wf
 
@@ -84,15 +90,9 @@ class TestOneRuleTwoSpellings:
         # And the rules are the intended ones, not merely two copies of the
         # same mistake: a recipient waits for completion, everyone else does
         # not, and a stranger never gets in.
-        assert {workflows[i] for i in listed} == {
-            ("owner", s) for s in STATUSES
-        } | {
+        assert {workflows[i] for i in listed} == {("owner", s) for s in STATUSES} | {
             ("signer", s) for s in STATUSES
-        } | {
-            ("signer+recipient", s) for s in STATUSES
-        } | {
-            ("recipient", "completed")
-        }
+        } | {("signer+recipient", s) for s in STATUSES} | {("recipient", "completed")}
 
     def test_group_membership_predicate_and_subquery_agree(self, db_session):
         subject = _user(db_session, "drift-member")
@@ -102,18 +102,21 @@ class TestOneRuleTwoSpellings:
         for i in range(4):
             channel = models.GroupChannel(id=str(uuid.uuid4()), name="g", owner_address=other)
             db_session.add(channel)
-            db_session.add(models.GroupMember(
-                channel_id=channel.id, user_address=other, role="owner"))
+            db_session.add(
+                models.GroupMember(channel_id=channel.id, user_address=other, role="owner")
+            )
             if i % 2 == 0:
-                db_session.add(models.GroupMember(
-                    channel_id=channel.id, user_address=subject, role="member"))
+                db_session.add(
+                    models.GroupMember(channel_id=channel.id, user_address=subject, role="member")
+                )
                 joined.append(channel.id)
             else:
                 not_joined.append(channel.id)
         db_session.commit()
 
         listed = {
-            cid for (cid,) in db_session.query(models.GroupChannel.id).filter(
+            cid
+            for (cid,) in db_session.query(models.GroupChannel.id).filter(
                 models.GroupChannel.id.in_(authorization.member_channel_ids(db_session, subject))
             )
         }
@@ -128,8 +131,9 @@ class TestOneRuleTwoSpellings:
         subject = _user(db_session, "drift-case")
         channel = models.GroupChannel(id=str(uuid.uuid4()), name="g", owner_address=subject)
         db_session.add(channel)
-        db_session.add(models.GroupMember(
-            channel_id=channel.id, user_address=subject, role="owner"))
+        db_session.add(
+            models.GroupMember(channel_id=channel.id, user_address=subject, role="owner")
+        )
         db_session.commit()
 
         assert authorization.is_group_member(db_session, channel.id, subject.upper())
@@ -157,15 +161,17 @@ class TestGroupRoleLadder:
         target = synthetic_address("drift-target")
         db_session.add(models.User(address=target, encryption_public_key=TEST_ENCRYPTION_KEY))
 
-        channel = models.GroupChannel(id=str(uuid.uuid4()), name="g",
-                                      owner_address=owner["address"])
+        channel = models.GroupChannel(
+            id=str(uuid.uuid4()), name="g", owner_address=owner["address"]
+        )
         db_session.add(channel)
-        for addr, role in ((owner["address"], "owner"),
-                           (admin["address"], "admin"),
-                           (member["address"], "member"),
-                           (target, "member")):
-            db_session.add(models.GroupMember(
-                channel_id=channel.id, user_address=addr, role=role))
+        for addr, role in (
+            (owner["address"], "owner"),
+            (admin["address"], "admin"),
+            (member["address"], "member"),
+            (target, "member"),
+        ):
+            db_session.add(models.GroupMember(channel_id=channel.id, user_address=addr, role=role))
         db_session.commit()
         return {
             "id": channel.id,
@@ -180,18 +186,26 @@ class TestGroupRoleLadder:
         target = group["target"]
         return {
             "read": lambda: client.get(f"/groups/{cid}", headers=auth_header(token)),
-            "post": lambda: client.post(f"/groups/{cid}/messages", json={"content": "hi"},
-                                        headers=auth_header(token)),
-            "history": lambda: client.post(f"/groups/{cid}/history", json={"limit": 5, "offset": 0},
-                                           headers=auth_header(token)),
-            "rename": lambda: client.put(f"/groups/{cid}", json={"name": "renamed"},
-                                         headers=auth_header(token)),
-            "remove_other": lambda: client.delete(f"/groups/{cid}/members/{target}",
-                                                  headers=auth_header(token)),
-            "leave": lambda: client.delete(f"/groups/{cid}/members/{actor_address}",
-                                           headers=auth_header(token)),
-            "set_role": lambda: client.put(f"/groups/{cid}/members/{target}/role",
-                                           json={"role": "admin"}, headers=auth_header(token)),
+            "post": lambda: client.post(
+                f"/groups/{cid}/messages", json={"content": "hi"}, headers=auth_header(token)
+            ),
+            "history": lambda: client.post(
+                f"/groups/{cid}/history", json={"limit": 5, "offset": 0}, headers=auth_header(token)
+            ),
+            "rename": lambda: client.put(
+                f"/groups/{cid}", json={"name": "renamed"}, headers=auth_header(token)
+            ),
+            "remove_other": lambda: client.delete(
+                f"/groups/{cid}/members/{target}", headers=auth_header(token)
+            ),
+            "leave": lambda: client.delete(
+                f"/groups/{cid}/members/{actor_address}", headers=auth_header(token)
+            ),
+            "set_role": lambda: client.put(
+                f"/groups/{cid}/members/{target}/role",
+                json={"role": "admin"},
+                headers=auth_header(token),
+            ),
         }[capability]()
 
     # capability -> the roles that may use it.
@@ -212,21 +226,24 @@ class TestGroupRoleLadder:
         resp = self._call(client, group, capability, token, address)
         allowed = role in self.LADDER[capability]
         if allowed:
-            assert resp.status_code != 403, (
-                f"a group {role} was refused {capability}: {resp.text}")
+            assert resp.status_code != 403, f"a group {role} was refused {capability}: {resp.text}"
         else:
             assert resp.status_code == 403, (
-                f"a group {role} was allowed {capability} (got {resp.status_code})")
+                f"a group {role} was allowed {capability} (got {resp.status_code})"
+            )
 
     @pytest.mark.parametrize("capability", sorted(LADDER))
     def test_a_non_member_is_refused_everything(self, client, group, capability, db_session):
         outsider_address = synthetic_address("drift-outsider")
-        db_session.add(models.User(address=outsider_address,
-                                   encryption_public_key=TEST_ENCRYPTION_KEY))
+        db_session.add(
+            models.User(address=outsider_address, encryption_public_key=TEST_ENCRYPTION_KEY)
+        )
         db_session.commit()
         from conftest import do_login
+
         token, _ = do_login(client, outsider_address, TEST_ENCRYPTION_KEY)
 
         resp = self._call(client, group, capability, token, outsider_address)
         assert resp.status_code in (403, 404), (
-            f"a non-member reached {capability}: {resp.status_code} {resp.text}")
+            f"a non-member reached {capability}: {resp.status_code} {resp.text}"
+        )

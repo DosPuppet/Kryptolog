@@ -10,6 +10,7 @@ So the lists return summaries and `GET /secrets/{id}` returns the content. The
 assertions below are mostly about *absence*, which is the awkward kind: a
 response that stops carrying a field looks fine until something needed it.
 """
+
 from datetime import UTC, datetime, timedelta
 
 from conftest import auth_header
@@ -65,9 +66,7 @@ class TestListsCarryNoCiphertext:
         # Everything the list actually draws is still there.
         assert rows[0]["name"] and rows[0]["encrypted_key"] and rows[0]["owner"]
 
-    def test_shared_with_me_omits_the_payload_but_keeps_the_title(
-        self, client, user1, user2
-    ):
+    def test_shared_with_me_omits_the_payload_but_keeps_the_title(self, client, user1, user2):
         owner_token, _ = user1
         grantee_token, grantee = user2
         secret = _make_secret(client, owner_token, name="shared-title")
@@ -93,16 +92,15 @@ class TestListsCarryNoCiphertext:
         secret = _make_secret(client, owner_token)
         _share(client, owner_token, secret["id"], grantee["address"])
 
-        rows = client.get(f"/secrets/{secret['id']}/access",
-                          headers=auth_header(owner_token)).json()
+        rows = client.get(
+            f"/secrets/{secret['id']}/access", headers=auth_header(owner_token)
+        ).json()
         assert len(rows) == 2  # owner's own grant + the grantee's
         for row in rows:
             assert "secret" not in row, row.keys()
             assert {"grantee_address", "expires_at", "id"} <= set(row)
 
-    def test_workflow_list_omits_the_payload_and_the_detail_keeps_it(
-        self, client, user1, user2
-    ):
+    def test_workflow_list_omits_the_payload_and_the_detail_keeps_it(self, client, user1, user2):
         owner_token, _ = user1
         _, signer = user2
         created = client.post(
@@ -110,8 +108,10 @@ class TestListsCarryNoCiphertext:
             json={
                 "name": "wf",
                 "secret_data": {
-                    "name": "wf-secret", "type": "note",
-                    "encrypted_data": PAYLOAD, "encrypted_key": "00ff",
+                    "name": "wf-secret",
+                    "type": "note",
+                    "encrypted_data": PAYLOAD,
+                    "encrypted_key": "00ff",
                 },
                 "signers": [signer["address"]],
                 "recipients": [],
@@ -130,8 +130,9 @@ class TestListsCarryNoCiphertext:
         # Still enough to draw the row and decide whether a signature is owed.
         assert listed[0]["status"] == "pending" and listed[0]["signers"]
 
-        detail = client.get(f"/multisig/workflow/{workflow_id}",
-                            headers=auth_header(owner_token)).json()
+        detail = client.get(
+            f"/multisig/workflow/{workflow_id}", headers=auth_header(owner_token)
+        ).json()
         assert detail["secret"]["encrypted_data"] == PAYLOAD
 
 
@@ -175,16 +176,23 @@ class TestSecretDetail:
         secret = _make_secret(client, owner_token)
         grant = _share(client, owner_token, secret["id"], grantee["address"], expires_in=3600)
 
-        assert client.get(f"/secrets/{secret['id']}",
-                          headers=auth_header(grantee_token)).status_code == 200
+        assert (
+            client.get(f"/secrets/{secret['id']}", headers=auth_header(grantee_token)).status_code
+            == 200
+        )
 
-        row = db_session.query(models.AccessGrant).filter(
-            models.AccessGrant.id == grant["id"]).first()
+        row = (
+            db_session.query(models.AccessGrant)
+            .filter(models.AccessGrant.id == grant["id"])
+            .first()
+        )
         row.expires_at = _naive_utc(datetime.now(UTC)) - timedelta(minutes=1)
         db_session.commit()
 
-        assert client.get(f"/secrets/{secret['id']}",
-                          headers=auth_header(grantee_token)).status_code == 403
+        assert (
+            client.get(f"/secrets/{secret['id']}", headers=auth_header(grantee_token)).status_code
+            == 403
+        )
 
     def test_multisig_signer_may_read_a_pending_secret_but_a_recipient_may_not(
         self, client, user1, user2, user3, db_session
@@ -203,8 +211,10 @@ class TestSecretDetail:
             json={
                 "name": "wf",
                 "secret_data": {
-                    "name": "wf-secret", "type": "note",
-                    "encrypted_data": PAYLOAD, "encrypted_key": "00ff",
+                    "name": "wf-secret",
+                    "type": "note",
+                    "encrypted_data": PAYLOAD,
+                    "encrypted_key": "00ff",
                 },
                 "signers": [signer["address"]],
                 "recipients": [recipient["address"]],
@@ -223,16 +233,20 @@ class TestSecretDetail:
         # No AccessGrant of their own: a signer's wrap lives on the signer row.
         assert as_signer.json()["encrypted_key"] is None
 
-        assert client.get(f"/secrets/{secret_id}",
-                          headers=auth_header(recipient_token)).status_code == 403
+        assert (
+            client.get(f"/secrets/{secret_id}", headers=auth_header(recipient_token)).status_code
+            == 403
+        )
 
         # Completing the workflow releases it to the recipient.
         db_session.query(models.MultisigWorkflow).filter(
             models.MultisigWorkflow.secret_id == secret_id
         ).update({"status": "completed"})
         db_session.commit()
-        assert client.get(f"/secrets/{secret_id}",
-                          headers=auth_header(recipient_token)).status_code == 200
+        assert (
+            client.get(f"/secrets/{secret_id}", headers=auth_header(recipient_token)).status_code
+            == 200
+        )
 
     def test_missing_secret_is_a_404(self, client, user1):
         token, _ = user1

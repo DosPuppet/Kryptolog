@@ -12,15 +12,10 @@ SQLALCHEMY_DATABASE_URL = os.getenv(
 )
 
 # check_same_thread is SQLite-only; pool_pre_ping recovers dropped connections.
-connect_args = (
-    {"check_same_thread": False}
-    if SQLALCHEMY_DATABASE_URL.startswith("sqlite")
-    else {}
-)
-engine = create_engine(
-    SQLALCHEMY_DATABASE_URL, connect_args=connect_args, pool_pre_ping=True
-)
+connect_args = {"check_same_thread": False} if SQLALCHEMY_DATABASE_URL.startswith("sqlite") else {}
+engine = create_engine(SQLALCHEMY_DATABASE_URL, connect_args=connect_args, pool_pre_ping=True)
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+
 
 def get_db():
     db = SessionLocal()

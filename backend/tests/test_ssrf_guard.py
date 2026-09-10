@@ -3,6 +3,7 @@
 Covers the address matrix from the audit plus the redirect / DNS-rebinding
 variants that made the finding exploitable in the first place.
 """
+
 from unittest.mock import patch
 
 import pytest
@@ -27,32 +28,42 @@ def _resolves_to(*addresses):
 
 class TestBlockedAddresses:
     # The audit's explicit list, plus IPv6 and CGNAT.
-    @pytest.mark.parametrize("addr", [
-        "127.0.0.1",        # loopback
-        "127.1.2.3",        # loopback, non-canonical
-        "10.0.0.1",         # RFC1918
-        "10.255.255.254",
-        "172.16.0.1",       # RFC1918
-        "172.31.255.254",
-        "192.168.0.1",      # RFC1918
-        "192.168.1.1",
-        "169.254.169.254",  # cloud metadata
-        "169.254.1.1",      # link-local
-        "0.0.0.0",          # unspecified
-        "100.64.0.1",       # CGNAT
-        "224.0.0.1",        # multicast
-        "::1",              # IPv6 loopback
-        "fc00::1",          # IPv6 unique-local
-        "fe80::1",          # IPv6 link-local
-    ])
+    @pytest.mark.parametrize(
+        "addr",
+        [
+            "127.0.0.1",  # loopback
+            "127.1.2.3",  # loopback, non-canonical
+            "10.0.0.1",  # RFC1918
+            "10.255.255.254",
+            "172.16.0.1",  # RFC1918
+            "172.31.255.254",
+            "192.168.0.1",  # RFC1918
+            "192.168.1.1",
+            "169.254.169.254",  # cloud metadata
+            "169.254.1.1",  # link-local
+            "0.0.0.0",  # unspecified
+            "100.64.0.1",  # CGNAT
+            "224.0.0.1",  # multicast
+            "::1",  # IPv6 loopback
+            "fc00::1",  # IPv6 unique-local
+            "fe80::1",  # IPv6 link-local
+        ],
+    )
     def test_literal_ip_endpoint_is_rejected(self, addr):
         host = f"[{addr}]" if ":" in addr else addr
         with pytest.raises(UnsafeUrlError):
             validate_push_endpoint(f"https://{host}/push/abc")
 
-    @pytest.mark.parametrize("addr", [
-        "127.0.0.1", "10.0.0.1", "192.168.1.1", "169.254.169.254", "::1",
-    ])
+    @pytest.mark.parametrize(
+        "addr",
+        [
+            "127.0.0.1",
+            "10.0.0.1",
+            "192.168.1.1",
+            "169.254.169.254",
+            "::1",
+        ],
+    )
     def test_hostname_resolving_to_internal_is_rejected(self, addr):
         """A public-looking name that resolves inward must still be refused."""
         with _resolves_to(addr):
@@ -76,16 +87,19 @@ class TestBlockedAddresses:
 
 
 class TestSchemeAndShape:
-    @pytest.mark.parametrize("url", [
-        "http://push.example.com/abc",       # plaintext
-        "file:///etc/passwd",
-        "gopher://push.example.com/",
-        "ftp://push.example.com/",
-        "//push.example.com/abc",            # scheme-relative
-        "https://user:pass@push.example.com/",  # credentials
-        "https://push.example.com:8080/abc",    # non-443 port
-        "",
-    ])
+    @pytest.mark.parametrize(
+        "url",
+        [
+            "http://push.example.com/abc",  # plaintext
+            "file:///etc/passwd",
+            "gopher://push.example.com/",
+            "ftp://push.example.com/",
+            "//push.example.com/abc",  # scheme-relative
+            "https://user:pass@push.example.com/",  # credentials
+            "https://push.example.com:8080/abc",  # non-443 port
+            "",
+        ],
+    )
     def test_bad_shape_is_rejected(self, url):
         with _resolves_to(PUBLIC_IP):
             with pytest.raises(UnsafeUrlError):
@@ -101,9 +115,7 @@ class TestSchemeAndShape:
 
     def test_public_https_endpoint_is_accepted(self):
         with _resolves_to(PUBLIC_IP):
-            assert validate_push_endpoint(
-                "https://fcm.googleapis.com/fcm/send/abc"
-            ) == [PUBLIC_IP]
+            assert validate_push_endpoint("https://fcm.googleapis.com/fcm/send/abc") == [PUBLIC_IP]
 
 
 class TestRedirectAndRebinding:

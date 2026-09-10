@@ -26,33 +26,38 @@ from websocket_manager import manager
 
 logger = logging.getLogger("kryptolog.messenger")
 
-router = APIRouter(
-    prefix="/messages",
-    tags=["messenger"]
-)
+router = APIRouter(prefix="/messages", tags=["messenger"])
+
 
 @router.post("", response_model=schemas.MessageResponse)
 @limiter.limit("20/minute")
-async def send_message(request: Request, msg: schemas.MessageCreate, current_user: models.User = Depends(get_current_user), db: Session = Depends(get_db)):
+async def send_message(
+    request: Request,
+    msg: schemas.MessageCreate,
+    current_user: models.User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
     recipient_addr = msg.recipient_address.lower()
     recipient = db.query(models.User).filter(models.User.address == recipient_addr).first()
     if not recipient:
         raise HTTPException(status_code=404, detail="Recipient not found")
-    
+
     # Validate PQC key for recipient (Messenger requires PQC for all participants)
     if not is_usable_encryption_key(recipient.encryption_public_key):
-        raise HTTPException(status_code=400, detail="Recipient is not Messenger-capable (Missing PQC key)")
-    
+        raise HTTPException(
+            status_code=400, detail="Recipient is not Messenger-capable (Missing PQC key)"
+        )
+
     new_msg = models.Message(
         sender_address=current_user.address,
-        recipient_address=recipient_addr, # Store lowercase
+        recipient_address=recipient_addr,  # Store lowercase
         content=msg.content,
-        is_read=False
+        is_read=False,
     )
     db.add(new_msg)
     db.commit()
     db.refresh(new_msg)
-    
+
     msg_data = {
         "type": "NEW_MESSAGE",
         "message": {
@@ -61,25 +66,26 @@ async def send_message(request: Request, msg: schemas.MessageCreate, current_use
             "recipient_address": new_msg.recipient_address,
             "content": new_msg.content,
             "is_read": new_msg.is_read,
-            "created_at": new_msg.created_at.isoformat()
-        }
+            "created_at": new_msg.created_at.isoformat(),
+        },
     }
-    
+
     await manager.send_personal_message(msg_data, recipient_addr)
-    
+
     sender_name = current_user.username or f"{current_user.address[:8]}..."
     await notify_user_push_async(
         db,
         recipient_addr,
         title="New Message",
         body=f"You have a new secure message from {sender_name}",
-        data={"type": "messenger", "sender": current_user.address}
+        data={"type": "messenger", "sender": current_user.address},
     )
 
     # Send to Sender (for sync across their devices)
     await manager.send_personal_message(msg_data, current_user.address)
 
     return new_msg
+
 
 @router.get("/conversations", response_model=list[schemas.ConversationResponse])
 @limiter.limit("30/minute")
@@ -102,30 +108,39 @@ def get_conversations(
     """
     partner_address_col = case(
         (models.Message.sender_address == current_user.address, models.Message.recipient_address),
-        else_=models.Message.sender_address
+        else_=models.Message.sender_address,
     )
 
-    subquery = db.query(
-        func.max(models.Message.id).label("max_id")
-    ).filter(
-        or_(
-            models.Message.sender_address == current_user.address,
-            models.Message.recipient_address == current_user.address
+    subquery = (
+        db.query(func.max(models.Message.id).label("max_id"))
+        .filter(
+            or_(
+                models.Message.sender_address == current_user.address,
+                models.Message.recipient_address == current_user.address,
+            )
         )
-    ).group_by(partner_address_col).subquery()
+        .group_by(partner_address_col)
+        .subquery()
+    )
 
-    latest_messages = db.query(models.Message).options(
-        joinedload(models.Message.sender),
-        joinedload(models.Message.recipient),
-        defer(models.Message.content)
-    ).filter(
-        models.Message.id.in_(subquery.select())
-    ).order_by(
-        models.Message.created_at.desc(),
-        # Tiebreaker: two messages can share a timestamp, and without a total
-        # order the same conversation can appear on two pages or on neither.
-        models.Message.id.desc(),
-    ).limit(limit).offset(offset).all()
+    latest_messages = (
+        db.query(models.Message)
+        .options(
+            joinedload(models.Message.sender),
+            joinedload(models.Message.recipient),
+            defer(models.Message.content),
+        )
+        .filter(models.Message.id.in_(subquery.select()))
+        .order_by(
+            models.Message.created_at.desc(),
+            # Tiebreaker: two messages can share a timestamp, and without a total
+            # order the same conversation can appear on two pages or on neither.
+            models.Message.id.desc(),
+        )
+        .limit(limit)
+        .offset(offset)
+        .all()
+    )
 
     conversations = []
 
@@ -135,13 +150,18 @@ def get_conversations(
         m.recipient_address if m.sender_address == current_user.address else m.sender_address
         for m in latest_messages
     }
-    unread_counts_query = db.query(
-        models.Message.sender_address, func.count(models.Message.id)
-    ).filter(
-        models.Message.recipient_address == current_user.address,
-        models.Message.sender_address.in_(partner_addresses),
-        models.Message.is_read == False
-    ).group_by(models.Message.sender_address).all() if partner_addresses else []
+    unread_counts_query = (
+        db.query(models.Message.sender_address, func.count(models.Message.id))
+        .filter(
+            models.Message.recipient_address == current_user.address,
+            models.Message.sender_address.in_(partner_addresses),
+            models.Message.is_read == False,
+        )
+        .group_by(models.Message.sender_address)
+        .all()
+        if partner_addresses
+        else []
+    )
 
     unread_map = {addr: count for addr, count in unread_counts_query}
 
@@ -151,48 +171,67 @@ def get_conversations(
             continue
 
         unread = unread_map.get(partner.address, 0)
-        conversations.append({
-            "user": partner,
-            "last_message": m,
-            "unread_count": unread
-        })
-    
+        conversations.append({"user": partner, "last_message": m, "unread_count": unread})
+
     return conversations
+
 
 @router.post("/history", response_model=list[schemas.MessageResponse])
 @limiter.limit("60/minute")
-def get_message_history(request: Request, req: schemas.HistoryRequest, current_user: models.User = Depends(get_current_user), db: Session = Depends(get_db)):
+def get_message_history(
+    request: Request,
+    req: schemas.HistoryRequest,
+    current_user: models.User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
     partner_address = req.partner_address.lower()
-    
-    msgs = db.query(models.Message).filter(
-        or_(
-            (models.Message.sender_address == current_user.address) & (models.Message.recipient_address == partner_address),
-            (models.Message.sender_address == partner_address) & (models.Message.recipient_address == current_user.address)
+
+    msgs = (
+        db.query(models.Message)
+        .filter(
+            or_(
+                (models.Message.sender_address == current_user.address)
+                & (models.Message.recipient_address == partner_address),
+                (models.Message.sender_address == partner_address)
+                & (models.Message.recipient_address == current_user.address),
+            )
         )
-    ).order_by(models.Message.created_at.desc()).limit(req.limit).offset(req.offset).all()
-    
+        .order_by(models.Message.created_at.desc())
+        .limit(req.limit)
+        .offset(req.offset)
+        .all()
+    )
+
     return msgs[::-1]
+
 
 @router.post("/mark-read/{partner_address}")
 @limiter.limit("60/minute")
-def mark_read(request: Request, partner_address: str, current_user: models.User = Depends(get_current_user), db: Session = Depends(get_db)):
+def mark_read(
+    request: Request,
+    partner_address: str,
+    current_user: models.User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
     partner_addr = partner_address.lower()
-    
+
     # Mark all messages sent BY partner TO me as read
     db.query(models.Message).filter(
         models.Message.sender_address == partner_addr,
         models.Message.recipient_address == current_user.address,
-        models.Message.is_read == False
+        models.Message.is_read == False,
     ).update({"is_read": True})
-    
+
     db.commit()
     return {"status": "ok"}
+
 
 # WebSocket router without prefix so it mounts at /ws
 ws_router = APIRouter()
 
 # How long an accepted socket may stay unauthenticated before we close it (M2).
 WS_AUTH_TIMEOUT_SECONDS = 10.0
+
 
 @ws_router.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
@@ -219,11 +258,11 @@ async def websocket_endpoint(websocket: WebSocket):
             await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
             return
         auth_data = json.loads(data)
-        
+
         if auth_data.get("type") != "AUTH":
             await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
             return
-            
+
         token = auth_data.get("token")
         if not token:
             await websocket.close(code=status.WS_1008_POLICY_VIOLATION)

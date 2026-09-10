@@ -23,9 +23,9 @@ def create_test_secret(client, token):
         json={
             "name": f"Test Chunk Secret {uuid4()}",
             "type": "file",
-            "encrypted_data": "{\"file_name\":\"test.bin\",\"mime_type\":\"application/octet-stream\",\"total_chunks\":2}",
-            "encrypted_key": "mock_key"
-        }
+            "encrypted_data": '{"file_name":"test.bin","mime_type":"application/octet-stream","total_chunks":2}',
+            "encrypted_key": "mock_key",
+        },
     )
     assert response.status_code == 200
     return response.json()
@@ -45,7 +45,7 @@ class TestFileChunks:
             "secret_id": secret_id,
             "chunk_index": 0,
             "iv": IV_HEX,
-            "encrypted_data": _hex("c0")
+            "encrypted_data": _hex("c0"),
         }
         res0 = client.post("/secrets/chunks", headers=auth_headers, json=chunk_0)
         assert res0.status_code == 201
@@ -56,7 +56,7 @@ class TestFileChunks:
             "secret_id": secret_id,
             "chunk_index": 1,
             "iv": IV_HEX,
-            "encrypted_data": _hex("c1")
+            "encrypted_data": _hex("c1"),
         }
         res1 = client.post("/secrets/chunks", headers=auth_headers, json=chunk_1)
         assert res1.status_code == 201
@@ -73,10 +73,16 @@ class TestFileChunks:
 
         secret = create_test_secret(client, token)
         secret_id = secret["id"]
-        client.post("/secrets/chunks", headers=auth_headers, json={
-            "secret_id": secret_id, "chunk_index": 0,
-            "iv": IV_HEX, "encrypted_data": _hex("c0"),
-        })
+        client.post(
+            "/secrets/chunks",
+            headers=auth_headers,
+            json={
+                "secret_id": secret_id,
+                "chunk_index": 0,
+                "iv": IV_HEX,
+                "encrypted_data": _hex("c0"),
+            },
+        )
 
         res = client.get(f"/secrets/{secret_id}/chunks", headers=auth_headers)
         assert res.status_code == 404
@@ -94,16 +100,28 @@ class TestFileChunks:
         secret = create_test_secret(client, token)
         secret_id = secret["id"]
 
-        first = client.post("/secrets/chunks", headers=auth_headers, json={
-            "secret_id": secret_id, "chunk_index": 0,
-            "iv": IV_HEX, "encrypted_data": _hex("original"),
-        })
+        first = client.post(
+            "/secrets/chunks",
+            headers=auth_headers,
+            json={
+                "secret_id": secret_id,
+                "chunk_index": 0,
+                "iv": IV_HEX,
+                "encrypted_data": _hex("original"),
+            },
+        )
         assert first.status_code == 201
 
-        shadow = client.post("/secrets/chunks", headers=auth_headers, json={
-            "secret_id": secret_id, "chunk_index": 0,
-            "iv": IV_HEX, "encrypted_data": _hex("shadow"),
-        })
+        shadow = client.post(
+            "/secrets/chunks",
+            headers=auth_headers,
+            json={
+                "secret_id": secret_id,
+                "chunk_index": 0,
+                "iv": IV_HEX,
+                "encrypted_data": _hex("shadow"),
+            },
+        )
         assert shadow.status_code == 409
 
         # The original payload is what a read returns — deterministically.
@@ -111,13 +129,16 @@ class TestFileChunks:
         assert res.status_code == 200
         assert res.json()["encrypted_data"] == _hex("original")
 
-    @pytest.mark.parametrize("field,value", [
-        ("encrypted_data", "not_hex_at_all"),
-        ("encrypted_data", "abc"),      # odd length
-        ("encrypted_data", ""),         # empty
-        ("iv", "zzzz"),
-        ("iv", "abc"),                  # odd length
-    ])
+    @pytest.mark.parametrize(
+        "field,value",
+        [
+            ("encrypted_data", "not_hex_at_all"),
+            ("encrypted_data", "abc"),  # odd length
+            ("encrypted_data", ""),  # empty
+            ("iv", "zzzz"),
+            ("iv", "abc"),  # odd length
+        ],
+    )
     def test_non_hex_chunk_rejected(self, client, user1, field, value):
         """iv and encrypted_data are hex on the wire; nothing checked it (M-2)."""
         token, _ = user1
@@ -125,8 +146,10 @@ class TestFileChunks:
 
         secret = create_test_secret(client, token)
         payload = {
-            "secret_id": secret["id"], "chunk_index": 0,
-            "iv": IV_HEX, "encrypted_data": _hex("c0"),
+            "secret_id": secret["id"],
+            "chunk_index": 0,
+            "iv": IV_HEX,
+            "encrypted_data": _hex("c0"),
         }
         payload[field] = value
 
@@ -138,10 +161,16 @@ class TestFileChunks:
         auth_headers = {"Authorization": f"Bearer {token}"}
         secret = create_test_secret(client, token)
 
-        res = client.post("/secrets/chunks", headers=auth_headers, json={
-            "secret_id": secret["id"], "chunk_index": -1,
-            "iv": IV_HEX, "encrypted_data": _hex("c0"),
-        })
+        res = client.post(
+            "/secrets/chunks",
+            headers=auth_headers,
+            json={
+                "secret_id": secret["id"],
+                "chunk_index": -1,
+                "iv": IV_HEX,
+                "encrypted_data": _hex("c0"),
+            },
+        )
         assert res.status_code == 422
 
     def test_get_chunk(self, client, user1):
@@ -152,10 +181,16 @@ class TestFileChunks:
         secret_id = secret["id"]
 
         # Upload
-        client.post("/secrets/chunks", headers=auth_headers, json={
-            "secret_id": secret_id, "chunk_index": 0,
-            "iv": IV_HEX, "encrypted_data": _hex("c0"),
-        })
+        client.post(
+            "/secrets/chunks",
+            headers=auth_headers,
+            json={
+                "secret_id": secret_id,
+                "chunk_index": 0,
+                "iv": IV_HEX,
+                "encrypted_data": _hex("c0"),
+            },
+        )
 
         # Get
         res = client.get(f"/secrets/{secret_id}/chunks/0", headers=auth_headers)
@@ -174,10 +209,16 @@ class TestFileChunks:
         secret_id = secret["id"]
 
         # User 2 tries to upload to User 1's secret
-        res = client.post("/secrets/chunks", headers=user2_headers, json={
-            "secret_id": secret_id, "chunk_index": 0,
-            "iv": IV_HEX, "encrypted_data": _hex("c0"),
-        })
+        res = client.post(
+            "/secrets/chunks",
+            headers=user2_headers,
+            json={
+                "secret_id": secret_id,
+                "chunk_index": 0,
+                "iv": IV_HEX,
+                "encrypted_data": _hex("c0"),
+            },
+        )
         assert res.status_code == 403
 
     def test_get_chunk_access_control(self, client, user1, user2):
@@ -190,21 +231,31 @@ class TestFileChunks:
         # User 1 creates secret + uploads chunk
         secret = create_test_secret(client, token1)
         secret_id = secret["id"]
-        client.post("/secrets/chunks", headers=auth_headers, json={
-            "secret_id": secret_id, "chunk_index": 0,
-            "iv": IV_HEX, "encrypted_data": _hex("c0"),
-        })
+        client.post(
+            "/secrets/chunks",
+            headers=auth_headers,
+            json={
+                "secret_id": secret_id,
+                "chunk_index": 0,
+                "iv": IV_HEX,
+                "encrypted_data": _hex("c0"),
+            },
+        )
 
         # User 2 tries to read
         res = client.get(f"/secrets/{secret_id}/chunks/0", headers=user2_headers)
         assert res.status_code == 403
 
         # User 1 shares with User 2
-        share_res = client.post("/secrets/share", headers=auth_headers, json={
-            "secret_id": secret_id,
-            "grantee_address": TEST_USER_ADDRESS_2,  # the constant itself, not a hand-copy of it
-            "encrypted_key": "shared_key"
-        })
+        share_res = client.post(
+            "/secrets/share",
+            headers=auth_headers,
+            json={
+                "secret_id": secret_id,
+                "grantee_address": TEST_USER_ADDRESS_2,  # the constant itself, not a hand-copy of it
+                "encrypted_key": "shared_key",
+            },
+        )
         assert share_res.status_code == 200
 
         # User 2 tries again -> Success
@@ -219,10 +270,16 @@ class TestFileChunks:
         # Create + Upload
         secret = create_test_secret(client, token)
         secret_id = secret["id"]
-        client.post("/secrets/chunks", headers=auth_headers, json={
-            "secret_id": secret_id, "chunk_index": 0,
-            "iv": IV_HEX, "encrypted_data": _hex("c0"),
-        })
+        client.post(
+            "/secrets/chunks",
+            headers=auth_headers,
+            json={
+                "secret_id": secret_id,
+                "chunk_index": 0,
+                "iv": IV_HEX,
+                "encrypted_data": _hex("c0"),
+            },
+        )
 
         # Verify chunk exists
         res = client.get(f"/secrets/{secret_id}/chunks/0", headers=auth_headers)
@@ -247,18 +304,30 @@ class TestFileChunks:
         with patch("config.MAX_TOTAL_FILE_SIZE", 10):
             # 1. Upload small chunk (ok)
             # encrypted_data is hex string. 10 chars hex = 5 bytes.
-            res1 = client.post("/secrets/chunks", headers=auth_headers, json={
-                "secret_id": secret_id, "chunk_index": 0,
-                "iv": IV_HEX, "encrypted_data": "0011223344",
-            })
+            res1 = client.post(
+                "/secrets/chunks",
+                headers=auth_headers,
+                json={
+                    "secret_id": secret_id,
+                    "chunk_index": 0,
+                    "iv": IV_HEX,
+                    "encrypted_data": "0011223344",
+                },
+            )
             assert res1.status_code == 201
 
             # 2. Upload another chunk that pushes total over 10 bytes
             # Existing = 5 bytes. New 20 chars hex = 10 bytes. Total 15 > 10.
-            res2 = client.post("/secrets/chunks", headers=auth_headers, json={
-                "secret_id": secret_id, "chunk_index": 1,
-                "iv": IV_HEX, "encrypted_data": "00112233445566778899",
-            })
+            res2 = client.post(
+                "/secrets/chunks",
+                headers=auth_headers,
+                json={
+                    "secret_id": secret_id,
+                    "chunk_index": 1,
+                    "iv": IV_HEX,
+                    "encrypted_data": "00112233445566778899",
+                },
+            )
             assert res2.status_code == 413
             assert "too large" in res2.json()["detail"].lower()
 
@@ -278,28 +347,39 @@ class TestMultisigChunkAccess:
         signer_keys = {signer_addr: "enc_key_for_signer"}
         recipient_keys = {recipient_addr: "enc_key_for_recipient"} if recipient_addr else {}
 
-        wf_resp = client.post("/multisig/workflow", headers=auth, json={
-            "name": "TestChunkWorkflow",
-            "secret_data": {
-                "name": "MultisigChunked", "type": "file",
-                "encrypted_data": '{"file_name":"test.bin","total_chunks":1}',
-                "encrypted_key": "owner_key",
+        wf_resp = client.post(
+            "/multisig/workflow",
+            headers=auth,
+            json={
+                "name": "TestChunkWorkflow",
+                "secret_data": {
+                    "name": "MultisigChunked",
+                    "type": "file",
+                    "encrypted_data": '{"file_name":"test.bin","total_chunks":1}',
+                    "encrypted_key": "owner_key",
+                },
+                "signers": signers,
+                "recipients": recipients,
+                "signer_keys": signer_keys,
+                "recipient_keys": recipient_keys,
+                "threshold": len(signers),
             },
-            "signers": signers,
-            "recipients": recipients,
-            "signer_keys": signer_keys,
-            "recipient_keys": recipient_keys,
-            "threshold": len(signers),
-        })
+        )
         assert wf_resp.status_code == 200
         wf = wf_resp.json()
         secret_id = wf["secret_id"]
 
         # Upload a chunk to the workflow's secret
-        chunk_resp = client.post("/secrets/chunks", headers=auth, json={
-            "secret_id": secret_id, "chunk_index": 0,
-            "iv": IV_HEX, "encrypted_data": self.MULTISIG_CHUNK,
-        })
+        chunk_resp = client.post(
+            "/secrets/chunks",
+            headers=auth,
+            json={
+                "secret_id": secret_id,
+                "chunk_index": 0,
+                "iv": IV_HEX,
+                "encrypted_data": self.MULTISIG_CHUNK,
+            },
+        )
         assert chunk_resp.status_code == 201
 
         return secret_id, wf["id"]
@@ -312,47 +392,60 @@ class TestMultisigChunkAccess:
         secret_id, _ = self._create_workflow_with_chunk(client, token1, u2["address"])
 
         # Signer reads the chunk
-        res = client.get(f"/secrets/{secret_id}/chunks/0",
-                         headers={"Authorization": f"Bearer {token2}"})
+        res = client.get(
+            f"/secrets/{secret_id}/chunks/0", headers={"Authorization": f"Bearer {token2}"}
+        )
         assert res.status_code == 200
         assert res.json()["encrypted_data"] == self.MULTISIG_CHUNK
 
     def test_recipient_blocked_before_completion(self, client, user1, user2):
         """A recipient should NOT access chunks while the workflow is still pending."""
         from conftest import TEST_ENCRYPTION_KEY, TEST_USER_ADDRESS_3, do_login
+
         token1, _ = user1
         _, u2 = user2
 
         # Create a third user as recipient
         token3, u3 = do_login(client, TEST_USER_ADDRESS_3, TEST_ENCRYPTION_KEY, "Recipient")
 
-        secret_id, wf_id = self._create_workflow_with_chunk(client, token1, u2["address"], u3["address"])
+        secret_id, wf_id = self._create_workflow_with_chunk(
+            client, token1, u2["address"], u3["address"]
+        )
 
         # Recipient tries before signing is complete
-        res = client.get(f"/secrets/{secret_id}/chunks/0",
-                         headers={"Authorization": f"Bearer {token3}"})
+        res = client.get(
+            f"/secrets/{secret_id}/chunks/0", headers={"Authorization": f"Bearer {token3}"}
+        )
         assert res.status_code == 403
 
     def test_recipient_can_access_after_completion(self, client, user1, user2):
         """After all signers sign, the recipient should be able to access chunks."""
         from conftest import TEST_ENCRYPTION_KEY, TEST_USER_ADDRESS_3, do_login
+
         token1, _ = user1
         token2, u2 = user2
 
         # Create a third user as recipient
         token3, u3 = do_login(client, TEST_USER_ADDRESS_3, TEST_ENCRYPTION_KEY, "Recipient")
 
-        secret_id, wf_id = self._create_workflow_with_chunk(client, token1, u2["address"], u3["address"])
+        secret_id, wf_id = self._create_workflow_with_chunk(
+            client, token1, u2["address"], u3["address"]
+        )
 
         # Signer signs -> workflow completes
-        sign_res = client.post(f"/multisig/workflow/{wf_id}/sign", json={
-            "signature": "signer_signature_data",
-        }, headers={"Authorization": f"Bearer {token2}"})
+        sign_res = client.post(
+            f"/multisig/workflow/{wf_id}/sign",
+            json={
+                "signature": "signer_signature_data",
+            },
+            headers={"Authorization": f"Bearer {token2}"},
+        )
         assert sign_res.status_code == 200
         assert sign_res.json()["status"] == "completed"
 
         # Now recipient can access
-        res = client.get(f"/secrets/{secret_id}/chunks/0",
-                         headers={"Authorization": f"Bearer {token3}"})
+        res = client.get(
+            f"/secrets/{secret_id}/chunks/0", headers={"Authorization": f"Bearer {token3}"}
+        )
         assert res.status_code == 200
         assert res.json()["encrypted_data"] == self.MULTISIG_CHUNK

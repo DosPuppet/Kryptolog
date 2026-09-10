@@ -8,6 +8,7 @@ one* caller may succeed, not merely "at least one".
 They are inherently probabilistic: a passing run does not prove the absence of
 a race, but the pre-fix code fails these reliably (verified by reverting).
 """
+
 import threading
 from datetime import UTC
 
@@ -54,6 +55,7 @@ def _no_rate_limits():
     """These tests deliberately exceed the per-minute limits; the limiter is
     not what is under test here."""
     from dependencies import limiter
+
     limiter.enabled = False
     yield
     limiter.enabled = True
@@ -73,17 +75,14 @@ class TestTransferClaimIsSingleUse:
         codes = [r.status_code for r in results if hasattr(r, "status_code")]
         successes = [c for c in codes if c == 200]
         assert len(successes) == 1, (
-            f"transfer claimed {len(successes)} times — single-use broken "
-            f"(codes: {sorted(codes)})"
+            f"transfer claimed {len(successes)} times — single-use broken (codes: {sorted(codes)})"
         )
         assert all(c in (200, 404) for c in codes), sorted(codes)
 
         # And the row is gone.
         db = TestingSessionLocal()
         try:
-            assert db.query(models.KeyTransfer).filter(
-                models.KeyTransfer.id == tid
-            ).first() is None
+            assert db.query(models.KeyTransfer).filter(models.KeyTransfer.id == tid).first() is None
         finally:
             db.close()
 
@@ -121,8 +120,7 @@ class TestNonceIsSingleUse:
         codes = [r.status_code for r in results if hasattr(r, "status_code")]
         successes = [c for c in codes if c == 200]
         assert len(successes) == 1, (
-            f"nonce accepted {len(successes)} times — replay window open "
-            f"(codes: {sorted(codes)})"
+            f"nonce accepted {len(successes)} times — replay window open (codes: {sorted(codes)})"
         )
 
     def test_nonce_is_consumed_even_when_signature_is_invalid(self, client):
@@ -132,36 +130,49 @@ class TestNonceIsSingleUse:
         nonce = client.get(f"/auth/nonce/{TEST_USER_ADDRESS}").json()["nonce"]
 
         from unittest.mock import patch
+
         with patch("auth.verify_signature", return_value=False):
-            bad = client.post("/auth/login", json={
-                "address": TEST_USER_ADDRESS,
-                "signature": "wrong",
-                "nonce": nonce,
-            })
+            bad = client.post(
+                "/auth/login",
+                json={
+                    "address": TEST_USER_ADDRESS,
+                    "signature": "wrong",
+                    "nonce": nonce,
+                },
+            )
         assert bad.status_code == 401
 
         # Same nonce, now with a valid signature: must be refused.
-        retry = client.post("/auth/login", json={
-            "address": TEST_USER_ADDRESS,
-            "signature": "fake_signature_for_testing",
-            "nonce": nonce,
-        })
+        retry = client.post(
+            "/auth/login",
+            json={
+                "address": TEST_USER_ADDRESS,
+                "signature": "fake_signature_for_testing",
+                "nonce": nonce,
+            },
+        )
         assert retry.status_code == 400, retry.text
 
     def test_expired_nonce_is_refused(self, client, db_session):
         from datetime import datetime, timedelta
+
         do_login(client, TEST_USER_ADDRESS, TEST_ENCRYPTION_KEY, "A")
         nonce = client.get(f"/auth/nonce/{TEST_USER_ADDRESS}").json()["nonce"]
 
-        row = db_session.query(models.Nonce).filter(
-            models.Nonce.address == TEST_USER_ADDRESS.lower()
-        ).first()
+        row = (
+            db_session.query(models.Nonce)
+            .filter(models.Nonce.address == TEST_USER_ADDRESS.lower())
+            .first()
+        )
         row.expires_at = datetime.now(UTC).replace(tzinfo=None) - timedelta(minutes=1)
         db_session.commit()
 
-        resp = client.post("/auth/login", json={
-            "address": TEST_USER_ADDRESS,
-            "signature": "fake_signature_for_testing",
-            "nonce": nonce,
-        })
+        resp = client.post(
+            "/auth/login",
+            json={
+                "address": TEST_USER_ADDRESS,
+                "signature": "fake_signature_for_testing",
+                "nonce": nonce,
+            },
+        )
         assert resp.status_code == 400

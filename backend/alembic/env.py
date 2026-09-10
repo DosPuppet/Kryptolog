@@ -3,6 +3,7 @@
 Imports the SQLAlchemy models and database engine from the Kryptolog backend
 so that autogenerate can detect schema changes.
 """
+
 import os
 import sys
 from logging.config import fileConfig

@@ -11,6 +11,7 @@ Examples:
     python generate_invites.py 5 --max-uses 3  # 5 codes, each usable 3 times
     python generate_invites.py 1 --expires-days 7
 """
+
 import argparse
 
 import invites
@@ -20,9 +21,15 @@ from models import Base
 
 def main():
     parser = argparse.ArgumentParser(description="Mint Kryptolog invite codes.")
-    parser.add_argument("count", nargs="?", type=int, default=1, help="how many codes to mint (default 1)")
-    parser.add_argument("--max-uses", type=int, default=1, help="redemptions allowed per code (default 1)")
-    parser.add_argument("--expires-days", type=int, default=None, help="days until codes expire (default: never)")
+    parser.add_argument(
+        "count", nargs="?", type=int, default=1, help="how many codes to mint (default 1)"
+    )
+    parser.add_argument(
+        "--max-uses", type=int, default=1, help="redemptions allowed per code (default 1)"
+    )
+    parser.add_argument(
+        "--expires-days", type=int, default=None, help="days until codes expire (default: never)"
+    )
     args = parser.parse_args()
 
     # Make sure the table exists even on a fresh DB the app hasn't migrated yet.

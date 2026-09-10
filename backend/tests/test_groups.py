@@ -1,6 +1,7 @@
 """
 Tests for the Group Channels feature.
 """
+
 import pytest
 from conftest import (
     TEST_ENCRYPTION_KEY,
@@ -26,12 +27,18 @@ class TestMemberLookupIsNotAnOracle:
 
     def test_error_does_not_reveal_which_addresses_exist(self, client, user1):
         from conftest import synthetic_address
+
         token, u1 = user1
         absent = synthetic_address("never-registered")
 
-        resp = client.post("/groups", json={
-            "name": "probe", "member_addresses": [u1["address"], absent],
-        }, headers=auth_header(token))
+        resp = client.post(
+            "/groups",
+            json={
+                "name": "probe",
+                "member_addresses": [u1["address"], absent],
+            },
+            headers=auth_header(token),
+        )
 
         assert resp.status_code == 404
         detail = resp.json()["detail"]
@@ -44,10 +51,14 @@ class TestCreateGroup:
         token1, u1 = user1
         _, u2 = user2
 
-        resp = client.post("/groups", json={
-            "name": "Team Alpha",
-            "member_addresses": [u1["address"], u2["address"]],
-        }, headers=auth_header(token1))
+        resp = client.post(
+            "/groups",
+            json={
+                "name": "Team Alpha",
+                "member_addresses": [u1["address"], u2["address"]],
+            },
+            headers=auth_header(token1),
+        )
         assert resp.status_code == 200
         data = resp.json()
         assert data["name"] == "Team Alpha"
@@ -61,10 +72,14 @@ class TestCreateGroup:
         token1, u1 = user1
         _, u2 = user2
 
-        resp = client.post("/groups", json={
-            "name": "Only Other",
-            "member_addresses": [u2["address"]],
-        }, headers=auth_header(token1))
+        resp = client.post(
+            "/groups",
+            json={
+                "name": "Only Other",
+                "member_addresses": [u2["address"]],
+            },
+            headers=auth_header(token1),
+        )
         assert resp.status_code == 200
         members = resp.json()["members"]
         addrs = [m["user_address"] for m in members]
@@ -72,10 +87,14 @@ class TestCreateGroup:
 
     def test_create_with_nonexistent_user_fails(self, client, user1):
         token1, _ = user1
-        resp = client.post("/groups", json={
-            "name": "Bad Group",
-            "member_addresses": ["nonexistent_address"],
-        }, headers=auth_header(token1))
+        resp = client.post(
+            "/groups",
+            json={
+                "name": "Bad Group",
+                "member_addresses": ["nonexistent_address"],
+            },
+            headers=auth_header(token1),
+        )
         assert resp.status_code == 404
 
 
@@ -84,10 +103,14 @@ class TestListGroups:
         token1, u1 = user1
         token2, u2 = user2
 
-        client.post("/groups", json={
-            "name": "Group A",
-            "member_addresses": [u1["address"], u2["address"]],
-        }, headers=auth_header(token1))
+        client.post(
+            "/groups",
+            json={
+                "name": "Group A",
+                "member_addresses": [u1["address"], u2["address"]],
+            },
+            headers=auth_header(token1),
+        )
 
         # User1 sees the group
         resp = client.get("/groups", headers=auth_header(token1))
@@ -106,10 +129,14 @@ class TestListGroups:
         _, u2 = user2
         token3, _ = user3
 
-        client.post("/groups", json={
-            "name": "Private",
-            "member_addresses": [u1["address"], u2["address"]],
-        }, headers=auth_header(token1))
+        client.post(
+            "/groups",
+            json={
+                "name": "Private",
+                "member_addresses": [u1["address"], u2["address"]],
+            },
+            headers=auth_header(token1),
+        )
 
         resp = client.get("/groups", headers=auth_header(token3))
         assert resp.status_code == 200
@@ -122,25 +149,38 @@ class TestGroupMessages:
         token2, u2 = user2
 
         # Create group
-        create_resp = client.post("/groups", json={
-            "name": "Chat Room",
-            "member_addresses": [u1["address"], u2["address"]],
-        }, headers=auth_header(token1))
+        create_resp = client.post(
+            "/groups",
+            json={
+                "name": "Chat Room",
+                "member_addresses": [u1["address"], u2["address"]],
+            },
+            headers=auth_header(token1),
+        )
         channel_id = create_resp.json()["id"]
 
         # Send message
-        resp = client.post(f"/groups/{channel_id}/messages", json={
-            "content": "encrypted_blob_here",
-        }, headers=auth_header(token1))
+        resp = client.post(
+            f"/groups/{channel_id}/messages",
+            json={
+                "content": "encrypted_blob_here",
+            },
+            headers=auth_header(token1),
+        )
         assert resp.status_code == 200
         msg = resp.json()
         assert msg["sender_address"] == u1["address"]
         assert msg["channel_id"] == channel_id
 
         # Get history
-        resp = client.post(f"/groups/{channel_id}/history", json={
-            "limit": 50, "offset": 0,
-        }, headers=auth_header(token2))
+        resp = client.post(
+            f"/groups/{channel_id}/history",
+            json={
+                "limit": 50,
+                "offset": 0,
+            },
+            headers=auth_header(token2),
+        )
         assert resp.status_code == 200
         history = resp.json()
         assert len(history) == 1
@@ -151,15 +191,23 @@ class TestGroupMessages:
         _, u2 = user2
         token3, _ = user3
 
-        create_resp = client.post("/groups", json={
-            "name": "Restricted",
-            "member_addresses": [u1["address"], u2["address"]],
-        }, headers=auth_header(token1))
+        create_resp = client.post(
+            "/groups",
+            json={
+                "name": "Restricted",
+                "member_addresses": [u1["address"], u2["address"]],
+            },
+            headers=auth_header(token1),
+        )
         channel_id = create_resp.json()["id"]
 
-        resp = client.post(f"/groups/{channel_id}/messages", json={
-            "content": "intruder",
-        }, headers=auth_header(token3))
+        resp = client.post(
+            f"/groups/{channel_id}/messages",
+            json={
+                "content": "intruder",
+            },
+            headers=auth_header(token3),
+        )
         assert resp.status_code == 403
 
     def test_non_member_cannot_read_history(self, client, user1, user2, user3):
@@ -167,10 +215,14 @@ class TestGroupMessages:
         _, u2 = user2
         token3, _ = user3
 
-        create_resp = client.post("/groups", json={
-            "name": "Restricted",
-            "member_addresses": [u1["address"], u2["address"]],
-        }, headers=auth_header(token1))
+        create_resp = client.post(
+            "/groups",
+            json={
+                "name": "Restricted",
+                "member_addresses": [u1["address"], u2["address"]],
+            },
+            headers=auth_header(token1),
+        )
         channel_id = create_resp.json()["id"]
 
         resp = client.post(f"/groups/{channel_id}/history", json={}, headers=auth_header(token3))
@@ -183,15 +235,23 @@ class TestGroupMembers:
         _, u2 = user2
         _, u3 = user3
 
-        create_resp = client.post("/groups", json={
-            "name": "Expandable",
-            "member_addresses": [u1["address"], u2["address"]],
-        }, headers=auth_header(token1))
+        create_resp = client.post(
+            "/groups",
+            json={
+                "name": "Expandable",
+                "member_addresses": [u1["address"], u2["address"]],
+            },
+            headers=auth_header(token1),
+        )
         channel_id = create_resp.json()["id"]
 
-        resp = client.post(f"/groups/{channel_id}/members", json={
-            "user_address": u3["address"],
-        }, headers=auth_header(token1))
+        resp = client.post(
+            f"/groups/{channel_id}/members",
+            json={
+                "user_address": u3["address"],
+            },
+            headers=auth_header(token1),
+        )
         assert resp.status_code == 200
         assert resp.json()["user_address"] == u3["address"]
 
@@ -204,28 +264,42 @@ class TestGroupMembers:
         token2, u2 = user2
         _, u3 = user3
 
-        create_resp = client.post("/groups", json={
-            "name": "Restricted Add",
-            "member_addresses": [u1["address"], u2["address"]],
-        }, headers=auth_header(token1))
+        create_resp = client.post(
+            "/groups",
+            json={
+                "name": "Restricted Add",
+                "member_addresses": [u1["address"], u2["address"]],
+            },
+            headers=auth_header(token1),
+        )
         channel_id = create_resp.json()["id"]
 
-        resp = client.post(f"/groups/{channel_id}/members", json={
-            "user_address": u3["address"],
-        }, headers=auth_header(token2))
+        resp = client.post(
+            f"/groups/{channel_id}/members",
+            json={
+                "user_address": u3["address"],
+            },
+            headers=auth_header(token2),
+        )
         assert resp.status_code == 403
 
     def test_owner_can_remove_member(self, client, user1, user2):
         token1, u1 = user1
         _, u2 = user2
 
-        create_resp = client.post("/groups", json={
-            "name": "Removable",
-            "member_addresses": [u1["address"], u2["address"]],
-        }, headers=auth_header(token1))
+        create_resp = client.post(
+            "/groups",
+            json={
+                "name": "Removable",
+                "member_addresses": [u1["address"], u2["address"]],
+            },
+            headers=auth_header(token1),
+        )
         channel_id = create_resp.json()["id"]
 
-        resp = client.delete(f"/groups/{channel_id}/members/{u2['address']}", headers=auth_header(token1))
+        resp = client.delete(
+            f"/groups/{channel_id}/members/{u2['address']}", headers=auth_header(token1)
+        )
         assert resp.status_code == 200
 
         # Verify only 1 member left
@@ -236,29 +310,43 @@ class TestGroupMembers:
         token1, u1 = user1
         token2, u2 = user2
 
-        create_resp = client.post("/groups", json={
-            "name": "Leavable",
-            "member_addresses": [u1["address"], u2["address"]],
-        }, headers=auth_header(token1))
+        create_resp = client.post(
+            "/groups",
+            json={
+                "name": "Leavable",
+                "member_addresses": [u1["address"], u2["address"]],
+            },
+            headers=auth_header(token1),
+        )
         channel_id = create_resp.json()["id"]
 
         # User2 leaves
-        resp = client.delete(f"/groups/{channel_id}/members/{u2['address']}", headers=auth_header(token2))
+        resp = client.delete(
+            f"/groups/{channel_id}/members/{u2['address']}", headers=auth_header(token2)
+        )
         assert resp.status_code == 200
 
     def test_cannot_add_duplicate_member(self, client, user1, user2):
         token1, u1 = user1
         _, u2 = user2
 
-        create_resp = client.post("/groups", json={
-            "name": "No Dupes",
-            "member_addresses": [u1["address"], u2["address"]],
-        }, headers=auth_header(token1))
+        create_resp = client.post(
+            "/groups",
+            json={
+                "name": "No Dupes",
+                "member_addresses": [u1["address"], u2["address"]],
+            },
+            headers=auth_header(token1),
+        )
         channel_id = create_resp.json()["id"]
 
-        resp = client.post(f"/groups/{channel_id}/members", json={
-            "user_address": u2["address"],
-        }, headers=auth_header(token1))
+        resp = client.post(
+            f"/groups/{channel_id}/members",
+            json={
+                "user_address": u2["address"],
+            },
+            headers=auth_header(token1),
+        )
         assert resp.status_code == 400
 
     def test_duplicate_membership_rejected_by_db(self, client, user1, user2, db_session):
@@ -275,17 +363,23 @@ class TestGroupMembers:
         token1, u1 = user1
         _, u2 = user2
 
-        create_resp = client.post("/groups", json={
-            "name": "Constrained",
-            "member_addresses": [u1["address"], u2["address"]],
-        }, headers=auth_header(token1))
+        create_resp = client.post(
+            "/groups",
+            json={
+                "name": "Constrained",
+                "member_addresses": [u1["address"], u2["address"]],
+            },
+            headers=auth_header(token1),
+        )
         channel_id = create_resp.json()["id"]
 
-        db_session.add(models.GroupMember(
-            channel_id=channel_id,
-            user_address=u2["address"].lower(),
-            role="member",
-        ))
+        db_session.add(
+            models.GroupMember(
+                channel_id=channel_id,
+                user_address=u2["address"].lower(),
+                role="member",
+            )
+        )
         with pytest.raises(IntegrityError):
             db_session.commit()
         db_session.rollback()
@@ -302,10 +396,14 @@ class TestGroupMembers:
         token1, u1 = user1
         _, u2 = user2
 
-        create_resp = client.post("/groups", json={
-            "name": "Fully Removable",
-            "member_addresses": [u1["address"], u2["address"]],
-        }, headers=auth_header(token1))
+        create_resp = client.post(
+            "/groups",
+            json={
+                "name": "Fully Removable",
+                "member_addresses": [u1["address"], u2["address"]],
+            },
+            headers=auth_header(token1),
+        )
         channel_id = create_resp.json()["id"]
 
         resp = client.delete(
@@ -314,10 +412,14 @@ class TestGroupMembers:
         )
         assert resp.status_code == 200
 
-        remaining = db_session.query(models.GroupMember).filter(
-            models.GroupMember.channel_id == channel_id,
-            models.GroupMember.user_address == u2["address"].lower(),
-        ).count()
+        remaining = (
+            db_session.query(models.GroupMember)
+            .filter(
+                models.GroupMember.channel_id == channel_id,
+                models.GroupMember.user_address == u2["address"].lower(),
+            )
+            .count()
+        )
         assert remaining == 0
 
 
@@ -327,16 +429,22 @@ class TestGroupAdmin:
         _, u2 = user2
 
         # Create group
-        create_resp = client.post("/groups", json={
-            "name": "Admin Test",
-            "member_addresses": [u1["address"], u2["address"]],
-        }, headers=auth_header(token1))
+        create_resp = client.post(
+            "/groups",
+            json={
+                "name": "Admin Test",
+                "member_addresses": [u1["address"], u2["address"]],
+            },
+            headers=auth_header(token1),
+        )
         channel_id = create_resp.json()["id"]
 
         # Promote user2 to admin
-        resp = client.put(f"/groups/{channel_id}/members/{u2['address']}/role", json={
-            "role": "admin"
-        }, headers=auth_header(token1))
+        resp = client.put(
+            f"/groups/{channel_id}/members/{u2['address']}/role",
+            json={"role": "admin"},
+            headers=auth_header(token1),
+        )
         assert resp.status_code == 200
         assert resp.json()["role"] == "admin"
 
@@ -351,19 +459,27 @@ class TestGroupAdmin:
         token2, u2 = user2
 
         # Create group
-        create_resp = client.post("/groups", json={
-            "name": "Coup Test",
-            "member_addresses": [u1["address"], u2["address"]],
-        }, headers=auth_header(token1))
+        create_resp = client.post(
+            "/groups",
+            json={
+                "name": "Coup Test",
+                "member_addresses": [u1["address"], u2["address"]],
+            },
+            headers=auth_header(token1),
+        )
         channel_id = create_resp.json()["id"]
 
         # Promote user2 to admin
-        client.put(f"/groups/{channel_id}/members/{u2['address']}/role", json={
-            "role": "admin"
-        }, headers=auth_header(token1))
+        client.put(
+            f"/groups/{channel_id}/members/{u2['address']}/role",
+            json={"role": "admin"},
+            headers=auth_header(token1),
+        )
 
         # Admin (u2) removes Owner (u1)
-        resp = client.delete(f"/groups/{channel_id}/members/{u1['address']}", headers=auth_header(token2))
+        resp = client.delete(
+            f"/groups/{channel_id}/members/{u1['address']}", headers=auth_header(token2)
+        )
         assert resp.status_code == 200
 
         # Verify u2 is now owner
@@ -381,16 +497,20 @@ class TestGroupAdmin:
         token1, u1 = user1
         _, u2 = user2
 
-        create_resp = client.post("/groups", json={
-            "name": "Old Name",
-            "member_addresses": [u2["address"]],
-        }, headers=auth_header(token1))
+        create_resp = client.post(
+            "/groups",
+            json={
+                "name": "Old Name",
+                "member_addresses": [u2["address"]],
+            },
+            headers=auth_header(token1),
+        )
         assert create_resp.status_code == 200
         channel_id = create_resp.json()["id"]
 
-        resp = client.put(f"/groups/{channel_id}", json={
-            "name": "New Name"
-        }, headers=auth_header(token1))
+        resp = client.put(
+            f"/groups/{channel_id}", json={"name": "New Name"}, headers=auth_header(token1)
+        )
         assert resp.status_code == 200
         assert resp.json()["name"] == "New Name"
 
@@ -404,21 +524,31 @@ class TestGroupAdmin:
         token1, u1 = user1
         token2, u2 = user2
         token3, u3 = user3
-        cid = client.post("/groups", json={
-            "name": "Perms", "member_addresses": [u2["address"], u3["address"]],
-        }, headers=auth_header(token1)).json()["id"]
+        cid = client.post(
+            "/groups",
+            json={
+                "name": "Perms",
+                "member_addresses": [u2["address"], u3["address"]],
+            },
+            headers=auth_header(token1),
+        ).json()["id"]
 
         # Plain member: rejected.
-        resp = client.put(f"/groups/{cid}", json={"name": "member-rename"},
-                          headers=auth_header(token2))
+        resp = client.put(
+            f"/groups/{cid}", json={"name": "member-rename"}, headers=auth_header(token2)
+        )
         assert resp.status_code == 403
 
         # Promoted to admin: allowed (needed to re-wrap the name on member add).
-        promote = client.put(f"/groups/{cid}/members/{u2['address']}/role",
-                             json={"role": "admin"}, headers=auth_header(token1))
+        promote = client.put(
+            f"/groups/{cid}/members/{u2['address']}/role",
+            json={"role": "admin"},
+            headers=auth_header(token1),
+        )
         assert promote.status_code == 200
-        resp = client.put(f"/groups/{cid}", json={"name": "admin-rename"},
-                          headers=auth_header(token2))
+        resp = client.put(
+            f"/groups/{cid}", json={"name": "admin-rename"}, headers=auth_header(token2)
+        )
         assert resp.status_code == 200
         assert resp.json()["name"] == "admin-rename"
 
@@ -427,10 +557,18 @@ class TestGroupAdmin:
         surprises — and serves them back to members."""
         token1, _ = user1
         _, u2 = user2
-        blob = "encg1:" + '{"ct": {"iv": "00", "content": "aa"}, "keys": {"x": {"kem": "bb", "iv": "01", "encKey": "cc"}}}'
-        cid = client.post("/groups", json={
-            "name": blob, "member_addresses": [u2["address"]],
-        }, headers=auth_header(token1)).json()["id"]
+        blob = (
+            "encg1:"
+            + '{"ct": {"iv": "00", "content": "aa"}, "keys": {"x": {"kem": "bb", "iv": "01", "encKey": "cc"}}}'
+        )
+        cid = client.post(
+            "/groups",
+            json={
+                "name": blob,
+                "member_addresses": [u2["address"]],
+            },
+            headers=auth_header(token1),
+        ).json()["id"]
         got = client.get(f"/groups/{cid}", headers=auth_header(token1)).json()
         assert got["name"] == blob
 
@@ -442,9 +580,14 @@ class TestOwnerLeave:
     def test_owner_leave_transfers_ownership(self, client, user1, user2):
         token1, u1 = user1
         token2, u2 = user2
-        cid = client.post("/groups", json={
-            "name": "Succession", "member_addresses": [u1["address"], u2["address"]],
-        }, headers=auth_header(token1)).json()["id"]
+        cid = client.post(
+            "/groups",
+            json={
+                "name": "Succession",
+                "member_addresses": [u1["address"], u2["address"]],
+            },
+            headers=auth_header(token1),
+        ).json()["id"]
 
         # Owner leaves a group that still has members.
         resp = client.delete(f"/groups/{cid}/members/{u1['address']}", headers=auth_header(token1))
@@ -454,34 +597,56 @@ class TestOwnerLeave:
         data = client.get(f"/groups/{cid}", headers=auth_header(token2)).json()
         assert data["owner_address"] == u2["address"]
         assert not any(m["user_address"] == u1["address"] for m in data["members"])
-        assert next(m["role"] for m in data["members"] if m["user_address"] == u2["address"]) == "owner"
+        assert (
+            next(m["role"] for m in data["members"] if m["user_address"] == u2["address"])
+            == "owner"
+        )
 
     def test_owner_leave_prefers_admin_successor(self, client, user1, user2, user3):
         token1, u1 = user1
         _, u2 = user2
         token3, u3 = user3
-        cid = client.post("/groups", json={
-            "name": "AdminSucc",
-            "member_addresses": [u1["address"], u2["address"], u3["address"]],
-        }, headers=auth_header(token1)).json()["id"]
+        cid = client.post(
+            "/groups",
+            json={
+                "name": "AdminSucc",
+                "member_addresses": [u1["address"], u2["address"], u3["address"]],
+            },
+            headers=auth_header(token1),
+        ).json()["id"]
 
         # Promote u3 to admin, then the owner leaves.
-        client.put(f"/groups/{cid}/members/{u3['address']}/role", json={"role": "admin"}, headers=auth_header(token1))
+        client.put(
+            f"/groups/{cid}/members/{u3['address']}/role",
+            json={"role": "admin"},
+            headers=auth_header(token1),
+        )
         resp = client.delete(f"/groups/{cid}/members/{u1['address']}", headers=auth_header(token1))
         assert resp.status_code == 200
 
         # The admin (u3) is promoted to owner ahead of the plain member (u2).
         data = client.get(f"/groups/{cid}", headers=auth_header(token3)).json()
         assert data["owner_address"] == u3["address"]
-        assert next(m["role"] for m in data["members"] if m["user_address"] == u3["address"]) == "owner"
-        assert next(m["role"] for m in data["members"] if m["user_address"] == u2["address"]) == "member"
+        assert (
+            next(m["role"] for m in data["members"] if m["user_address"] == u3["address"])
+            == "owner"
+        )
+        assert (
+            next(m["role"] for m in data["members"] if m["user_address"] == u2["address"])
+            == "member"
+        )
 
     def test_owner_leave_last_member_deletes_group(self, client, user1, user2):
         token1, u1 = user1
         token2, u2 = user2
-        cid = client.post("/groups", json={
-            "name": "Doomed", "member_addresses": [u1["address"], u2["address"]],
-        }, headers=auth_header(token1)).json()["id"]
+        cid = client.post(
+            "/groups",
+            json={
+                "name": "Doomed",
+                "member_addresses": [u1["address"], u2["address"]],
+            },
+            headers=auth_header(token1),
+        ).json()["id"]
 
         # Everyone else leaves first, then the owner is the last member.
         client.delete(f"/groups/{cid}/members/{u2['address']}", headers=auth_header(token2))

@@ -5,6 +5,7 @@ single guarded SQL UPDATE so concurrent redemptions of the same code can't
 over-spend it (no read-then-write race). Times are naive UTC to match the
 DateTime columns elsewhere, which are declared without timezone=True.
 """
+
 import secrets
 from datetime import UTC, datetime, timedelta
 

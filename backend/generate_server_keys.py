@@ -9,6 +9,7 @@ development the backend uses an ephemeral secret (all JWTs reset on restart).
 
     python generate_server_keys.py
 """
+
 import secrets
 
 

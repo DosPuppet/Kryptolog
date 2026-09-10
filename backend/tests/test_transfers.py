@@ -1,4 +1,5 @@
 """Tests for the device-to-device key transfer relay (/transfers)."""
+
 from datetime import UTC
 
 from conftest import (
@@ -29,7 +30,9 @@ class TestCreateTransfer:
 class TestClaimTransfer:
     def test_claim_returns_ciphertext_without_auth(self, client):
         token, _ = do_login(client, TEST_USER_ADDRESS, TEST_ENCRYPTION_KEY, "A")
-        tid = client.post("/transfers", json={"ciphertext": BLOB}, headers=auth_header(token)).json()["id"]
+        tid = client.post(
+            "/transfers", json={"ciphertext": BLOB}, headers=auth_header(token)
+        ).json()["id"]
         # Target device has no auth — claim by id only.
         resp = client.get(f"/transfers/{tid}")
         assert resp.status_code == 200, resp.text
@@ -37,7 +40,9 @@ class TestClaimTransfer:
 
     def test_claim_is_single_use(self, client):
         token, _ = do_login(client, TEST_USER_ADDRESS, TEST_ENCRYPTION_KEY, "A")
-        tid = client.post("/transfers", json={"ciphertext": BLOB}, headers=auth_header(token)).json()["id"]
+        tid = client.post(
+            "/transfers", json={"ciphertext": BLOB}, headers=auth_header(token)
+        ).json()["id"]
         assert client.get(f"/transfers/{tid}").status_code == 200
         # Second claim fails — the row was consumed.
         assert client.get(f"/transfers/{tid}").status_code == 404
@@ -47,10 +52,13 @@ class TestClaimTransfer:
 
     def test_expired_transfer_is_404(self, client, db_session):
         token, _ = do_login(client, TEST_USER_ADDRESS, TEST_ENCRYPTION_KEY, "A")
-        tid = client.post("/transfers", json={"ciphertext": BLOB}, headers=auth_header(token)).json()["id"]
+        tid = client.post(
+            "/transfers", json={"ciphertext": BLOB}, headers=auth_header(token)
+        ).json()["id"]
         # Force-expire the row. Naive UTC to match the column convention — an
         # aware datetime gets shifted through the Postgres session timezone.
         from datetime import datetime, timedelta
+
         row = db_session.query(models.KeyTransfer).filter(models.KeyTransfer.id == tid).first()
         row.expires_at = datetime.now(UTC).replace(tzinfo=None) - timedelta(minutes=1)
         db_session.commit()

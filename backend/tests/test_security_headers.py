@@ -19,6 +19,7 @@ class TestSecurityHeaders:
         from fastapi.testclient import TestClient
 
         from main import app
+
         r = TestClient(app).get("/")
         assert "X-XSS-Protection" not in r.headers
 

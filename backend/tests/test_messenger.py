@@ -4,10 +4,14 @@ from conftest import auth_header
 
 
 def _send_message(client, token, recipient_address, content="Hello encrypted"):
-    return client.post("/messages", json={
-        "recipient_address": recipient_address,
-        "content": content,
-    }, headers=auth_header(token))
+    return client.post(
+        "/messages",
+        json={
+            "recipient_address": recipient_address,
+            "content": content,
+        },
+        headers=auth_header(token),
+    )
 
 
 class TestSendMessage:
@@ -28,9 +32,13 @@ class TestSendMessage:
 
     def test_send_message_unauthenticated(self, client, user2):
         _, u2 = user2
-        resp = client.post("/messages", json={
-            "recipient_address": u2["address"], "content": "x",
-        })
+        resp = client.post(
+            "/messages",
+            json={
+                "recipient_address": u2["address"],
+                "content": "x",
+            },
+        )
         assert resp.status_code == 401
 
     def test_message_too_long_rejected(self, client, user1, user2):
@@ -47,9 +55,15 @@ class TestMessageHistory:
         _send_message(client, token1, u2["address"], "msg1")
         _send_message(client, token2, u1["address"], "msg2")
         _send_message(client, token1, u2["address"], "msg3")
-        resp = client.post("/messages/history", json={
-            "partner_address": u2["address"], "limit": 50, "offset": 0,
-        }, headers=auth_header(token1))
+        resp = client.post(
+            "/messages/history",
+            json={
+                "partner_address": u2["address"],
+                "limit": 50,
+                "offset": 0,
+            },
+            headers=auth_header(token1),
+        )
         assert resp.status_code == 200
         messages = resp.json()
         assert len(messages) == 3
@@ -61,18 +75,30 @@ class TestMessageHistory:
         _, u2 = user2
         for i in range(5):
             _send_message(client, token1, u2["address"], f"msg{i}")
-        resp = client.post("/messages/history", json={
-            "partner_address": u2["address"], "limit": 2, "offset": 0,
-        }, headers=auth_header(token1))
+        resp = client.post(
+            "/messages/history",
+            json={
+                "partner_address": u2["address"],
+                "limit": 2,
+                "offset": 0,
+            },
+            headers=auth_header(token1),
+        )
         assert resp.status_code == 200
         assert len(resp.json()) == 2
 
     def test_history_limit_capped_at_100(self, client, user1, user2):
         token1, _ = user1
         _, u2 = user2
-        resp = client.post("/messages/history", json={
-            "partner_address": u2["address"], "limit": 200, "offset": 0,
-        }, headers=auth_header(token1))
+        resp = client.post(
+            "/messages/history",
+            json={
+                "partner_address": u2["address"],
+                "limit": 200,
+                "offset": 0,
+            },
+            headers=auth_header(token1),
+        )
         assert resp.status_code == 422  # Pydantic rejects limit > 100
 
 
@@ -101,9 +127,15 @@ class TestMarkRead:
         token2, u2 = user2
         _send_message(client, token1, u2["address"], "unread msg")
 
-        hist = client.post("/messages/history", json={
-            "partner_address": u1["address"], "limit": 50, "offset": 0,
-        }, headers=auth_header(token2))
+        hist = client.post(
+            "/messages/history",
+            json={
+                "partner_address": u1["address"],
+                "limit": 50,
+                "offset": 0,
+            },
+            headers=auth_header(token2),
+        )
         assert hist.json()[0]["is_read"] is False
 
         resp = client.post(
@@ -112,7 +144,13 @@ class TestMarkRead:
         )
         assert resp.status_code == 200
 
-        hist2 = client.post("/messages/history", json={
-            "partner_address": u1["address"], "limit": 50, "offset": 0,
-        }, headers=auth_header(token2))
+        hist2 = client.post(
+            "/messages/history",
+            json={
+                "partner_address": u1["address"],
+                "limit": 50,
+                "offset": 0,
+            },
+            headers=auth_header(token2),
+        )
         assert hist2.json()[0]["is_read"] is True

@@ -33,7 +33,9 @@ def test_direct_client_no_proxy():
 
 
 def test_trusted_proxy_uses_x_real_ip():
-    req = _request("127.0.0.1", {"x-real-ip": "203.0.113.9", "x-forwarded-for": "1.1.1.1, 203.0.113.9"})
+    req = _request(
+        "127.0.0.1", {"x-real-ip": "203.0.113.9", "x-forwarded-for": "1.1.1.1, 203.0.113.9"}
+    )
     assert client_ip(req) == "203.0.113.9"
 
 
@@ -54,6 +56,7 @@ def test_trusted_proxy_without_headers_uses_peer():
 
 
 # --- Rate-limit storage selection (audit F-3) ---
+
 
 def test_storage_uri_defaults_to_memory(monkeypatch):
     monkeypatch.delenv("RATELIMIT_STORAGE_URI", raising=False)
@@ -120,14 +123,14 @@ def test_limit_is_actually_enforced(client, user1):
     headers = {"Authorization": f"Bearer {token}"}
 
     statuses = [
-        client.get(f"/users/{user['address']}", headers=headers).status_code
-        for _ in range(35)
+        client.get(f"/users/{user['address']}", headers=headers).status_code for _ in range(35)
     ]
     assert 200 in statuses
     assert 429 in statuses, f"never throttled; saw {sorted(set(statuses))}"
 
 
 # --- Path parameters must not open a fresh quota (audit N-2) ---
+
 
 def test_limit_survives_a_varying_path_parameter(client, user1):
     """The same route with a DIFFERENT path parameter shares one quota.
@@ -144,10 +147,7 @@ def test_limit_survives_a_varying_path_parameter(client, user1):
 
     # Well-formed but unregistered addresses: distinct urls, all 404 through
     # the handler, and the limiter must still see them as one route.
-    statuses = [
-        client.get(f"/users/{i:064x}", headers=headers).status_code
-        for i in range(35)
-    ]
+    statuses = [client.get(f"/users/{i:064x}", headers=headers).status_code for i in range(35)]
     assert 429 in statuses, f"path parameter opened a fresh quota; saw {sorted(set(statuses))}"
 
 

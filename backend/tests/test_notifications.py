@@ -16,10 +16,9 @@ def _allow_placeholder_endpoints():
     step — the URL parsing/scheme/port rules still run for real. The guard's
     own behaviour is covered directly in test_ssrf_guard.py.
     """
-    with patch(
-        "security.url_guard.resolve_safe_addresses", return_value=["93.184.216.34"]
-    ):
+    with patch("security.url_guard.resolve_safe_addresses", return_value=["93.184.216.34"]):
         yield
+
 
 def test_push_subscription_registration(client, db_session, user1):
     token, current_user = user1
@@ -28,7 +27,7 @@ def test_push_subscription_registration(client, db_session, user1):
     sub_data = {
         "endpoint": "https://fcm.googleapis.com/fcm/send/fake-endpoint",
         "p256dh": "fake-p256dh",
-        "auth": "fake-auth"
+        "auth": "fake-auth",
     }
 
     # Test Subscribe
@@ -43,15 +42,16 @@ def test_push_subscription_registration(client, db_session, user1):
     assert db_sub is not None
     assert db_sub.user_address == current_user["address"]
 
+
 def test_notify_user_push_logic(db_session, user1):
     token, current_user = user1
-    
+
     # Add a subscription
     sub = PushSubscription(
         user_address=current_user["address"],
         endpoint="https://fake.endpoint",
         p256dh="p256",
-        auth="auth"
+        auth="auth",
     )
     db_session.add(sub)
     db_session.commit()
@@ -59,7 +59,7 @@ def test_notify_user_push_logic(db_session, user1):
     # Mock webpush to avoid external calls
     with patch("utils.push.webpush") as mock_webpush:
         notify_user_push(db_session, current_user["address"], "Title", "Body", {"key": "val"})
-        
+
         # Verify it was called
         assert mock_webpush.called
         args, kwargs = mock_webpush.call_args
@@ -67,29 +67,33 @@ def test_notify_user_push_logic(db_session, user1):
         assert "Title" in kwargs["data"]
         assert "Body" in kwargs["data"]
 
+
 def test_push_cleanup_on_gone(db_session, user1):
     token, current_user = user1
-    
+
     # Add a subscription
     sub = PushSubscription(
         user_address=current_user["address"],
         endpoint="https://gone.endpoint",
         p256dh="p256",
-        auth="auth"
+        auth="auth",
     )
     db_session.add(sub)
     db_session.commit()
 
     # Mock WebPushException with 410 Gone
     from pywebpush import WebPushException
+
     mock_response = MagicMock()
     mock_response.status_code = 410
-    
+
     with patch("utils.push.webpush", side_effect=WebPushException("Gone", response=mock_response)):
         notify_user_push(db_session, current_user["address"], "Title", "Body")
 
         # Verify subscription was deleted
-        db_sub = db_session.query(PushSubscription).filter_by(endpoint="https://gone.endpoint").first()
+        db_sub = (
+            db_session.query(PushSubscription).filter_by(endpoint="https://gone.endpoint").first()
+        )
         assert db_sub is None
 
 
@@ -105,9 +109,14 @@ class TestPushDoesNotStallTheEventLoop:
     """
 
     def _subscribe(self, db_session, address, endpoint):
-        db_session.add(PushSubscription(
-            user_address=address, endpoint=endpoint, p256dh="p256", auth="auth",
-        ))
+        db_session.add(
+            PushSubscription(
+                user_address=address,
+                endpoint=endpoint,
+                p256dh="p256",
+                auth="auth",
+            )
+        )
         db_session.commit()
 
     def test_webpush_is_called_with_a_timeout(self, db_session, user1):
@@ -142,7 +151,10 @@ class TestPushDoesNotStallTheEventLoop:
             loop_thread = threading.current_thread().ident
             with patch("utils.push.webpush", side_effect=_record):
                 await notify_user_push_async(
-                    db_session, current_user["address"], "T", "B",
+                    db_session,
+                    current_user["address"],
+                    "T",
+                    "B",
                 )
             return loop_thread
 

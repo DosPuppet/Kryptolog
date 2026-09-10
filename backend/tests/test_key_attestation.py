@@ -49,8 +49,9 @@ class TestAttestationStorage:
 
         # A peer fetching this user receives the attestation for verification.
         token2, _ = user2
-        r = client.post("/users/resolve", json={"address": TEST_USER_ADDRESS},
-                        headers=auth_header(token2))
+        r = client.post(
+            "/users/resolve", json={"address": TEST_USER_ADDRESS}, headers=auth_header(token2)
+        )
         assert r.status_code == 200
         assert r.json()["encryption_key_attestation"] == FAKE_ATTESTATION
 
@@ -86,12 +87,15 @@ class TestAttestationStorage:
         )
         new_key = "2b" * 1184
         nonce = get_nonce(client, TEST_USER_ADDRESS)
-        resp = client.post("/auth/login", json={
-            "address": TEST_USER_ADDRESS,
-            "signature": "fake_signature_for_testing",
-            "nonce": nonce,
-            "encryption_public_key": new_key,
-        })
+        resp = client.post(
+            "/auth/login",
+            json={
+                "address": TEST_USER_ADDRESS,
+                "signature": "fake_signature_for_testing",
+                "nonce": nonce,
+                "encryption_public_key": new_key,
+            },
+        )
         assert resp.status_code == 200
         assert resp.json()["user"]["encryption_key_attestation"] is None
 
@@ -107,12 +111,15 @@ class TestAttestationRejection:
 
     def test_attestation_without_encryption_key_rejected(self, client):
         nonce = get_nonce(client, TEST_USER_ADDRESS)
-        resp = client.post("/auth/login", json={
-            "address": TEST_USER_ADDRESS,
-            "signature": "fake_signature_for_testing",
-            "nonce": nonce,
-            "encryption_key_attestation": FAKE_ATTESTATION,
-        })
+        resp = client.post(
+            "/auth/login",
+            json={
+                "address": TEST_USER_ADDRESS,
+                "signature": "fake_signature_for_testing",
+                "nonce": nonce,
+                "encryption_key_attestation": FAKE_ATTESTATION,
+            },
+        )
         assert resp.status_code == 400
 
 
@@ -145,10 +152,11 @@ class TestRealCrypto:
 def _real_verify(address, message, signature):
     """The genuine liboqs verifier, bypassing the conftest mock."""
     import oqs
+
     try:
         with oqs.Signature(auth_module.SIG_ALG) as verifier:
-            return verifier.verify(message.encode("utf-8"),
-                                   bytes.fromhex(signature),
-                                   bytes.fromhex(address))
+            return verifier.verify(
+                message.encode("utf-8"), bytes.fromhex(signature), bytes.fromhex(address)
+            )
     except Exception:
         return False

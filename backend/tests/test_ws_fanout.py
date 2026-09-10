@@ -107,8 +107,9 @@ async def test_fanout_delivers_via_pubsub_to_all_sockets(addr):
 
         await mgr.send_personal_message({"type": "TEST_EVENT", "n": 1}, addr)
 
-        assert await _wait_for(lambda: ws1.sent and ws2.sent), \
+        assert await _wait_for(lambda: ws1.sent and ws2.sent), (
             "message did not arrive through the pub/sub subscriber"
+        )
         assert ws1.sent[0] == {"type": "TEST_EVENT", "n": 1}
         assert ws2.sent[0] == {"type": "TEST_EVENT", "n": 1}
     finally:
@@ -172,8 +173,9 @@ async def test_presence_lookup_does_not_walk_the_keyspace(addr):
         mgr._redis_sync = spy
         assert mgr.is_focused(addr) is True
 
-        assert not [c for c in spy.calls if c in ("scan", "scan_iter", "keys")], \
+        assert not [c for c in spy.calls if c in ("scan", "scan_iter", "keys")], (
             f"presence lookup walked the keyspace: {spy.calls}"
+        )
         assert len(spy.calls) == 1, f"expected one keyed read, got {spy.calls}"
     finally:
         await mgr.shutdown()

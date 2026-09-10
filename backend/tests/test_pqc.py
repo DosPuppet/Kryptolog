@@ -33,7 +33,9 @@ import pytest
 import auth
 
 SIG_ALG = "ML-DSA-44"
-FIXTURE = os.path.join(os.path.dirname(__file__), "..", "..", "tests", "fixtures", "pqc_interop.json")
+FIXTURE = os.path.join(
+    os.path.dirname(__file__), "..", "..", "tests", "fixtures", "pqc_interop.json"
+)
 
 
 @pytest.fixture(scope="module")
@@ -101,9 +103,13 @@ def test_jwt_tampered_payload_rejected(monkeypatch):
     h, _p, s = token.split(".")
     # Re-sign? No — keep the original signature but swap the payload. HS256 binds
     # the signature to the payload, so verification must fail.
-    forged = base64.urlsafe_b64encode(
-        json.dumps({"sub": "admin", "user_id": 0, "exp": 9999999999}).encode()
-    ).rstrip(b"=").decode()
+    forged = (
+        base64.urlsafe_b64encode(
+            json.dumps({"sub": "admin", "user_id": 0, "exp": 9999999999}).encode()
+        )
+        .rstrip(b"=")
+        .decode()
+    )
     assert auth.decode_access_token(f"{h}.{forged}.{s}") is None
 
 
@@ -119,6 +125,7 @@ def test_jwt_wrong_secret_rejected(monkeypatch):
 def test_jwt_expired_rejected(monkeypatch):
     monkeypatch.setattr(auth, "_JWT_SECRET", "e" * 64)
     from datetime import timedelta
+
     token = auth.create_access_token({"sub": "dave"}, expires_delta=timedelta(seconds=-1))
     assert auth.decode_access_token(token) is None
 
@@ -260,4 +267,5 @@ def test_verify_message_signature_pqc():
 
 def hashlib_sha256_hex(s: str) -> str:
     import hashlib
+
     return hashlib.sha256(s.encode("utf-8")).hexdigest()

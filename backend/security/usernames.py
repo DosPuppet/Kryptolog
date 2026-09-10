@@ -28,6 +28,7 @@ race between check and insert. Python's `.lower()` is used on the input rather
 than `.casefold()` precisely so the two sides agree: casefold is more
 aggressive than SQL's lower() and the pair would disagree on e.g. ß/ss.
 """
+
 import unicodedata
 
 from sqlalchemy import func
@@ -106,9 +107,7 @@ def normalize_username(value: str | None) -> str | None:
 
     for char in normalized:
         if unicodedata.category(char) in _FORBIDDEN_CATEGORIES:
-            raise InvalidUsername(
-                "Username contains an invisible or control character"
-            )
+            raise InvalidUsername("Username contains an invisible or control character")
 
     # Collapse after the category check, so a rejected separator cannot be
     # laundered into an ordinary space first.
@@ -121,14 +120,10 @@ def normalize_username(value: str | None) -> str | None:
         if char in _SCRIPT_NEUTRAL:
             continue
         if unicodedata.category(char)[0] not in "LMN":
-            raise InvalidUsername(
-                f"Username contains an unsupported character: {char!r}"
-            )
+            raise InvalidUsername(f"Username contains an unsupported character: {char!r}")
         family = _script_family(char)
         if family is None:
-            raise InvalidUsername(
-                f"Username contains an unsupported character: {char!r}"
-            )
+            raise InvalidUsername(f"Username contains an unsupported character: {char!r}")
         families.add(family)
 
     # The whole point: `аlice` (Cyrillic а, Latin lice) is two families and is
@@ -149,9 +144,7 @@ def username_taken(db: Session, username: str, *, exclude_address: str | None = 
     compares against stored values, which are normalized on write, so an
     un-normalized argument would miss the collision it exists to find.
     """
-    query = db.query(models.User).filter(
-        func.lower(models.User.username) == username.lower()
-    )
+    query = db.query(models.User).filter(func.lower(models.User.username) == username.lower())
     if exclude_address is not None:
         query = query.filter(models.User.address != exclude_address)
     return query.first() is not None

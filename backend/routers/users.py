@@ -1,4 +1,3 @@
-
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from sqlalchemy import func
 from sqlalchemy.orm import Session
@@ -10,10 +9,7 @@ from dependencies import get_current_user, limiter
 from security.crypto_validation import LEGACY_MIN_KEY_LEN
 from security.usernames import InvalidUsername, normalize_username, username_taken
 
-router = APIRouter(
-    prefix="/users",
-    tags=["users"]
-)
+router = APIRouter(prefix="/users", tags=["users"])
 
 # NOTE: a free-form `PUT /users/me/public-key` setter used to live here. It was
 # unused by any client and let an authenticated session change its ML-KEM key
@@ -21,14 +17,21 @@ router = APIRouter(
 # input validation (M-5). Removed: the encryption key is set only at login, where
 # the identity's signature now covers it (see auth._login_message).
 
+
 @router.put("/{address}", response_model=schemas.UserResponse)
 @limiter.limit("30/minute")
-def update_user(request: Request, address: str, user_update: schemas.UserUpdate, current_user: models.User = Depends(get_current_user), db: Session = Depends(get_db)):
+def update_user(
+    request: Request,
+    address: str,
+    user_update: schemas.UserUpdate,
+    current_user: models.User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
     if current_user.address.lower() != address.lower():
         raise HTTPException(status_code=403, detail="Not authorized to update this user")
-        
+
     user = current_user
-    
+
     if user_update.username is not None:
         try:
             new_username = normalize_username(user_update.username)
@@ -39,28 +42,35 @@ def update_user(request: Request, address: str, user_update: schemas.UserUpdate,
         # "alice" and "Alice" as separate identities.
         if username_taken(db, new_username, exclude_address=current_user.address):
             raise HTTPException(
-                status_code=409,
-                detail=f"Username '{new_username}' is already taken."
+                status_code=409, detail=f"Username '{new_username}' is already taken."
             )
         user.username = new_username
-        
+
     db.commit()
     db.refresh(user)
     return user
+
 
 # Minimum length for a directory substring search — avoids dumping the whole
 # user directory via a 1-char `LIKE %x%` (anti-enumeration).
 MIN_SEARCH_LEN = 2
 
+
 @router.get("/{address}", response_model=schemas.UserResponse)
 # Same 30/min as POST /users/resolve: both answer "does this account exist?",
 # so leaving this one uncapped made the paid-for limit on the other pointless.
 @limiter.limit("30/minute")
-def get_user(request: Request, address: str, current_user: models.User = Depends(get_current_user), db: Session = Depends(get_db)):
+def get_user(
+    request: Request,
+    address: str,
+    current_user: models.User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
     user = db.query(models.User).filter(models.User.address == address.lower()).first()
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
     return user
+
 
 @router.get("", response_model=list[schemas.UserResponse])
 @limiter.limit("30/minute")
@@ -87,8 +97,8 @@ def list_users(
         # Postgres — the directory search must match regardless of case.
         search_pattern = f"%{term.lower()}%"
         query = query.filter(
-            (models.User.address.ilike(search_pattern)) |
-            (models.User.username.ilike(search_pattern))
+            (models.User.address.ilike(search_pattern))
+            | (models.User.username.ilike(search_pattern))
         )
 
     if only_pqc:
@@ -97,18 +107,23 @@ def list_users(
         # legacy accounts whose keys predate strict validation visible, matching
         # is_usable_encryption_key's non-strict behaviour used by the endpoints
         # that actually gate on capability.
-        query = query.filter(
-            func.length(models.User.encryption_public_key) >= LEGACY_MIN_KEY_LEN
-        )
+        query = query.filter(func.length(models.User.encryption_public_key) >= LEGACY_MIN_KEY_LEN)
 
     return query.limit(limit).offset(offset).all()
+
 
 class UserResolveRequest(schemas.BaseModel):
     address: str
 
+
 @router.post("/resolve", response_model=schemas.UserResponse)
 @limiter.limit("30/minute")
-def resolve_user(request: Request, req: UserResolveRequest, current_user: models.User = Depends(get_current_user), db: Session = Depends(get_db)):
+def resolve_user(
+    request: Request,
+    req: UserResolveRequest,
+    current_user: models.User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
     # Exact-match resolve of a user by their identity public key. Auth-gated.
     # Addresses are stored lowercased, so normalize the query (matches get_user).
     user = db.query(models.User).filter(models.User.address == req.address.lower()).first()

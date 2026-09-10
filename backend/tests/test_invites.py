@@ -4,6 +4,7 @@ The gate is opt-in via KRYPTOLOG_REQUIRE_INVITE and only covers *account
 creation*. `config.invites_required()` is read at call time, so we toggle the
 env var per-test with monkeypatch.
 """
+
 import pytest
 from conftest import (
     TEST_ENCRYPTION_KEY,
@@ -111,20 +112,35 @@ class TestInvitesRequired:
         # An existing user occupies the username "Taken".
         occupier = synthetic_address("invite-occupier")
         nonce = get_nonce(client, occupier)
-        assert client.post("/auth/login", json={
-            "address": occupier, "signature": "fake", "nonce": nonce,
-            "encryption_public_key": TEST_ENCRYPTION_KEY,
-            "username": "Taken", "invite_code": _mint(count=1)[0],
-        }).status_code == 200
+        assert (
+            client.post(
+                "/auth/login",
+                json={
+                    "address": occupier,
+                    "signature": "fake",
+                    "nonce": nonce,
+                    "encryption_public_key": TEST_ENCRYPTION_KEY,
+                    "username": "Taken",
+                    "invite_code": _mint(count=1)[0],
+                },
+            ).status_code
+            == 200
+        )
 
         # A brand-new identity requests the same username with a valid code → 409.
         code = _mint(count=1)[0]
         clash = synthetic_address("invite-clash")
-        resp = client.post("/auth/login", json={
-            "address": clash, "signature": "fake", "nonce": get_nonce(client, clash),
-            "encryption_public_key": TEST_ENCRYPTION_KEY,
-            "username": "Taken", "invite_code": code,
-        })
+        resp = client.post(
+            "/auth/login",
+            json={
+                "address": clash,
+                "signature": "fake",
+                "nonce": get_nonce(client, clash),
+                "encryption_public_key": TEST_ENCRYPTION_KEY,
+                "username": "Taken",
+                "invite_code": code,
+            },
+        )
         assert resp.status_code == 409
         # The code wasn't burned: another new identity can still redeem it.
         assert _login_with(client, synthetic_address("invite-fresh"), code=code).status_code == 200

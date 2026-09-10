@@ -64,6 +64,7 @@ from security.crypto_validation import ML_DSA_44_PUBLIC_KEY_HEX_LEN
 
 # ---------- Constants ----------
 
+
 def synthetic_address(tag: str) -> str:
     """A structurally valid ML-DSA-44 public key (= an address) for tests.
 
@@ -75,7 +76,9 @@ def synthetic_address(tag: str) -> str:
     in these tests, and the server can only check the format anyway.
     """
     digest = hashlib.sha256(tag.encode()).hexdigest()  # 64 chars
-    return (digest * (ML_DSA_44_PUBLIC_KEY_HEX_LEN // len(digest) + 1))[:ML_DSA_44_PUBLIC_KEY_HEX_LEN]
+    return (digest * (ML_DSA_44_PUBLIC_KEY_HEX_LEN // len(digest) + 1))[
+        :ML_DSA_44_PUBLIC_KEY_HEX_LEN
+    ]
 
 
 TEST_USER_ADDRESS = synthetic_address("user-1")
@@ -89,6 +92,7 @@ TEST_ENCRYPTION_KEY = "ab" * 1184
 
 
 # ---------- Auth helpers ----------
+
 
 def get_nonce(client, address):
     resp = client.get(f"/auth/nonce/{address}")
@@ -119,6 +123,7 @@ def auth_header(token):
 
 # ---------- Fixtures ----------
 
+
 @pytest.fixture(autouse=True)
 def _setup_db():
     """Create fresh tables before each test and drop them after."""
@@ -131,6 +136,7 @@ def _setup_db():
 def _reset_rate_limiter():
     """Reset the slowapi rate limiter so limits don't accumulate across tests."""
     from dependencies import limiter
+
     try:
         limiter.reset()
     except Exception:
@@ -145,8 +151,10 @@ def _mock_pqc():
     (`verify_message_signature`). Tests that need the *real* verifier override
     these (see test_multisig signature-gate test / the unit tests in test_pqc).
     Server-side token issue/verify is left untouched (HS256, audit §2/§3)."""
-    with patch("auth.verify_signature", return_value=True), \
-         patch("auth.verify_message_signature", return_value=True):
+    with (
+        patch("auth.verify_signature", return_value=True),
+        patch("auth.verify_message_signature", return_value=True),
+    ):
         yield
 
 

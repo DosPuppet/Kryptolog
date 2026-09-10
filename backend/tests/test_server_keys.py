@@ -15,8 +15,14 @@ def _reset_secret(monkeypatch):
 
 
 def test_is_production_detection(monkeypatch):
-    for val, expected in [("production", True), ("prod", True), ("PRODUCTION", True),
-                          ("development", False), ("dev", False), ("", False)]:
+    for val, expected in [
+        ("production", True),
+        ("prod", True),
+        ("PRODUCTION", True),
+        ("development", False),
+        ("dev", False),
+        ("", False),
+    ]:
         monkeypatch.setenv("KRYPTOLOG_ENV", val)
         assert auth._is_production() is expected
     monkeypatch.delenv("KRYPTOLOG_ENV", raising=False)

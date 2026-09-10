@@ -46,11 +46,7 @@ def _ratelimit_storage_uri() -> str:
     process. When unset we fall back to in-memory limiting: fine for a single
     process, but per-process and reset on every restart. `RATELIMIT_STORAGE_URI`
     is an explicit override; otherwise a plain `REDIS_URL` is reused."""
-    return (
-        os.getenv("RATELIMIT_STORAGE_URI")
-        or os.getenv("REDIS_URL")
-        or "memory://"
-    )
+    return os.getenv("RATELIMIT_STORAGE_URI") or os.getenv("REDIS_URL") or "memory://"
 
 
 _STORAGE_URI = _ratelimit_storage_uri()
@@ -91,6 +87,7 @@ limiter = Limiter(
 )
 
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="auth/login")
+
 
 def user_for_token(token: str, db: Session):
     """Decode + validate a JWT and return the (non-revoked) user, or None.

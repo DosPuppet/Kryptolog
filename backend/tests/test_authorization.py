@@ -4,6 +4,7 @@ The audit's headline finding: an AccessGrant that had passed its expires_at
 still unlocked the file-chunk endpoints, because only the *listing* endpoints
 filtered on expiry.
 """
+
 from datetime import UTC, datetime, timedelta
 
 from conftest import (
@@ -58,9 +59,7 @@ def _make_shared_secret_with_chunk(client, owner_token, grantee_address, expires
 
 
 def _expire_grant(db_session, grant_id):
-    grant = db_session.query(models.AccessGrant).filter(
-        models.AccessGrant.id == grant_id
-    ).first()
+    grant = db_session.query(models.AccessGrant).filter(models.AccessGrant.id == grant_id).first()
     grant.expires_at = _naive_utc(datetime.now(UTC)) - timedelta(minutes=1)
     db_session.commit()
 
@@ -82,16 +81,18 @@ class TestExpiredGrantBlocksFileAccess:
         )
 
         # Live grant: Bob can read.
-        assert client.get(
-            f"/secrets/{secret_id}/chunks/0", headers=auth_header(bob)
-        ).status_code == 200
+        assert (
+            client.get(f"/secrets/{secret_id}/chunks/0", headers=auth_header(bob)).status_code
+            == 200
+        )
 
         _expire_grant(db_session, grant_id)
 
         # Expired grant: Bob must be refused.
-        assert client.get(
-            f"/secrets/{secret_id}/chunks/0", headers=auth_header(bob)
-        ).status_code == 403
+        assert (
+            client.get(f"/secrets/{secret_id}/chunks/0", headers=auth_header(bob)).status_code
+            == 403
+        )
 
     def test_expired_grant_cannot_download_single_chunk(self, client, db_session):
         owner, _ = do_login(client, TEST_USER_ADDRESS, TEST_ENCRYPTION_KEY, "Owner")
@@ -102,31 +103,33 @@ class TestExpiredGrantBlocksFileAccess:
         _expire_grant(db_session, grant_id)
 
         # The audit's scenario: skip the UI, hit the chunk endpoint directly.
-        assert client.get(
-            f"/secrets/{secret_id}/chunks/0", headers=auth_header(bob)
-        ).status_code == 403
+        assert (
+            client.get(f"/secrets/{secret_id}/chunks/0", headers=auth_header(bob)).status_code
+            == 403
+        )
 
     def test_revoked_grant_cannot_download_chunk(self, client):
         owner, _ = do_login(client, TEST_USER_ADDRESS, TEST_ENCRYPTION_KEY, "Owner")
         bob, bob_user = do_login(client, TEST_USER_ADDRESS_2, TEST_ENCRYPTION_KEY, "Bob")
-        secret_id, grant_id = _make_shared_secret_with_chunk(
-            client, owner, bob_user["address"]
+        secret_id, grant_id = _make_shared_secret_with_chunk(client, owner, bob_user["address"])
+        assert (
+            client.delete(f"/secrets/share/{grant_id}", headers=auth_header(owner)).status_code
+            == 200
         )
-        assert client.delete(
-            f"/secrets/share/{grant_id}", headers=auth_header(owner)
-        ).status_code == 200
-        assert client.get(
-            f"/secrets/{secret_id}/chunks/0", headers=auth_header(bob)
-        ).status_code == 403
+        assert (
+            client.get(f"/secrets/{secret_id}/chunks/0", headers=auth_header(bob)).status_code
+            == 403
+        )
 
     def test_grant_without_expiry_still_works(self, client):
         """NULL expires_at means 'no expiry' — must not be caught by the fix."""
         owner, _ = do_login(client, TEST_USER_ADDRESS, TEST_ENCRYPTION_KEY, "Owner")
         bob, bob_user = do_login(client, TEST_USER_ADDRESS_2, TEST_ENCRYPTION_KEY, "Bob")
         secret_id, _ = _make_shared_secret_with_chunk(client, owner, bob_user["address"])
-        assert client.get(
-            f"/secrets/{secret_id}/chunks/0", headers=auth_header(bob)
-        ).status_code == 200
+        assert (
+            client.get(f"/secrets/{secret_id}/chunks/0", headers=auth_header(bob)).status_code
+            == 200
+        )
 
     def test_owner_access_is_unaffected_by_grant_expiry(self, client, db_session):
         owner, owner_user = do_login(client, TEST_USER_ADDRESS, TEST_ENCRYPTION_KEY, "Owner")
@@ -136,9 +139,10 @@ class TestExpiredGrantBlocksFileAccess:
         )
         _expire_grant(db_session, grant_id)
         # The owner's own access never depended on a grant.
-        assert client.get(
-            f"/secrets/{secret_id}/chunks/0", headers=auth_header(owner)
-        ).status_code == 200
+        assert (
+            client.get(f"/secrets/{secret_id}/chunks/0", headers=auth_header(owner)).status_code
+            == 200
+        )
 
     def test_unrelated_user_is_refused(self, client):
         owner, _ = do_login(client, TEST_USER_ADDRESS, TEST_ENCRYPTION_KEY, "Owner")
@@ -148,9 +152,12 @@ class TestExpiredGrantBlocksFileAccess:
             json={"name": "s", "type": "note", "encrypted_data": "de", "encrypted_key": "ad"},
             headers=auth_header(owner),
         ).json()
-        assert client.get(
-            f"/secrets/{secret['id']}/chunks/0", headers=auth_header(stranger)
-        ).status_code == 403
+        assert (
+            client.get(
+                f"/secrets/{secret['id']}/chunks/0", headers=auth_header(stranger)
+            ).status_code
+            == 403
+        )
 
 
 class TestPushSubscriptionOwnership:
@@ -159,7 +166,9 @@ class TestPushSubscriptionOwnership:
 
     def test_cannot_hijack_another_users_subscription(self, client, db_session):
         alice, alice_user = do_login(client, TEST_USER_ADDRESS, TEST_ENCRYPTION_KEY, "Alice")
-        mallory, mallory_user = do_login(client, TEST_USER_ADDRESS_2, TEST_ENCRYPTION_KEY, "Mallory")
+        mallory, mallory_user = do_login(
+            client, TEST_USER_ADDRESS_2, TEST_ENCRYPTION_KEY, "Mallory"
+        )
 
         endpoint = "https://fcm.googleapis.com/fcm/send/alice-device"
         sub = models.PushSubscription(
@@ -183,14 +192,18 @@ class TestPushSubscriptionOwnership:
         # Alice's original row must be gone rather than silently reassigned,
         # and Mallory must not have inherited Alice's row id.
         db_session.expire_all()
-        alice_rows = db_session.query(models.PushSubscription).filter(
-            models.PushSubscription.user_address == alice_user["address"]
-        ).all()
+        alice_rows = (
+            db_session.query(models.PushSubscription)
+            .filter(models.PushSubscription.user_address == alice_user["address"])
+            .all()
+        )
         assert alice_rows == []
 
-        mallory_rows = db_session.query(models.PushSubscription).filter(
-            models.PushSubscription.user_address == mallory_user["address"]
-        ).all()
+        mallory_rows = (
+            db_session.query(models.PushSubscription)
+            .filter(models.PushSubscription.user_address == mallory_user["address"])
+            .all()
+        )
         assert len(mallory_rows) == 1
         assert mallory_rows[0].id != original_id
 

@@ -17,7 +17,10 @@ def invites_required() -> bool:
     Note: this only gates *account creation*. Existing users always log in
     normally, and an invalid/expired code yields a generic 403 (no enumeration)."""
     return (os.getenv("KRYPTOLOG_REQUIRE_INVITE") or "false").strip().lower() in (
-        "1", "true", "yes", "on",
+        "1",
+        "true",
+        "yes",
+        "on",
     )
 
 

@@ -19,6 +19,7 @@ Two modes (audit P0 — lifting the single-process constraint):
 If Redis is configured but unreachable, we log and stay in local mode rather
 than failing the boot — a single process keeps working, it just must stay single.
 """
+
 import asyncio
 import json
 import logging
@@ -40,7 +41,7 @@ FANOUT_CHANNEL = "kryptolog:ws:fanout"
 # keeping per-connection (not per-user) expiry.
 PRESENCE_PREFIX = "kryptolog:ws:presence:"
 PRESENCE_STATES = ("focused", "blurred")
-PRESENCE_TTL_SECONDS = 90        # entry lifetime without a heartbeat (worker death)
+PRESENCE_TTL_SECONDS = 90  # entry lifetime without a heartbeat (worker death)
 PRESENCE_HEARTBEAT_SECONDS = 30  # refresh cadence — keep well under the TTL
 
 
@@ -54,8 +55,8 @@ class ConnectionManager:
         self._conn_ids: dict[WebSocket, str] = {}
         self._conn_addr: dict[WebSocket, str] = {}
         self._redis_url = redis_url if redis_url is not None else os.getenv("REDIS_URL")
-        self._redis = None        # async client: pub/sub + presence writes
-        self._redis_sync = None   # sync client: presence reads from sync code (push path)
+        self._redis = None  # async client: pub/sub + presence writes
+        self._redis_sync = None  # sync client: presence reads from sync code (push path)
         self._pubsub = None
         self._listener_task: asyncio.Task | None = None
         self._heartbeat_task: asyncio.Task | None = None
@@ -78,6 +79,7 @@ class ConnectionManager:
             if redis_client is None:
                 import redis as redis_pkg
                 import redis.asyncio as aioredis
+
                 redis_client = aioredis.Redis.from_url(self._redis_url, decode_responses=True)
                 redis_sync_client = redis_pkg.Redis.from_url(self._redis_url, decode_responses=True)
             await redis_client.ping()
@@ -92,7 +94,8 @@ class ConnectionManager:
         except Exception as e:
             logger.warning(
                 "WebSocket fan-out: Redis unavailable (%s) — staying in in-process "
-                "mode. Keep the backend to a SINGLE process.", e,
+                "mode. Keep the backend to a SINGLE process.",
+                e,
             )
             self._redis = None
             self._redis_sync = None
@@ -233,9 +236,7 @@ class ConnectionManager:
         addr = self._conn_addr.pop(websocket, None)
         if self.shared and conn_id and addr:
             try:
-                await self._redis.zrem(
-                    self._presence_key(addr), *self._presence_members(conn_id)
-                )
+                await self._redis.zrem(self._presence_key(addr), *self._presence_members(conn_id))
             except Exception as e:
                 # The score expiry reaps it if this fails.
                 logger.warning("WS presence delete failed: %s", e)
@@ -295,5 +296,6 @@ class ConnectionManager:
                 await connection.send_json(message)
             except Exception as e:
                 logger.warning("Sending WS message failed: %s", e)
+
 
 manager = ConnectionManager()

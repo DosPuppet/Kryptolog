@@ -10,6 +10,7 @@ POST /transfers       — authenticated (the source device has a session)
 GET  /transfers/{id}  — unauthenticated (the target device has no identity yet);
                         guarded by the unguessable id, single-use, and TTL.
 """
+
 import secrets as _secrets
 from datetime import UTC, datetime, timedelta
 
@@ -73,11 +74,7 @@ def claim_transfer(request: Request, transfer_id: str, db: Session = Depends(get
     """
     # Read first, but treat the value as a *candidate* only: it is not ours
     # until the conditional delete below says so.
-    row = (
-        db.query(models.KeyTransfer)
-        .filter(models.KeyTransfer.id == transfer_id)
-        .first()
-    )
+    row = db.query(models.KeyTransfer).filter(models.KeyTransfer.id == transfer_id).first()
     if row is None:
         raise HTTPException(status_code=404, detail="Transfer not found or expired")
 
@@ -106,9 +103,9 @@ def claim_transfer(request: Request, transfer_id: str, db: Session = Depends(get
         # answer the same way — no oracle distinguishing the two.
         if expires_at is not None and _as_naive(expires_at) <= now_naive:
             # Expired row: clear it out so the table cannot accumulate.
-            db.query(models.KeyTransfer).filter(
-                models.KeyTransfer.id == transfer_id
-            ).delete(synchronize_session=False)
+            db.query(models.KeyTransfer).filter(models.KeyTransfer.id == transfer_id).delete(
+                synchronize_session=False
+            )
             db.commit()
         raise HTTPException(status_code=404, detail="Transfer not found or expired")
 

@@ -16,20 +16,24 @@ from sqlalchemy.orm import declarative_base, relationship
 
 Base = declarative_base()
 
+
 class Nonce(Base):
     __tablename__ = "nonces"
 
-    address = Column(String, primary_key=True, index=True) # Address associated with nonce
+    address = Column(String, primary_key=True, index=True)  # Address associated with nonce
     nonce = Column(String, nullable=False)
     created_at = Column(DateTime, default=lambda: datetime.now(UTC))
     expires_at = Column(DateTime, nullable=False)
 
+
 class User(Base):
     __tablename__ = "users"
 
-    address = Column(String, primary_key=True, index=True) # Identity public key (ML-DSA-44, lowercase hex)
+    address = Column(
+        String, primary_key=True, index=True
+    )  # Identity public key (ML-DSA-44, lowercase hex)
     username = Column(String, nullable=True)
-    encryption_public_key = Column(String, nullable=True) # ML-KEM-768 public key (hex)
+    encryption_public_key = Column(String, nullable=True)  # ML-KEM-768 public key (hex)
     # Stamped whenever encryption_public_key changes for an existing identity
     # (audit S1: key-directory transparency). Lets clients surface "this contact's
     # key changed on <date>" and detect a malicious/compromised key swap.
@@ -66,19 +70,21 @@ class User(Base):
     secrets = relationship("Secret", back_populates="owner")
     access_grants = relationship("AccessGrant", back_populates="grantee")
 
+
 class Secret(Base):
     __tablename__ = "secrets"
 
     id = Column(Integer, primary_key=True, index=True)
     owner_address = Column(String, ForeignKey("users.address"))
     name = Column(String, index=True)
-    type = Column(String, default="standard") # 'standard' | 'file' | 'signed_document'
-    encrypted_data = Column(Text) # AES-encrypted content or file metadata JSON
+    type = Column(String, default="standard")  # 'standard' | 'file' | 'signed_document'
+    encrypted_data = Column(Text)  # AES-encrypted content or file metadata JSON
     created_at = Column(DateTime, default=lambda: datetime.now(UTC))
 
     owner = relationship("User", back_populates="secrets")
     access_grants = relationship("AccessGrant", back_populates="secret")
     chunks = relationship("FileChunk", back_populates="secret", cascade="all, delete-orphan")
+
 
 class AccessGrant(Base):
     __tablename__ = "access_grants"
@@ -86,12 +92,13 @@ class AccessGrant(Base):
     id = Column(Integer, primary_key=True, index=True)
     secret_id = Column(Integer, ForeignKey("secrets.id"))
     grantee_address = Column(String, ForeignKey("users.address"))
-    encrypted_key = Column(Text) # The secret's key, encrypted for the grantee's public key
+    encrypted_key = Column(Text)  # The secret's key, encrypted for the grantee's public key
     created_at = Column(DateTime, default=lambda: datetime.now(UTC))
     expires_at = Column(DateTime, nullable=True)
 
     secret = relationship("Secret", back_populates="access_grants")
     grantee = relationship("User", back_populates="access_grants")
+
 
 class MultisigWorkflow(Base):
     __tablename__ = "multisig_workflows"
@@ -100,9 +107,9 @@ class MultisigWorkflow(Base):
     name = Column(String, index=True)
     owner_address = Column(String, ForeignKey("users.address"))
     secret_id = Column(Integer, ForeignKey("secrets.id"))
-    status = Column(String, default="pending") # 'pending', 'completed', 'rejected'
-    threshold = Column(Integer, nullable=True) # N in N-of-M; NULL ⇒ N-of-N (= len(signers))
-    rejected_by = Column(String, nullable=True) # address of the signer who rejected
+    status = Column(String, default="pending")  # 'pending', 'completed', 'rejected'
+    threshold = Column(Integer, nullable=True)  # N in N-of-M; NULL ⇒ N-of-N (= len(signers))
+    rejected_by = Column(String, nullable=True)  # address of the signer who rejected
     rejected_at = Column(DateTime, nullable=True)
     created_at = Column(DateTime, default=lambda: datetime.now(UTC))
 
@@ -111,13 +118,13 @@ class MultisigWorkflow(Base):
     signers = relationship("MultisigWorkflowSigner", back_populates="workflow")
     recipients = relationship("MultisigWorkflowRecipient", back_populates="workflow")
 
+
 class MultisigWorkflowSigner(Base):
     __tablename__ = "multisig_workflow_signers"
     # One row per (workflow, signer): a duplicate would let a single identity
     # contribute two signatures toward a quorum (KRY-005).
     __table_args__ = (
-        UniqueConstraint("workflow_id", "user_address",
-                         name="uq_multisig_signer_workflow_user"),
+        UniqueConstraint("workflow_id", "user_address", name="uq_multisig_signer_workflow_user"),
     )
 
     id = Column(Integer, primary_key=True, index=True)
@@ -131,17 +138,17 @@ class MultisigWorkflowSigner(Base):
     workflow = relationship("MultisigWorkflow", back_populates="signers")
     user = relationship("User")
 
+
 class MultisigWorkflowRecipient(Base):
     __tablename__ = "multisig_workflow_recipients"
     __table_args__ = (
-        UniqueConstraint("workflow_id", "user_address",
-                         name="uq_multisig_recipient_workflow_user"),
+        UniqueConstraint("workflow_id", "user_address", name="uq_multisig_recipient_workflow_user"),
     )
 
     id = Column(Integer, primary_key=True, index=True)
     workflow_id = Column(Integer, ForeignKey("multisig_workflows.id"))
     user_address = Column(String, ForeignKey("users.address"))
-    encrypted_key = Column(Text) # Key encrypted for THIS recipient, held until release
+    encrypted_key = Column(Text)  # Key encrypted for THIS recipient, held until release
 
     workflow = relationship("MultisigWorkflow", back_populates="recipients")
     user = relationship("User")
@@ -153,17 +160,25 @@ class Message(Base):
     id = Column(Integer, primary_key=True, index=True)
     sender_address = Column(String, ForeignKey("users.address"), index=True)
     recipient_address = Column(String, ForeignKey("users.address"), index=True)
-    content = Column(Text) # Encrypted Blob
+    content = Column(Text)  # Encrypted Blob
     is_read = Column(Boolean, default=False, index=True)
     created_at = Column(DateTime, default=lambda: datetime.now(UTC), index=True)
 
     sender = relationship("User", foreign_keys=[sender_address], back_populates="sent_messages")
-    recipient = relationship("User", foreign_keys=[recipient_address], back_populates="received_messages")
+    recipient = relationship(
+        "User", foreign_keys=[recipient_address], back_populates="received_messages"
+    )
+
 
 # Relationships added post-definition to avoid forward-reference issues
 User.workflows = relationship("MultisigWorkflow", back_populates="owner")
-User.sent_messages = relationship("Message", foreign_keys=[Message.sender_address], back_populates="sender")
-User.received_messages = relationship("Message", foreign_keys=[Message.recipient_address], back_populates="recipient")
+User.sent_messages = relationship(
+    "Message", foreign_keys=[Message.sender_address], back_populates="sender"
+)
+User.received_messages = relationship(
+    "Message", foreign_keys=[Message.recipient_address], back_populates="recipient"
+)
+
 
 class FileChunk(Base):
     __tablename__ = "file_chunks"
@@ -172,21 +187,21 @@ class FileChunk(Base):
     # row PostgreSQL happens to hand back first, and the reassembled file is
     # silently wrong — corruption with no error anywhere (audit M-2).
     __table_args__ = (
-        UniqueConstraint("secret_id", "chunk_index",
-                         name="uq_file_chunk_secret_index"),
+        UniqueConstraint("secret_id", "chunk_index", name="uq_file_chunk_secret_index"),
     )
 
     id = Column(Integer, primary_key=True, index=True)
     secret_id = Column(Integer, ForeignKey("secrets.id"), index=True)
     chunk_index = Column(Integer)  # 0-based ordering
     encrypted_data = Column(Text)  # AES-GCM encrypted chunk (hex)
-    iv = Column(String)            # Per-chunk IV (hex)
+    iv = Column(String)  # Per-chunk IV (hex)
     created_at = Column(DateTime, default=lambda: datetime.now(UTC))
 
     secret = relationship("Secret", back_populates="chunks")
 
 
 # ── Group Channels ──────────────────────────────────────────────
+
 
 class GroupChannel(Base):
     __tablename__ = "group_channels"
@@ -210,8 +225,7 @@ class GroupMember(Base):
     # access to the channel (audit M-1). An admin can also do this deliberately
     # — double-add an accomplice, then publicly "remove" them.
     __table_args__ = (
-        UniqueConstraint("channel_id", "user_address",
-                         name="uq_group_member_channel_user"),
+        UniqueConstraint("channel_id", "user_address", name="uq_group_member_channel_user"),
     )
 
     id = Column(Integer, primary_key=True, index=True)
@@ -236,12 +250,14 @@ class GroupMessage(Base):
     channel = relationship("GroupChannel", back_populates="messages")
     sender = relationship("User")
 
+
 class InviteCode(Base):
     """Access filter (audit §5). When invites are required (config.invites_required),
     creating a brand-new identity at first login consumes one valid code. Existing
     users are unaffected — the gate covers account *creation* only. Codes can be
     admin-seeded (created_by NULL) or minted by existing users, single- or
     multi-use, and optionally time-limited."""
+
     __tablename__ = "invite_codes"
 
     code = Column(String, primary_key=True, index=True)
@@ -267,10 +283,11 @@ class KeyTransfer(Base):
     + passphrase are carried out of band (QR / short code) to the target device,
     which fetches once (single-use: the row is deleted on read) within a short
     TTL. Never holds plaintext or the passphrase."""
+
     __tablename__ = "key_transfers"
 
     id = Column(String, primary_key=True, index=True)  # random pickup id
-    ciphertext = Column(Text, nullable=False)          # encrypted vault blob (JSON)
+    ciphertext = Column(Text, nullable=False)  # encrypted vault blob (JSON)
     created_at = Column(DateTime, default=lambda: datetime.now(UTC))
     expires_at = Column(DateTime, nullable=False)
 
@@ -287,4 +304,7 @@ class PushSubscription(Base):
 
     user = relationship("User", back_populates="push_subscriptions")
 
-User.push_subscriptions = relationship("PushSubscription", back_populates="user", cascade="all, delete-orphan")
+
+User.push_subscriptions = relationship(
+    "PushSubscription", back_populates="user", cascade="all, delete-orphan"
+)

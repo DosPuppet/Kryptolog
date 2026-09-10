@@ -13,10 +13,7 @@ from security.crypto_validation import is_usable_encryption_key
 from utils.push import notify_many_push_async
 from websocket_manager import manager
 
-router = APIRouter(
-    prefix="/groups",
-    tags=["groups"]
-)
+router = APIRouter(prefix="/groups", tags=["groups"])
 
 # Page size for GET /groups (audit O-3). A channel row drags in its whole
 # member list (up to 50, each with its user) plus the last message, so an
@@ -27,6 +24,7 @@ GROUP_PAGE_DEFAULT = 50
 
 
 # ── Create Group ────────────────────────────────────────────────
+
 
 @router.post("", response_model=schemas.GroupChannelResponse)
 @limiter.limit("10/minute")
@@ -57,8 +55,8 @@ async def create_group(
     for u in users:
         if not is_usable_encryption_key(u.encryption_public_key):
             raise HTTPException(
-                status_code=400, 
-                detail=f"User {u.address} is not Messenger-capable (Missing PQC key)"
+                status_code=400,
+                detail=f"User {u.address} is not Messenger-capable (Missing PQC key)",
             )
 
     channel_id = str(uuid.uuid4())
@@ -71,42 +69,51 @@ async def create_group(
 
     for addr in member_addrs:
         role = "owner" if addr == current_user.address else "member"
-        db.add(models.GroupMember(
-            channel_id=channel_id,
-            user_address=addr,
-            role=role,
-        ))
+        db.add(
+            models.GroupMember(
+                channel_id=channel_id,
+                user_address=addr,
+                role=role,
+            )
+        )
 
     db.commit()
     db.refresh(channel)
 
     for addr in member_addrs:
         if addr != current_user.address:
-            await manager.send_personal_message({
-                "type": "GROUP_JOINED",
-                "channel": schemas.GroupChannelResponse.model_validate(channel)
-            }, addr)
+            await manager.send_personal_message(
+                {
+                    "type": "GROUP_JOINED",
+                    "channel": schemas.GroupChannelResponse.model_validate(channel),
+                },
+                addr,
+            )
 
     # Push fan-out AFTER the WebSocket sends, in one off-loop hop: pushes are
     # blocking network calls, so doing them inline here would stall every other
     # request on this worker for the whole broadcast. Generic body: channel
     # names are E2EE blobs the server can't read (audit M-3) — and MUST not try
     # to display.
-    await notify_many_push_async(db, [
-        (
-            addr,
-            "New Group",
-            "You have been added to a new group",
-            {"type": "group_joined", "channel_id": channel.id},
-        )
-        for addr in member_addrs
-        if addr != current_user.address
-    ])
+    await notify_many_push_async(
+        db,
+        [
+            (
+                addr,
+                "New Group",
+                "You have been added to a new group",
+                {"type": "group_joined", "channel_id": channel.id},
+            )
+            for addr in member_addrs
+            if addr != current_user.address
+        ],
+    )
 
     return channel
 
 
 # ── List My Groups ──────────────────────────────────────────────
+
 
 @router.get("", response_model=list[schemas.GroupConversationResponse])
 @limiter.limit("30/minute")
@@ -193,6 +200,7 @@ def list_groups(
 
 # ── Get Group Details ───────────────────────────────────────────
 
+
 @router.get("/{channel_id}", response_model=schemas.GroupChannelResponse)
 @limiter.limit("30/minute")
 def get_group(
@@ -217,6 +225,7 @@ def get_group(
 
 
 # ── Send Group Message ──────────────────────────────────────────
+
 
 @router.post("/{channel_id}/messages", response_model=schemas.GroupMessageResponse)
 @limiter.limit("20/minute")
@@ -249,13 +258,10 @@ async def send_group_message(
     db.refresh(msg)
 
     msg_json = schemas.GroupMessageResponse.model_validate(msg).model_dump(mode="json")
-    msg_data = {
-        "type": "NEW_GROUP_MESSAGE",
-        "message": msg_json
-    }
-    
+    msg_data = {"type": "NEW_GROUP_MESSAGE", "message": msg_json}
+
     sender_name = current_user.username or f"{current_user.address[:8]}..."
-    
+
     for member in channel.members:
         await manager.send_personal_message(msg_data, member.user_address)
 
@@ -263,21 +269,25 @@ async def send_group_message(
     # would be up to 50 blocking HTTPS requests on the event loop per message,
     # freezing the whole worker. Generic title: the channel name is an E2EE
     # blob (audit M-3).
-    await notify_many_push_async(db, [
-        (
-            member.user_address,
-            "Group message",
-            f"{sender_name}: Sent a secure message",
-            {"type": "group", "channel_id": channel.id},
-        )
-        for member in channel.members
-        if member.user_address != current_user.address
-    ])
+    await notify_many_push_async(
+        db,
+        [
+            (
+                member.user_address,
+                "Group message",
+                f"{sender_name}: Sent a secure message",
+                {"type": "group", "channel_id": channel.id},
+            )
+            for member in channel.members
+            if member.user_address != current_user.address
+        ],
+    )
 
     return msg
 
 
 # ── Group Message History ───────────────────────────────────────
+
 
 @router.post("/{channel_id}/history", response_model=list[schemas.GroupMessageResponse])
 @limiter.limit("60/minute")
@@ -305,6 +315,7 @@ def get_group_history(
 
 
 # ── Add Member ──────────────────────────────────────────────────
+
 
 @router.post("/{channel_id}/members", response_model=schemas.GroupMemberResponse)
 @limiter.limit("10/minute")
@@ -336,9 +347,11 @@ async def add_member(
     target_user = db.query(models.User).filter(models.User.address == new_addr).first()
     if not target_user:
         raise HTTPException(status_code=404, detail="User not found")
-        
+
     if not is_usable_encryption_key(target_user.encryption_public_key):
-        raise HTTPException(status_code=400, detail="User is not Messenger-capable (Missing PQC key)")
+        raise HTTPException(
+            status_code=400, detail="User is not Messenger-capable (Missing PQC key)"
+        )
 
     if len(channel.members) >= 50:
         raise HTTPException(status_code=400, detail="Maximum 50 members per group")
@@ -362,10 +375,10 @@ async def add_member(
             "role": new_member.role,
             "username": target_user.username,
             "joined_at": new_member.joined_at.isoformat(),
-            "encryption_public_key": target_user.encryption_public_key
-        }
+            "encryption_public_key": target_user.encryption_public_key,
+        },
     }
-    
+
     recipients = {m.user_address for m in channel.members} | {new_addr}
 
     for addr in recipients:
@@ -375,6 +388,7 @@ async def add_member(
 
 
 # ── Remove Member / Leave Group ─────────────────────────────────
+
 
 @router.delete("/{channel_id}/members/{member_address}")
 @limiter.limit("10/minute")
@@ -430,9 +444,8 @@ async def remove_member(
             if not is_self and caller_member.role == "admin":
                 successor = caller_member
             else:
-                successor = (
-                    next((m for m in remaining if m.role == "admin"), None)
-                    or min(remaining, key=lambda m: m.joined_at)
+                successor = next((m for m in remaining if m.role == "admin"), None) or min(
+                    remaining, key=lambda m: m.joined_at
                 )
             successor.role = "owner"
             channel.owner_address = successor.user_address
@@ -489,7 +502,10 @@ async def remove_member(
 
 # ── Update Role ─────────────────────────────────────────────────
 
-@router.put("/{channel_id}/members/{member_address}/role", response_model=schemas.GroupMemberResponse)
+
+@router.put(
+    "/{channel_id}/members/{member_address}/role", response_model=schemas.GroupMemberResponse
+)
 @limiter.limit("10/minute")
 async def update_member_role(
     request: Request,
@@ -519,7 +535,7 @@ async def update_member_role(
 
     if target_member.role == "owner":
         raise HTTPException(status_code=400, detail="Cannot change owner role directly")
-    
+
     new_role = data.role.lower()
     if new_role not in ("admin", "member"):
         raise HTTPException(status_code=400, detail="Invalid role")
@@ -536,10 +552,10 @@ async def update_member_role(
             "user_address": target_member.user_address,
             "role": target_member.role,
             "username": target_member.user.username,
-            "joined_at": target_member.joined_at.isoformat()
-        }
+            "joined_at": target_member.joined_at.isoformat(),
+        },
     }
-    
+
     for m in channel.members:
         await manager.send_personal_message(event, m.user_address)
 
@@ -547,6 +563,7 @@ async def update_member_role(
 
 
 # ── Update Group (Rename) ──────────────────────────────────────
+
 
 @router.put("/{channel_id}", response_model=schemas.GroupChannelResponse)
 @limiter.limit("10/minute")
@@ -576,12 +593,8 @@ async def update_group(
     db.commit()
     db.refresh(channel)
 
-    event = {
-        "type": "GROUP_UPDATED",
-        "channel_id": channel_id,
-        "name": channel.name
-    }
-    
+    event = {"type": "GROUP_UPDATED", "channel_id": channel_id, "name": channel.name}
+
     for m in channel.members:
         await manager.send_personal_message(event, m.user_address)
 
@@ -589,6 +602,7 @@ async def update_group(
 
 
 # ── Mark Read ───────────────────────────────────────────────────
+
 
 @router.post("/{channel_id}/mark-read")
 @limiter.limit("60/minute")

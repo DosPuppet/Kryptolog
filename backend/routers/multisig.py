@@ -12,10 +12,7 @@ from dependencies import get_current_user, limiter
 from security import authorization
 from utils.push import notify_user_push
 
-router = APIRouter(
-    prefix="/multisig",
-    tags=["multisig"]
-)
+router = APIRouter(prefix="/multisig", tags=["multisig"])
 
 # Page size for GET /multisig/workflows (audit O-3). Each row eager-loads its
 # secret — `encrypted_data` included, 500 KB by schema — plus its signers and
@@ -23,9 +20,15 @@ router = APIRouter(
 WORKFLOW_PAGE_MAX = 100
 WORKFLOW_PAGE_DEFAULT = 50
 
+
 @router.post("/workflow", response_model=schemas.MultisigWorkflowResponse)
 @limiter.limit("5/minute")
-def create_multisig_workflow(request: Request, workflow: schemas.MultisigWorkflowCreate, current_user: models.User = Depends(get_current_user), db: Session = Depends(get_db)):
+def create_multisig_workflow(
+    request: Request,
+    workflow: schemas.MultisigWorkflowCreate,
+    current_user: models.User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
     if not workflow.signers:
         raise HTTPException(status_code=400, detail="At least one signer is required")
     if workflow.threshold < 1 or workflow.threshold > len(workflow.signers):
@@ -36,7 +39,9 @@ def create_multisig_workflow(request: Request, workflow: schemas.MultisigWorkflo
 
     # 0.1 Signer/recipient rows carry an FK to users (enforced on Postgres) —
     # reject unknown addresses up front instead of failing the insert.
-    participant_addrs = {a.lower() for a in workflow.signers} | {a.lower() for a in workflow.recipients}
+    participant_addrs = {a.lower() for a in workflow.signers} | {
+        a.lower() for a in workflow.recipients
+    }
     known = {
         addr
         for (addr,) in db.query(models.User.address).filter(
@@ -53,7 +58,7 @@ def create_multisig_workflow(request: Request, workflow: schemas.MultisigWorkflo
         owner_address=current_user.address,
         name=workflow.secret_data.name,
         type=workflow.secret_data.type,
-        encrypted_data=workflow.secret_data.encrypted_data
+        encrypted_data=workflow.secret_data.encrypted_data,
     )
     db.add(new_secret)
     db.flush()
@@ -62,11 +67,11 @@ def create_multisig_workflow(request: Request, workflow: schemas.MultisigWorkflo
     owner_grant = models.AccessGrant(
         secret_id=new_secret.id,
         grantee_address=current_user.address,
-        encrypted_key=workflow.secret_data.encrypted_key
+        encrypted_key=workflow.secret_data.encrypted_key,
     )
     db.add(owner_grant)
-    
-    db.commit() # Commit secret and grant
+
+    db.commit()  # Commit secret and grant
     db.refresh(new_secret)
 
     new_workflow = models.MultisigWorkflow(
@@ -74,7 +79,7 @@ def create_multisig_workflow(request: Request, workflow: schemas.MultisigWorkflo
         owner_address=current_user.address,
         secret_id=new_secret.id,
         status="pending",
-        threshold=workflow.threshold
+        threshold=workflow.threshold,
     )
     db.add(new_workflow)
     db.commit()
@@ -91,10 +96,7 @@ def create_multisig_workflow(request: Request, workflow: schemas.MultisigWorkflo
         key = signer_keys.get(s_addr)
 
         signer_entry = models.MultisigWorkflowSigner(
-            workflow_id=new_workflow.id,
-            user_address=s_addr,
-            has_signed=False,
-            encrypted_key=key
+            workflow_id=new_workflow.id, user_address=s_addr, has_signed=False, encrypted_key=key
         )
         db.add(signer_entry)
 
@@ -104,15 +106,13 @@ def create_multisig_workflow(request: Request, workflow: schemas.MultisigWorkflo
         key = recipient_keys.get(r_addr)
 
         recipient_entry = models.MultisigWorkflowRecipient(
-            workflow_id=new_workflow.id,
-            user_address=r_addr,
-            encrypted_key=key
+            workflow_id=new_workflow.id, user_address=r_addr, encrypted_key=key
         )
         db.add(recipient_entry)
 
     db.commit()
     db.refresh(new_workflow)
-    
+
     sender_name = current_user.username or f"{current_user.address[:8]}..."
     for signer_addr in workflow.signers:
         s_addr = signer_addr.lower()
@@ -122,10 +122,11 @@ def create_multisig_workflow(request: Request, workflow: schemas.MultisigWorkflo
                 s_addr,
                 title="Signature Required",
                 body=f"{sender_name} requested your signature for: {new_workflow.name}",
-                data={"type": "multisig_request", "workflow_id": new_workflow.id}
+                data={"type": "multisig_request", "workflow_id": new_workflow.id},
             )
 
     return new_workflow
+
 
 @router.get("/workflows", response_model=list[schemas.MultisigWorkflowSummaryResponse])
 @limiter.limit("60/minute")
@@ -155,10 +156,14 @@ def list_multisig_workflows(
             # Postgres -> worker for every row of the page, and only Pydantic
             # throws it away. The detail endpoint loads it normally.
             joinedload(models.MultisigWorkflow.secret)
-                .defer(models.Secret.encrypted_data)
-                .joinedload(models.Secret.owner),
-            selectinload(models.MultisigWorkflow.signers).joinedload(models.MultisigWorkflowSigner.user),
-            selectinload(models.MultisigWorkflow.recipients).joinedload(models.MultisigWorkflowRecipient.user),
+            .defer(models.Secret.encrypted_data)
+            .joinedload(models.Secret.owner),
+            selectinload(models.MultisigWorkflow.signers).joinedload(
+                models.MultisigWorkflowSigner.user
+            ),
+            selectinload(models.MultisigWorkflow.recipients).joinedload(
+                models.MultisigWorkflowRecipient.user
+            ),
         )
         .order_by(models.MultisigWorkflow.id.desc())
         .limit(limit)
@@ -167,14 +172,19 @@ def list_multisig_workflows(
     )
 
     # Batch-load owner grants for the page's owned workflows (eliminates N+1)
-    owned_secret_ids = [w.secret.id for w in workflows
-                        if w.secret and w.owner_address == current_user.address]
+    owned_secret_ids = [
+        w.secret.id for w in workflows if w.secret and w.owner_address == current_user.address
+    ]
     owner_grants = {}
     if owned_secret_ids:
-        grants = db.query(models.AccessGrant).filter(
-            models.AccessGrant.secret_id.in_(owned_secret_ids),
-            models.AccessGrant.grantee_address == current_user.address
-        ).all()
+        grants = (
+            db.query(models.AccessGrant)
+            .filter(
+                models.AccessGrant.secret_id.in_(owned_secret_ids),
+                models.AccessGrant.grantee_address == current_user.address,
+            )
+            .all()
+        )
         owner_grants = {g.secret_id: g.encrypted_key for g in grants}
 
     response_list = []
@@ -194,14 +204,25 @@ def list_multisig_workflows(
 
     return response_list
 
+
 @router.get("/workflow/{workflow_id}", response_model=schemas.MultisigWorkflowResponse)
 @limiter.limit("60/minute")
-def get_multisig_workflow(request: Request, workflow_id: int, current_user: models.User = Depends(get_current_user), db: Session = Depends(get_db)):
+def get_multisig_workflow(
+    request: Request,
+    workflow_id: int,
+    current_user: models.User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
     # Eager load secret to ensure it's available for schema
-    wf = db.query(models.MultisigWorkflow).options(joinedload(models.MultisigWorkflow.secret)).filter(models.MultisigWorkflow.id == workflow_id).first()
+    wf = (
+        db.query(models.MultisigWorkflow)
+        .options(joinedload(models.MultisigWorkflow.secret))
+        .filter(models.MultisigWorkflow.id == workflow_id)
+        .first()
+    )
     if not wf:
         raise HTTPException(status_code=404, detail="Workflow not found")
-        
+
     # Owner/signer always, recipient only once completed — the rule lives in
     # security.authorization because `can_read_secret` gates the secret behind
     # this workflow on exactly the same three conditions (audit O-2).
@@ -211,17 +232,22 @@ def get_multisig_workflow(request: Request, workflow_id: int, current_user: mode
     wf_response = schemas.MultisigWorkflowResponse.model_validate(wf)
 
     if wf.secret:
-        grant = db.query(models.AccessGrant).filter(
-            models.AccessGrant.secret_id == wf.secret.id,
-            models.AccessGrant.grantee_address == current_user.address
-        ).first()
-        
+        grant = (
+            db.query(models.AccessGrant)
+            .filter(
+                models.AccessGrant.secret_id == wf.secret.id,
+                models.AccessGrant.grantee_address == current_user.address,
+            )
+            .first()
+        )
+
         if grant:
             wf_response.owner_encrypted_key = grant.encrypted_key
             # Both shapes: older clients read the nested one.
             wf_response.secret.encrypted_key = grant.encrypted_key
-            
+
     return wf_response
+
 
 def _release_recipient_keys(db: Session, wf, supplied):
     """Attach recipients' wrapped keys as part of the completing signature.
@@ -238,9 +264,11 @@ def _release_recipient_keys(db: Session, wf, supplied):
     end up with no key. Failing the request leaves the workflow signable again;
     letting it through leaves it permanently stuck.
     """
-    recipients = db.query(models.MultisigWorkflowRecipient).filter(
-        models.MultisigWorkflowRecipient.workflow_id == wf.id
-    ).all()
+    recipients = (
+        db.query(models.MultisigWorkflowRecipient)
+        .filter(models.MultisigWorkflowRecipient.workflow_id == wf.id)
+        .all()
+    )
     if not recipients:
         return
 
@@ -275,7 +303,13 @@ def _release_recipient_keys(db: Session, wf, supplied):
 
 @router.post("/workflow/{workflow_id}/sign", response_model=schemas.MultisigWorkflowResponse)
 @limiter.limit("20/minute")
-def sign_multisig_workflow(request: Request, workflow_id: int, sig_req: schemas.MultisigSignatureRequest, current_user: models.User = Depends(get_current_user), db: Session = Depends(get_db)):
+def sign_multisig_workflow(
+    request: Request,
+    workflow_id: int,
+    sig_req: schemas.MultisigSignatureRequest,
+    current_user: models.User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
     # Serialize concurrent signatures on this workflow (KRY-005).
     #
     # The quorum decision is read-then-write: without a lock, two signers can
@@ -331,9 +365,11 @@ def sign_multisig_workflow(request: Request, workflow_id: int, sig_req: schemas.
     # only when everyone has signed. `signer.has_signed` is still False here, so
     # `+ 1` counts the signature we're about to record. A NULL threshold (legacy
     # rows) falls back to N-of-N (= number of signers).
-    all_signers = db.query(models.MultisigWorkflowSigner).filter(
-        models.MultisigWorkflowSigner.workflow_id == wf.id
-    ).all()
+    all_signers = (
+        db.query(models.MultisigWorkflowSigner)
+        .filter(models.MultisigWorkflowSigner.workflow_id == wf.id)
+        .all()
+    )
     quorum = wf.threshold or len(all_signers)
     already_signed = sum(1 for s in all_signers if s.has_signed)
     is_completing = (already_signed + 1) >= quorum
@@ -372,7 +408,7 @@ def sign_multisig_workflow(request: Request, workflow_id: int, sig_req: schemas.
             wf.owner_address,
             title="Workflow Signed",
             body=f"{sender_name} signed your workflow: {wf.name}",
-            data={"type": "multisig_signed", "workflow_id": wf.id}
+            data={"type": "multisig_signed", "workflow_id": wf.id},
         )
 
     if is_completing:
@@ -382,15 +418,22 @@ def sign_multisig_workflow(request: Request, workflow_id: int, sig_req: schemas.
                 recipient.user_address,
                 title="Secret Released",
                 body=f"Multisig workflow '{wf.name}' is complete. You now have access to the secret.",
-                data={"type": "multisig_completed", "workflow_id": wf.id}
+                data={"type": "multisig_completed", "workflow_id": wf.id},
             )
 
     db.refresh(wf)
     return wf
 
+
 @router.post("/workflow/{workflow_id}/reject", response_model=schemas.MultisigWorkflowResponse)
 @limiter.limit("20/minute")
-def reject_multisig_workflow(request: Request, workflow_id: int, reject_req: schemas.MultisigRejectRequest, current_user: models.User = Depends(get_current_user), db: Session = Depends(get_db)):
+def reject_multisig_workflow(
+    request: Request,
+    workflow_id: int,
+    reject_req: schemas.MultisigRejectRequest,
+    current_user: models.User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
     # Same row lock as /sign — reject and the completing signature both decide
     # the terminal status, so they must serialize against each other. Without
     # it, a reject that read `pending` could commit "rejected" AFTER the
@@ -426,15 +469,21 @@ def reject_multisig_workflow(request: Request, workflow_id: int, reject_req: sch
             wf.owner_address,
             title="Workflow Rejected",
             body=f"{sender_name} rejected your workflow: {wf.name}",
-            data={"type": "multisig_rejected", "workflow_id": wf.id}
+            data={"type": "multisig_rejected", "workflow_id": wf.id},
         )
 
     db.refresh(wf)
     return wf
 
+
 @router.delete("/workflow/{workflow_id}", status_code=204)
 @limiter.limit("20/minute")
-def delete_multisig_workflow(request: Request, workflow_id: int, current_user: models.User = Depends(get_current_user), db: Session = Depends(get_db)):
+def delete_multisig_workflow(
+    request: Request,
+    workflow_id: int,
+    current_user: models.User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
     wf = db.query(models.MultisigWorkflow).filter(models.MultisigWorkflow.id == workflow_id).first()
     if not wf:
         raise HTTPException(status_code=404, detail="Workflow not found")
@@ -456,9 +505,9 @@ def delete_multisig_workflow(request: Request, workflow_id: int, current_user: m
     secret_id = wf.secret_id
     db.delete(wf)
     if secret_id is not None:
-        db.query(models.AccessGrant).filter(
-            models.AccessGrant.secret_id == secret_id
-        ).delete(synchronize_session=False)
+        db.query(models.AccessGrant).filter(models.AccessGrant.secret_id == secret_id).delete(
+            synchronize_session=False
+        )
         secret = db.query(models.Secret).filter(models.Secret.id == secret_id).first()
         if secret:
             db.delete(secret)

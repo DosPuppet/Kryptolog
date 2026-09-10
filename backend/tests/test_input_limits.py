@@ -14,6 +14,7 @@ class TestBoundsAreSane:
     def test_address_bound_fits_a_real_address_with_headroom(self):
         """An ML-DSA-44 address is 2624 hex chars; the bound must admit it."""
         from security.crypto_validation import ML_DSA_44_PUBLIC_KEY_HEX_LEN
+
         assert schemas.MAX_ADDRESS_LEN >= ML_DSA_44_PUBLIC_KEY_HEX_LEN
         # ...but nothing like the old 20 000-char ceiling.
         assert schemas.MAX_ADDRESS_LEN < 20_000
@@ -29,28 +30,40 @@ class TestBoundsAreSane:
 
 class TestOversizedInputRejected:
     def test_oversized_address_is_rejected(self, client):
-        r = client.post("/auth/login", json={
-            "address": "a" * (schemas.MAX_ADDRESS_LEN + 1),
-            "signature": "sig",
-            "nonce": "n",
-        })
+        r = client.post(
+            "/auth/login",
+            json={
+                "address": "a" * (schemas.MAX_ADDRESS_LEN + 1),
+                "signature": "sig",
+                "nonce": "n",
+            },
+        )
         assert r.status_code == 422
 
     def test_oversized_group_name_is_rejected(self, client, user2):
         token, _ = do_login(client, TEST_USER_ADDRESS, TEST_ENCRYPTION_KEY, "A")
         _, member = user2
-        r = client.post("/groups", json={
-            "name": "x" * (schemas.MAX_DISPLAY_NAME_LEN + 1),
-            "member_addresses": [member["address"]],
-        }, headers=auth_header(token))
+        r = client.post(
+            "/groups",
+            json={
+                "name": "x" * (schemas.MAX_DISPLAY_NAME_LEN + 1),
+                "member_addresses": [member["address"]],
+            },
+            headers=auth_header(token),
+        )
         assert r.status_code == 422
 
     def test_oversized_push_endpoint_is_rejected(self, client):
         token, _ = do_login(client, TEST_USER_ADDRESS, TEST_ENCRYPTION_KEY, "A")
-        r = client.post("/notifications/subscribe", json={
-            "endpoint": "https://push.example.com/" + "a" * 5000,
-            "p256dh": "k", "auth": "a",
-        }, headers=auth_header(token))
+        r = client.post(
+            "/notifications/subscribe",
+            json={
+                "endpoint": "https://push.example.com/" + "a" * 5000,
+                "p256dh": "k",
+                "auth": "a",
+            },
+            headers=auth_header(token),
+        )
         # 422 from the schema bound, or 400 from the SSRF guard — either is a
         # refusal, and both are correct.
         assert r.status_code in (400, 422)
@@ -60,10 +73,11 @@ class TestValidInputStillAccepted:
     def test_normal_group_name_works(self, client, user2):
         token, _ = do_login(client, TEST_USER_ADDRESS, TEST_ENCRYPTION_KEY, "A")
         _, member = user2
-        r = client.post("/groups",
-                        json={"name": "Engineering",
-                              "member_addresses": [member["address"]]},
-                        headers=auth_header(token))
+        r = client.post(
+            "/groups",
+            json={"name": "Engineering", "member_addresses": [member["address"]]},
+            headers=auth_header(token),
+        )
         assert r.status_code in (200, 201), r.text
 
     def test_real_length_address_is_accepted(self, client):

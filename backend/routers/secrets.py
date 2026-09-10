@@ -51,29 +51,35 @@ def _check_secret_access(secret_id: int, user_address: str, db: Session) -> mode
 
 @router.post("/secrets", response_model=schemas.SecretResponse)
 @limiter.limit("20/minute")
-def create_secret(request: Request, secret: schemas.SecretCreate, current_user: models.User = Depends(get_current_user), db: Session = Depends(get_db)):
+def create_secret(
+    request: Request,
+    secret: schemas.SecretCreate,
+    current_user: models.User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
     new_secret = models.Secret(
         owner_address=current_user.address,
         name=secret.name,
         type=secret.type,
-        encrypted_data=secret.encrypted_data
+        encrypted_data=secret.encrypted_data,
     )
     db.add(new_secret)
-    db.flush() # Flush to get ID
+    db.flush()  # Flush to get ID
 
     owner_grant = models.AccessGrant(
         secret_id=new_secret.id,
         grantee_address=current_user.address,
-        encrypted_key=secret.encrypted_key
+        encrypted_key=secret.encrypted_key,
     )
     db.add(owner_grant)
     db.commit()
     db.refresh(new_secret)
-    
+
     # Not a column: the response carries the caller's wrap, which lives on
     # AccessGrant. Set on the instance so Pydantic can read it.
     new_secret.encrypted_key = secret.encrypted_key
     return new_secret
+
 
 @router.get("/secrets", response_model=list[schemas.SecretSummaryResponse])
 @limiter.limit("60/minute")
@@ -113,20 +119,33 @@ def get_secrets(
 
     return response
 
+
 @router.put("/secrets/{secret_id}", response_model=schemas.SecretResponse)
 @limiter.limit("30/minute")
-def update_secret(request: Request, secret_id: int, secret_update: schemas.SecretCreate, current_user: models.User = Depends(get_current_user), db: Session = Depends(get_db)):
+def update_secret(
+    request: Request,
+    secret_id: int,
+    secret_update: schemas.SecretCreate,
+    current_user: models.User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
     secret = db.query(models.Secret).filter(models.Secret.id == secret_id).first()
     if not secret:
         raise HTTPException(status_code=404, detail="Secret not found")
-    
+
     if not authorization.can_manage_secret(db, secret, current_user.address):
         raise HTTPException(status_code=403, detail="Not authorized")
 
     # Prevent editing a workflow-managed secret directly
-    workflow = db.query(models.MultisigWorkflow).filter(models.MultisigWorkflow.secret_id == secret_id).first()
+    workflow = (
+        db.query(models.MultisigWorkflow)
+        .filter(models.MultisigWorkflow.secret_id == secret_id)
+        .first()
+    )
     if workflow:
-        raise HTTPException(status_code=400, detail="Cannot edit a secret managed by a Multisig Workflow")
+        raise HTTPException(
+            status_code=400, detail="Cannot edit a secret managed by a Multisig Workflow"
+        )
 
     secret.name = secret_update.name
     secret.encrypted_data = secret_update.encrypted_data
@@ -134,9 +153,15 @@ def update_secret(request: Request, secret_id: int, secret_update: schemas.Secre
     db.refresh(secret)
     return secret
 
+
 @router.delete("/secrets/{secret_id}")
 @limiter.limit("30/minute")
-def delete_secret(request: Request, secret_id: int, current_user: models.User = Depends(get_current_user), db: Session = Depends(get_db)):
+def delete_secret(
+    request: Request,
+    secret_id: int,
+    current_user: models.User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
     secret = db.query(models.Secret).filter(models.Secret.id == secret_id).first()
     if not secret:
         raise HTTPException(status_code=404, detail="Secret not found")
@@ -145,39 +170,63 @@ def delete_secret(request: Request, secret_id: int, current_user: models.User = 
         raise HTTPException(status_code=403, detail="Not authorized")
 
     # Prevent deleting a workflow-managed secret directly
-    workflow = db.query(models.MultisigWorkflow).filter(models.MultisigWorkflow.secret_id == secret_id).first()
+    workflow = (
+        db.query(models.MultisigWorkflow)
+        .filter(models.MultisigWorkflow.secret_id == secret_id)
+        .first()
+    )
     if workflow:
-        raise HTTPException(status_code=400, detail="Cannot delete a secret managed by a Multisig Workflow")
+        raise HTTPException(
+            status_code=400, detail="Cannot delete a secret managed by a Multisig Workflow"
+        )
 
     db.query(models.AccessGrant).filter(models.AccessGrant.secret_id == secret_id).delete()
     db.delete(secret)
     db.commit()
     return {"status": "ok"}
 
+
 @router.post("/secrets/share", response_model=schemas.AccessGrantResponse)
 @limiter.limit("30/minute")
-async def share_secret(request: Request, grant: schemas.AccessGrantCreate, current_user: models.User = Depends(get_current_user), db: Session = Depends(get_db)):
+async def share_secret(
+    request: Request,
+    grant: schemas.AccessGrantCreate,
+    current_user: models.User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
     secret = db.query(models.Secret).filter(models.Secret.id == grant.secret_id).first()
     if not secret:
         raise HTTPException(status_code=404, detail="Secret not found")
-    
+
     if not authorization.can_manage_secret(db, secret, current_user.address):
         raise HTTPException(status_code=403, detail="Not authorized")
 
     # Prevent sharing a workflow-managed secret directly
-    workflow = db.query(models.MultisigWorkflow).filter(models.MultisigWorkflow.secret_id == grant.secret_id).first()
+    workflow = (
+        db.query(models.MultisigWorkflow)
+        .filter(models.MultisigWorkflow.secret_id == grant.secret_id)
+        .first()
+    )
     if workflow:
-        raise HTTPException(status_code=400, detail="Cannot manually share a secret managed by a Multisig Workflow")
+        raise HTTPException(
+            status_code=400, detail="Cannot manually share a secret managed by a Multisig Workflow"
+        )
 
-    grantee = db.query(models.User).filter(models.User.address == grant.grantee_address.lower()).first()
+    grantee = (
+        db.query(models.User).filter(models.User.address == grant.grantee_address.lower()).first()
+    )
     if not grantee:
         raise HTTPException(status_code=404, detail="Grantee not found")
 
-    existing_grant = db.query(models.AccessGrant).filter(
-        models.AccessGrant.secret_id == grant.secret_id,
-        models.AccessGrant.grantee_address == grant.grantee_address.lower()
-    ).first()
-    
+    existing_grant = (
+        db.query(models.AccessGrant)
+        .filter(
+            models.AccessGrant.secret_id == grant.secret_id,
+            models.AccessGrant.grantee_address == grant.grantee_address.lower(),
+        )
+        .first()
+    )
+
     if existing_grant:
         db.delete(existing_grant)
         db.commit()
@@ -190,20 +239,23 @@ async def share_secret(request: Request, grant: schemas.AccessGrantCreate, curre
         secret_id=grant.secret_id,
         grantee_address=grant.grantee_address.lower(),
         encrypted_key=grant.encrypted_key,
-        expires_at=expires_at
+        expires_at=expires_at,
     )
     db.add(new_grant)
     db.commit()
     db.refresh(new_grant)
 
-    await manager.send_personal_message({
-        "type": "SECRET_SHARED",
-        "data": {
-            "secret_id": new_grant.secret_id,
-            "sender": current_user.address,
-            "grant_id": new_grant.id
-        }
-    }, grant.grantee_address.lower())
+    await manager.send_personal_message(
+        {
+            "type": "SECRET_SHARED",
+            "data": {
+                "secret_id": new_grant.secret_id,
+                "sender": current_user.address,
+                "grant_id": new_grant.id,
+            },
+        },
+        grant.grantee_address.lower(),
+    )
 
     sender_name = current_user.username or f"{current_user.address[:8]}..."
     await notify_user_push_async(
@@ -212,29 +264,43 @@ async def share_secret(request: Request, grant: schemas.AccessGrantCreate, curre
         title="Secret Shared",
         # Generic body: secret titles are E2EE blobs the server can't read (M-3).
         body=f"{sender_name} shared a secure secret with you",
-        data={"type": "secret_shared", "secret_id": secret.id}
+        data={"type": "secret_shared", "secret_id": secret.id},
     )
 
     return new_grant
 
+
 @router.delete("/secrets/share/{grant_id}")
 @limiter.limit("30/minute")
-def revoke_grant(request: Request, grant_id: int, current_user: models.User = Depends(get_current_user), db: Session = Depends(get_db)):
+def revoke_grant(
+    request: Request,
+    grant_id: int,
+    current_user: models.User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
     grant = db.query(models.AccessGrant).filter(models.AccessGrant.id == grant_id).first()
     if not grant:
         raise HTTPException(status_code=404, detail="Grant not found")
-    
+
     if not authorization.can_manage_grant(db, grant, current_user.address):
         raise HTTPException(status_code=403, detail="Not authorized")
 
     # Prevent revoking a workflow-managed secret grant directly
-    workflow = db.query(models.MultisigWorkflow).filter(models.MultisigWorkflow.secret_id == grant.secret_id).first()
+    workflow = (
+        db.query(models.MultisigWorkflow)
+        .filter(models.MultisigWorkflow.secret_id == grant.secret_id)
+        .first()
+    )
     if workflow:
-        raise HTTPException(status_code=400, detail="Cannot manually revoke access to a secret managed by a Multisig Workflow")
+        raise HTTPException(
+            status_code=400,
+            detail="Cannot manually revoke access to a secret managed by a Multisig Workflow",
+        )
 
     db.delete(grant)
     db.commit()
     return {"status": "ok"}
+
 
 @router.get("/secrets/{secret_id}/access", response_model=list[schemas.AccessGrantResponse])
 @limiter.limit("60/minute")
@@ -249,7 +315,7 @@ def get_secret_access(
     secret = db.query(models.Secret).filter(models.Secret.id == secret_id).first()
     if not secret:
         raise HTTPException(status_code=404, detail="Secret not found")
-        
+
     if not authorization.can_manage_secret(db, secret, current_user.address):
         raise HTTPException(status_code=403, detail="Not authorized")
 
@@ -257,13 +323,19 @@ def get_secret_access(
     db.query(models.AccessGrant).filter(
         models.AccessGrant.secret_id == secret_id,
         models.AccessGrant.expires_at.isnot(None),
-        models.AccessGrant.expires_at <= now
+        models.AccessGrant.expires_at <= now,
     ).delete(synchronize_session="fetch")
     db.commit()
 
-    return db.query(models.AccessGrant).filter(
-        models.AccessGrant.secret_id == secret_id
-    ).order_by(models.AccessGrant.id).limit(limit).offset(offset).all()
+    return (
+        db.query(models.AccessGrant)
+        .filter(models.AccessGrant.secret_id == secret_id)
+        .order_by(models.AccessGrant.id)
+        .limit(limit)
+        .offset(offset)
+        .all()
+    )
+
 
 @router.get("/secrets/shared-with-me", response_model=list[schemas.SharedSecretResponse])
 @limiter.limit("60/minute")
@@ -279,26 +351,32 @@ def get_shared_secrets(
     db.query(models.AccessGrant).filter(
         models.AccessGrant.grantee_address == current_user.address,
         models.AccessGrant.expires_at.isnot(None),
-        models.AccessGrant.expires_at <= now
+        models.AccessGrant.expires_at <= now,
     ).delete(synchronize_session="fetch")
     db.commit()
 
-    return db.query(models.AccessGrant).options(
-        # Deferred for the same reason as GET /secrets: the schema drops the
-        # ciphertext, this stops it being fetched at all (audit O-3).
-        joinedload(models.AccessGrant.secret)
+    return (
+        db.query(models.AccessGrant)
+        .options(
+            # Deferred for the same reason as GET /secrets: the schema drops the
+            # ciphertext, this stops it being fetched at all (audit O-3).
+            joinedload(models.AccessGrant.secret)
             .defer(models.Secret.encrypted_data)
             .joinedload(models.Secret.owner),
-        joinedload(models.AccessGrant.grantee)
-    ).join(
-        models.Secret
-    ).outerjoin(
-        models.MultisigWorkflow, models.MultisigWorkflow.secret_id == models.Secret.id
-    ).filter(
-        models.AccessGrant.grantee_address == current_user.address,
-        models.Secret.owner_address != current_user.address,
-        models.MultisigWorkflow.id.is_(None),
-    ).order_by(models.AccessGrant.id.desc()).limit(limit).offset(offset).all()
+            joinedload(models.AccessGrant.grantee),
+        )
+        .join(models.Secret)
+        .outerjoin(models.MultisigWorkflow, models.MultisigWorkflow.secret_id == models.Secret.id)
+        .filter(
+            models.AccessGrant.grantee_address == current_user.address,
+            models.Secret.owner_address != current_user.address,
+            models.MultisigWorkflow.id.is_(None),
+        )
+        .order_by(models.AccessGrant.id.desc())
+        .limit(limit)
+        .offset(offset)
+        .all()
+    )
 
 
 # ORDERING MATTERS: this must stay BELOW every literal /secrets/... route.
@@ -308,9 +386,12 @@ def get_shared_secrets(
 # because nothing else about the failure points at route order.
 @router.get("/secrets/{secret_id}", response_model=schemas.SecretResponse)
 @limiter.limit("120/minute")
-def get_secret(request: Request, secret_id: int,
-               current_user: models.User = Depends(get_current_user),
-               db: Session = Depends(get_db)):
+def get_secret(
+    request: Request,
+    secret_id: int,
+    current_user: models.User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
     """One secret with its ciphertext.
 
     The lists stopped carrying `encrypted_data` (audit O-3) and this is where
@@ -342,11 +423,15 @@ def get_secret(request: Request, secret_id: int,
 
 # --- File Chunks ---
 
+
 @router.post("/secrets/chunks", status_code=201)
 @limiter.limit("120/minute")
-def upload_chunk(request: Request, chunk: schemas.FileChunkUpload,
-                 current_user: models.User = Depends(get_current_user),
-                 db: Session = Depends(get_db)):
+def upload_chunk(
+    request: Request,
+    chunk: schemas.FileChunkUpload,
+    current_user: models.User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
     """Upload a single encrypted file chunk. Only the secret owner can upload."""
     secret = db.query(models.Secret).filter(models.Secret.id == chunk.secret_id).first()
     if not secret:
@@ -355,21 +440,27 @@ def upload_chunk(request: Request, chunk: schemas.FileChunkUpload,
         raise HTTPException(status_code=403, detail="Only the owner can upload chunks")
 
     # Enforce total file size limit using SQL-level aggregation (hex-encoded: 2 chars = 1 byte)
-    total_stored_size_hex = db.query(func.sum(func.length(models.FileChunk.encrypted_data))).filter(
-        models.FileChunk.secret_id == chunk.secret_id
-    ).scalar() or 0
+    total_stored_size_hex = (
+        db.query(func.sum(func.length(models.FileChunk.encrypted_data)))
+        .filter(models.FileChunk.secret_id == chunk.secret_id)
+        .scalar()
+        or 0
+    )
 
     current_total_bytes = total_stored_size_hex / 2
     new_chunk_size = len(chunk.encrypted_data) / 2
 
     if (current_total_bytes + new_chunk_size) > config.MAX_TOTAL_FILE_SIZE:
-        raise HTTPException(status_code=413, detail=f"File too large (max {config.MAX_TOTAL_FILE_SIZE // (1024 * 1024)}MB)")
+        raise HTTPException(
+            status_code=413,
+            detail=f"File too large (max {config.MAX_TOTAL_FILE_SIZE // (1024 * 1024)}MB)",
+        )
 
     new_chunk = models.FileChunk(
         secret_id=chunk.secret_id,
         chunk_index=chunk.chunk_index,
         iv=chunk.iv,
-        encrypted_data=chunk.encrypted_data
+        encrypted_data=chunk.encrypted_data,
     )
     db.add(new_chunk)
     try:
@@ -397,16 +488,23 @@ def upload_chunk(request: Request, chunk: schemas.FileChunkUpload,
 
 @router.get("/secrets/{secret_id}/chunks/{chunk_index}", response_model=schemas.FileChunkResponse)
 @limiter.limit("240/minute")
-def get_chunk(request: Request, secret_id: int, chunk_index: int,
-              current_user: models.User = Depends(get_current_user),
-              db: Session = Depends(get_db)):
+def get_chunk(
+    request: Request,
+    secret_id: int,
+    chunk_index: int,
+    current_user: models.User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
     """Download a single encrypted chunk by index."""
     _check_secret_access(secret_id, current_user.address, db)
 
-    chunk = db.query(models.FileChunk).filter(
-        models.FileChunk.secret_id == secret_id,
-        models.FileChunk.chunk_index == chunk_index
-    ).first()
+    chunk = (
+        db.query(models.FileChunk)
+        .filter(
+            models.FileChunk.secret_id == secret_id, models.FileChunk.chunk_index == chunk_index
+        )
+        .first()
+    )
 
     if not chunk:
         raise HTTPException(status_code=404, detail=f"Chunk {chunk_index} not found")

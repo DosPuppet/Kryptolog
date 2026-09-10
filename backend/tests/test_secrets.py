@@ -3,11 +3,19 @@
 from conftest import auth_header
 
 
-def _create_secret(client, token, name="TestSecret", encrypted_data="enc_data_abc", encrypted_key="enc_key_123"):
-    return client.post("/secrets", json={
-        "name": name, "type": "standard",
-        "encrypted_data": encrypted_data, "encrypted_key": encrypted_key,
-    }, headers=auth_header(token))
+def _create_secret(
+    client, token, name="TestSecret", encrypted_data="enc_data_abc", encrypted_key="enc_key_123"
+):
+    return client.post(
+        "/secrets",
+        json={
+            "name": name,
+            "type": "standard",
+            "encrypted_data": encrypted_data,
+            "encrypted_key": encrypted_key,
+        },
+        headers=auth_header(token),
+    )
 
 
 class TestCreateSecret:
@@ -21,10 +29,15 @@ class TestCreateSecret:
         assert data["encrypted_key"] == "enc_key_123"
 
     def test_create_secret_unauthenticated(self, client):
-        resp = client.post("/secrets", json={
-            "name": "x", "type": "standard",
-            "encrypted_data": "d", "encrypted_key": "k",
-        })
+        resp = client.post(
+            "/secrets",
+            json={
+                "name": "x",
+                "type": "standard",
+                "encrypted_data": "d",
+                "encrypted_key": "k",
+            },
+        )
         assert resp.status_code == 401
 
 
@@ -54,10 +67,16 @@ class TestUpdateSecret:
         token, _ = user1
         create_resp = _create_secret(client, token)
         secret_id = create_resp.json()["id"]
-        resp = client.put(f"/secrets/{secret_id}", json={
-            "name": "Updated", "type": "standard",
-            "encrypted_data": "new_data", "encrypted_key": "new_key",
-        }, headers=auth_header(token))
+        resp = client.put(
+            f"/secrets/{secret_id}",
+            json={
+                "name": "Updated",
+                "type": "standard",
+                "encrypted_data": "new_data",
+                "encrypted_key": "new_key",
+            },
+            headers=auth_header(token),
+        )
         assert resp.status_code == 200
         assert resp.json()["name"] == "Updated"
 
@@ -66,10 +85,16 @@ class TestUpdateSecret:
         token2, _ = user2
         create_resp = _create_secret(client, token1)
         secret_id = create_resp.json()["id"]
-        resp = client.put(f"/secrets/{secret_id}", json={
-            "name": "Hacked", "type": "standard",
-            "encrypted_data": "x", "encrypted_key": "y",
-        }, headers=auth_header(token2))
+        resp = client.put(
+            f"/secrets/{secret_id}",
+            json={
+                "name": "Hacked",
+                "type": "standard",
+                "encrypted_data": "x",
+                "encrypted_key": "y",
+            },
+            headers=auth_header(token2),
+        )
         assert resp.status_code == 403
 
 
@@ -104,11 +129,15 @@ class TestShareSecret:
         _, u2 = user2
         create_resp = _create_secret(client, token1)
         secret_id = create_resp.json()["id"]
-        resp = client.post("/secrets/share", json={
-            "secret_id": secret_id,
-            "grantee_address": u2["address"],
-            "encrypted_key": "wrapped_key_for_user2",
-        }, headers=auth_header(token1))
+        resp = client.post(
+            "/secrets/share",
+            json={
+                "secret_id": secret_id,
+                "grantee_address": u2["address"],
+                "encrypted_key": "wrapped_key_for_user2",
+            },
+            headers=auth_header(token1),
+        )
         assert resp.status_code == 200
         assert resp.json()["grantee_address"] == u2["address"]
 
@@ -117,11 +146,15 @@ class TestShareSecret:
         token2, u2 = user2
         create_resp = _create_secret(client, token1)
         secret_id = create_resp.json()["id"]
-        client.post("/secrets/share", json={
-            "secret_id": secret_id,
-            "grantee_address": u2["address"],
-            "encrypted_key": "wrapped_key",
-        }, headers=auth_header(token1))
+        client.post(
+            "/secrets/share",
+            json={
+                "secret_id": secret_id,
+                "grantee_address": u2["address"],
+                "encrypted_key": "wrapped_key",
+            },
+            headers=auth_header(token1),
+        )
         resp = client.get("/secrets/shared-with-me", headers=auth_header(token2))
         assert resp.status_code == 200
         grant_secret_ids = [g["secret_id"] for g in resp.json()]
@@ -132,22 +165,30 @@ class TestShareSecret:
         token2, u2 = user2
         create_resp = _create_secret(client, token1)
         secret_id = create_resp.json()["id"]
-        resp = client.post("/secrets/share", json={
-            "secret_id": secret_id,
-            "grantee_address": u2["address"],
-            "encrypted_key": "key",
-        }, headers=auth_header(token2))
+        resp = client.post(
+            "/secrets/share",
+            json={
+                "secret_id": secret_id,
+                "grantee_address": u2["address"],
+                "encrypted_key": "key",
+            },
+            headers=auth_header(token2),
+        )
         assert resp.status_code == 403
 
     def test_share_to_nonexistent_user_fails(self, client, user1):
         token, _ = user1
         create_resp = _create_secret(client, token)
         secret_id = create_resp.json()["id"]
-        resp = client.post("/secrets/share", json={
-            "secret_id": secret_id,
-            "grantee_address": "nonexistent_user",
-            "encrypted_key": "key",
-        }, headers=auth_header(token))
+        resp = client.post(
+            "/secrets/share",
+            json={
+                "secret_id": secret_id,
+                "grantee_address": "nonexistent_user",
+                "encrypted_key": "key",
+            },
+            headers=auth_header(token),
+        )
         assert resp.status_code == 404
 
 
@@ -157,11 +198,15 @@ class TestRevokeGrant:
         _, u2 = user2
         create_resp = _create_secret(client, token1)
         secret_id = create_resp.json()["id"]
-        share_resp = client.post("/secrets/share", json={
-            "secret_id": secret_id,
-            "grantee_address": u2["address"],
-            "encrypted_key": "key",
-        }, headers=auth_header(token1))
+        share_resp = client.post(
+            "/secrets/share",
+            json={
+                "secret_id": secret_id,
+                "grantee_address": u2["address"],
+                "encrypted_key": "key",
+            },
+            headers=auth_header(token1),
+        )
         grant_id = share_resp.json()["id"]
         resp = client.delete(f"/secrets/share/{grant_id}", headers=auth_header(token1))
         assert resp.status_code == 200
@@ -171,11 +216,15 @@ class TestRevokeGrant:
         token2, u2 = user2
         create_resp = _create_secret(client, token1)
         secret_id = create_resp.json()["id"]
-        share_resp = client.post("/secrets/share", json={
-            "secret_id": secret_id,
-            "grantee_address": u2["address"],
-            "encrypted_key": "key",
-        }, headers=auth_header(token1))
+        share_resp = client.post(
+            "/secrets/share",
+            json={
+                "secret_id": secret_id,
+                "grantee_address": u2["address"],
+                "encrypted_key": "key",
+            },
+            headers=auth_header(token1),
+        )
         grant_id = share_resp.json()["id"]
         resp = client.delete(f"/secrets/share/{grant_id}", headers=auth_header(token2))
         assert resp.status_code == 200
@@ -187,11 +236,15 @@ class TestGetSecretAccess:
         _, u2 = user2
         create_resp = _create_secret(client, token1)
         secret_id = create_resp.json()["id"]
-        client.post("/secrets/share", json={
-            "secret_id": secret_id,
-            "grantee_address": u2["address"],
-            "encrypted_key": "key",
-        }, headers=auth_header(token1))
+        client.post(
+            "/secrets/share",
+            json={
+                "secret_id": secret_id,
+                "grantee_address": u2["address"],
+                "encrypted_key": "key",
+            },
+            headers=auth_header(token1),
+        )
         resp = client.get(f"/secrets/{secret_id}/access", headers=auth_header(token1))
         assert resp.status_code == 200
         assert len(resp.json()) >= 2  # owner grant + shared
@@ -214,7 +267,16 @@ class TestDocumentsAreGone:
 
     def test_documents_endpoints_are_removed(self, client, user1):
         token, _ = user1
-        assert client.post("/documents", json={
-            "name": "TestDoc", "content_hash": "abc123hash", "signature": "sig_data",
-        }, headers=auth_header(token)).status_code == 404
+        assert (
+            client.post(
+                "/documents",
+                json={
+                    "name": "TestDoc",
+                    "content_hash": "abc123hash",
+                    "signature": "sig_data",
+                },
+                headers=auth_header(token),
+            ).status_code
+            == 404
+        )
         assert client.get("/documents", headers=auth_header(token)).status_code == 404

@@ -1,4 +1,5 @@
 """Format validation for PQC key material (KRY-011)."""
+
 import pytest
 
 from security.crypto_validation import (
@@ -24,14 +25,17 @@ class TestConstants:
 
 
 class TestHex:
-    @pytest.mark.parametrize("value,expected", [
-        ("abcd", True),
-        ("ABCD", True),
-        ("abc", False),       # odd length
-        ("zzzz", False),      # not hex
-        ("", False),
-        ("ab cd", False),
-    ])
+    @pytest.mark.parametrize(
+        "value,expected",
+        [
+            ("abcd", True),
+            ("ABCD", True),
+            ("abc", False),  # odd length
+            ("zzzz", False),  # not hex
+            ("", False),
+            ("ab cd", False),
+        ],
+    )
     def test_is_hex(self, value, expected):
         assert is_hex(value) is expected
 
@@ -42,19 +46,24 @@ class TestKeyValidation:
         assert is_valid_ml_dsa_public_key(VALID_DSA_KEY)
         assert is_valid_ml_dsa_signature(VALID_DSA_SIG)
 
-    @pytest.mark.parametrize("value", [
-        None, "", "ab" * 100,          # too short
-        "ab" * 2000,                   # too long
-        "zz" * 1184,                   # right length, not hex
-        "enc_pub_key_" + "c" * 600,    # the old placeholder format
-    ])
+    @pytest.mark.parametrize(
+        "value",
+        [
+            None,
+            "",
+            "ab" * 100,  # too short
+            "ab" * 2000,  # too long
+            "zz" * 1184,  # right length, not hex
+            "enc_pub_key_" + "c" * 600,  # the old placeholder format
+        ],
+    )
     def test_rejects_malformed_kem_keys(self, value):
         assert not is_valid_ml_kem_public_key(value)
 
     def test_length_floor_alone_is_insufficient(self):
         """The audit's point: 600 arbitrary chars cleared the old `< 500` check."""
         bogus = "enc_pub_key_" + "c" * 600
-        assert len(bogus) > LEGACY_MIN_KEY_LEN      # would have passed before
+        assert len(bogus) > LEGACY_MIN_KEY_LEN  # would have passed before
         assert not is_valid_ml_kem_public_key(bogus)  # rejected now
 
 

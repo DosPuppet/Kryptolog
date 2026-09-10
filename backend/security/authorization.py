@@ -22,6 +22,7 @@ Datetime convention: `AccessGrant.expires_at` is `DateTime` without
 an aware value (see `share_secret`), so comparisons here normalise to naive UTC
 rather than assuming either form.
 """
+
 from datetime import UTC, datetime
 
 from sqlalchemy import and_, or_
@@ -57,9 +58,7 @@ def _live_grant_filter(now: datetime):
     )
 
 
-def find_live_grant(
-    db: Session, secret_id: int, user_address: str
-) -> models.AccessGrant | None:
+def find_live_grant(db: Session, secret_id: int, user_address: str) -> models.AccessGrant | None:
     """Return this user's non-expired grant on the secret, if any."""
     now = utcnow_naive()
     return (
@@ -106,7 +105,9 @@ def can_write_secret(db: Session, secret: models.Secret, user_address: str) -> b
     Deliberately narrower than read: a grant shares a key, it does not delegate
     the ability to change what the secret holds.
     """
-    return secret is not None and normalize_address(secret.owner_address) == normalize_address(user_address)
+    return secret is not None and normalize_address(secret.owner_address) == normalize_address(
+        user_address
+    )
 
 
 def can_manage_secret(db: Session, secret: models.Secret, user_address: str) -> bool:
@@ -119,20 +120,14 @@ def can_manage_secret(db: Session, secret: models.Secret, user_address: str) -> 
     return can_write_secret(db, secret, user_address)
 
 
-def can_manage_grant(
-    db: Session, grant: models.AccessGrant, user_address: str
-) -> bool:
+def can_manage_grant(db: Session, grant: models.AccessGrant, user_address: str) -> bool:
     """Revoke a grant: the secret's owner, or the grantee giving up their access."""
     if grant is None:
         return False
     user_address = normalize_address(user_address)
     if normalize_address(grant.grantee_address) == user_address:
         return True
-    secret = (
-        db.query(models.Secret)
-        .filter(models.Secret.id == grant.secret_id)
-        .first()
-    )
+    secret = db.query(models.Secret).filter(models.Secret.id == grant.secret_id).first()
     return can_manage_secret(db, secret, user_address)
 
 
@@ -146,9 +141,7 @@ def can_manage_grant(
 GROUP_ADMIN_ROLES = ("owner", "admin")
 
 
-def find_group_member(
-    db: Session, channel_id: str, user_address: str
-) -> models.GroupMember | None:
+def find_group_member(db: Session, channel_id: str, user_address: str) -> models.GroupMember | None:
     """This address's membership row on the channel, or None.
 
     THE membership lookup. It stays a query even for callers that already hold
@@ -205,9 +198,7 @@ def can_manage_group_roles(member: models.GroupMember | None) -> bool:
     return member is not None and member.role == "owner"
 
 
-def can_remove_group_member(
-    member: models.GroupMember | None, target_address: str
-) -> bool:
+def can_remove_group_member(member: models.GroupMember | None, target_address: str) -> bool:
     """Remove a member: anyone may remove themselves, others need owner/admin."""
     if member is None:
         return False
@@ -305,9 +296,7 @@ def readable_workflows(db: Session, user_address: str):
     )
 
 
-def can_delete_workflow(
-    workflow: models.MultisigWorkflow | None, user_address: str
-) -> bool:
+def can_delete_workflow(workflow: models.MultisigWorkflow | None, user_address: str) -> bool:
     """Delete a workflow: the initiator only."""
     if workflow is None:
         return False
