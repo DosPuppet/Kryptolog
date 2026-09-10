@@ -57,7 +57,6 @@ export const trustContactKey = (address, encryptionPublicKey) => {
     save(STORE_KEY, map);
 };
 
-export const getTrustedKey = (address) => load(STORE_KEY)[norm(address)] || null;
 
 // --- Encryption-key attestation (audit M-1) ---
 // TOFU above detects a key CHANGE; the attestation proves the key BINDING:

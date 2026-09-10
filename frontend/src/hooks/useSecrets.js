@@ -388,7 +388,7 @@ export function useSecrets(authType, encryptionPublicKey, pqcAccount, options = 
 
             // 4. Encrypt AES Key for Owner (Me) — ML-KEM wrap.
             reportProgress(50, 'Encrypting Key...');
-            const encryptedKeyForMe = JSON.stringify(await encryptPQC(fileKey, encryptionPublicKey));
+            const encryptedKeyForMe = await secureEncrypt(fileKey, encryptionPublicKey);
             // Prime the title-key cache: this fetch's re-render needs no prompt.
             fileKeyCache.current[encryptedKeyForMe] = fileKey;
 
@@ -447,36 +447,6 @@ export function useSecrets(authType, encryptionPublicKey, pqcAccount, options = 
         }
     };
 
-    const updateSecret = async (id, name, content) => {
-        reportProgress(30, 'Encrypting...');
-        try {
-            const encrypted = await secureEncrypt(content, encryptionPublicKey);
-            reportProgress(60, 'Updating...');
-            const res = await fetch(API_ENDPOINTS.SECRETS.UPDATE(id), {
-                method: 'PUT',
-                headers: {
-                    'Content-Type': 'application/json',
-                    'Authorization': `Bearer ${token}`
-                },
-                body: JSON.stringify({
-                    name,
-                    encrypted_data: encrypted
-                })
-            });
-
-            if (!res.ok) throw new Error("Update failed");
-
-            setDecryptedSecrets(prev => ({ ...prev, [id]: content }));
-            await fetchSecrets();
-            reportProgress(100, 'Updated');
-            setTimeout(() => reportProgress(0, ''), 500);
-            return true;
-        } catch (e) {
-            reportProgress(0, '');
-            throw e;
-        }
-    };
-
     const deleteSecret = async (id) => {
         const res = await fetch(API_ENDPOINTS.SECRETS.DELETE(id), {
             method: 'DELETE',
@@ -496,7 +466,7 @@ export function useSecrets(authType, encryptionPublicKey, pqcAccount, options = 
         if (!recipientPublicKey || recipientPublicKey.length < 60) {
             throw new Error("Recipient has no post-quantum encryption key.");
         }
-        const reEncryptedKey = JSON.stringify(await encryptPQC(fileKey, recipientPublicKey));
+        const reEncryptedKey = await secureEncrypt(fileKey, recipientPublicKey);
 
         // 3. API Call
         const res = await fetch(API_ENDPOINTS.SECRETS.SHARE, {
@@ -547,15 +517,12 @@ export function useSecrets(authType, encryptionPublicKey, pqcAccount, options = 
         sharedSecrets,
         loading,
         decryptedSecrets,
-        secureDecrypt, // Exporting for manual usage if needed
         handleDecrypt,
         handleLock,
         createSecret,
-        updateSecret,
         deleteSecret,
         shareSecret,
         revokeGrant,
-        fetchSecrets, // For manual refresh
         fetchSharedSecrets
     };
 }

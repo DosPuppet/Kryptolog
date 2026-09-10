@@ -111,10 +111,6 @@ export default function Dashboard({ view = 'secrets' }) {
         setShowDetailsModal(true);
     };
 
-    const handleCreateWrapper = async (name, type, content, isSigned, files) => {
-        return await createSecret(name, type, content, isSigned, files);
-    };
-
     const handleMultisigUpdate = (updatedWf) => {
         setWorkflows(prev => prev.map(w => w.id === updatedWf.id ? updatedWf : w));
         if (selectedWorkflow && selectedWorkflow.id === updatedWf.id) {
@@ -220,7 +216,7 @@ export default function Dashboard({ view = 'secrets' }) {
 
                             {isCreating && (
                                 <CreateSecret
-                                    onCreate={handleCreateWrapper}
+                                    onCreate={createSecret}
                                     onCancel={() => setIsCreating(false)}
                                 />
                             )}
@@ -294,7 +290,6 @@ export default function Dashboard({ view = 'secrets' }) {
                         isOpen={isMultisigCreateOpen}
                         onClose={() => setIsMultisigCreateOpen(false)}
                         onCreated={handleMultisigCreateSuccess}
-                        secrets={secrets}
                     />
                 )
             }
