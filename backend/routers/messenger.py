@@ -233,75 +233,96 @@ ws_router = APIRouter()
 WS_AUTH_TIMEOUT_SECONDS = 10.0
 
 
+def _origin_allowed(websocket: WebSocket) -> bool:
+    """Whether this handshake's Origin is on the allowlist (audit M2).
+
+    CORS does NOT cover WebSocket handshakes, so cross-site connections have to
+    be rejected here. Token auth already blocks CSWSH — the bearer token is not
+    auto-sent the way a cookie is — but an unchecked Origin still lets any page
+    open sockets. Only enforced when an allowlist is configured, since dev may
+    leave ALLOWED_ORIGINS unset.
+    """
+    allowed = config.get_allowed_origins()
+    if not allowed:
+        return True
+    origin = websocket.headers.get("origin")
+    return origin is not None and origin.rstrip("/") in allowed
+
+
+async def _authenticate_socket(websocket: WebSocket) -> str | None:
+    """Read the AUTH frame and return the caller's address, or None to reject.
+
+    Bounded by WS_AUTH_TIMEOUT_SECONDS (audit M2) so unauthenticated sockets
+    cannot linger and pile up; clients send AUTH immediately on connect. Read
+    at call time rather than captured as a default so tests can adjust it.
+    """
+    try:
+        data = await asyncio.wait_for(websocket.receive_text(), timeout=WS_AUTH_TIMEOUT_SECONDS)
+    except TimeoutError:
+        return None
+
+    auth_data = json.loads(data)
+    if auth_data.get("type") != "AUTH":
+        return None
+
+    token = auth_data.get("token")
+    if not token:
+        return None
+
+    # Validate the token AND enforce revocation (token_version), same as HTTP.
+    db = SessionLocal()
+    try:
+        ws_user = user_for_token(token, db)
+    finally:
+        db.close()
+
+    return ws_user.address.lower() if ws_user else None
+
+
+async def _client_message_loop(websocket: WebSocket) -> None:
+    """Serve one authenticated socket until it disconnects.
+
+    The only client-to-server messages are presence hints, and a malformed one
+    is ignored rather than closing the socket.
+    """
+    while True:
+        raw = await websocket.receive_text()
+        try:
+            msg = json.loads(raw)
+            if msg.get("type") == "APP_FOCUSED":
+                await manager.set_focused(websocket)
+            elif msg.get("type") == "APP_BLURRED":
+                await manager.set_blurred(websocket)
+        except (json.JSONDecodeError, AttributeError):
+            pass
+
+
 @ws_router.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
-    # Origin allowlist (M2): CORS does NOT cover WebSocket handshakes, so reject
-    # cross-site connections here. Token auth already blocks CSWSH (the bearer
-    # token isn't auto-sent like a cookie), but an unchecked Origin still lets any
-    # page open sockets. Only enforced when an allowlist is configured (dev may
-    # leave ALLOWED_ORIGINS unset); closing before accept() rejects the handshake.
-    allowed = config.get_allowed_origins()
-    if allowed:
-        origin = websocket.headers.get("origin")
-        if origin is None or origin.rstrip("/") not in allowed:
-            await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
-            return
+    # Closing before accept() rejects the handshake outright.
+    if not _origin_allowed(websocket):
+        await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
+        return
 
     await websocket.accept()
 
-    # Wait for the authentication message — bounded (M2) so unauthenticated
-    # sockets can't linger and pile up. Clients send AUTH immediately on connect.
     try:
-        try:
-            data = await asyncio.wait_for(websocket.receive_text(), timeout=WS_AUTH_TIMEOUT_SECONDS)
-        except TimeoutError:
+        user_address = await _authenticate_socket(websocket)
+        if user_address is None:
             await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
             return
-        auth_data = json.loads(data)
-
-        if auth_data.get("type") != "AUTH":
-            await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
-            return
-
-        token = auth_data.get("token")
-        if not token:
-            await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
-            return
-
-        # Validate the token AND enforce revocation (token_version), same as HTTP.
-        db = SessionLocal()
-        try:
-            ws_user = user_for_token(token, db)
-        finally:
-            db.close()
-        if ws_user is None:
-            await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
-            return
-
-        user_address = ws_user.address.lower()
 
         await manager.connect(websocket, user_address)
         try:
-            while True:
-                raw = await websocket.receive_text()
-                # Handle client messages (focus state, typing indicators, etc.)
-                try:
-                    msg = json.loads(raw)
-                    if msg.get("type") == "APP_FOCUSED":
-                        await manager.set_focused(websocket)
-                    elif msg.get("type") == "APP_BLURRED":
-                        await manager.set_blurred(websocket)
-                except (json.JSONDecodeError, AttributeError):
-                    pass
+            await _client_message_loop(websocket)
         except WebSocketDisconnect:
             await manager.disconnect(websocket, user_address)
 
     except WebSocketDisconnect:
-        # Disconnected before authentication completed
+        # Disconnected before authentication completed.
         await manager.disconnect(websocket, None)
     except Exception as e:
         logger.warning("WS error: %s", e)
-        # Only try to close if not already closed
         try:
             await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
         except Exception:
