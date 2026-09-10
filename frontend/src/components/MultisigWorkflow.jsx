@@ -8,6 +8,7 @@ import { signMultisigWorkflow } from './multisig/signWorkflow';
 import { downloadMultisigProof } from './multisig/proof';
 import { SignersList, RecipientsList } from './multisig/WorkflowLists';
 import DecryptedContentPanel from './multisig/DecryptedContentPanel';
+import { confirmDialog } from '../utils/confirm';
 
 export default function MultisigWorkflow({ workflow: listWorkflow, onClose, onUpdate, onDelete, setUploadProgress, setStatusMessage }) {
     const { user, token } = useAuth();
@@ -158,7 +159,13 @@ export default function MultisigWorkflow({ workflow: listWorkflow, onClose, onUp
     };
 
     const handleReject = async () => {
-        if (!window.confirm("Reject this workflow? This blocks it permanently — the secret will not be released.")) return;
+        const ok = await confirmDialog({
+            title: 'Reject workflow',
+            message: 'Reject this workflow? This blocks it permanently — the secret will not be released.',
+            confirmText: 'Reject',
+            danger: true,
+        });
+        if (!ok) return;
         setError('');
         setIsRejecting(true);
         try {
@@ -184,7 +191,13 @@ export default function MultisigWorkflow({ workflow: listWorkflow, onClose, onUp
     };
 
     const handleDelete = async () => {
-        if (!window.confirm("Delete this workflow and its secret? This cannot be undone.")) return;
+        const ok = await confirmDialog({
+            title: 'Delete workflow',
+            message: 'Delete this workflow and its secret? This cannot be undone.',
+            confirmText: 'Delete',
+            danger: true,
+        });
+        if (!ok) return;
         setError('');
         setIsDeleting(true);
         try {
