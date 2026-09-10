@@ -6,10 +6,11 @@ import { generateSymmetricKey, encryptSymmetric, domainSeparate, SIGNING_CONTEXT
 import { assertSafeRecipient } from '../services/trustedKeys';
 import { encryptSecretTitle } from '../utils/titles';
 import API_ENDPOINTS from '../config';
-import { uploadChunkedFile, uploadMultipleChunkedFiles, CHUNK_SIZE } from '../utils/fileChunks';
+import { uploadChunkedFile, uploadMultipleChunkedFiles } from '../utils/fileChunks';
 import { toast } from '../utils/toast';
 import { apiFetch } from '../services/api';
 import { formatSize } from '../utils/format';
+import { buildFileMetadata } from '../utils/secretPayload';
 
 export default function MultisigCreateModal({ isOpen, onClose, onCreated }) {
     const { user, token } = useAuth();
@@ -140,52 +141,9 @@ export default function MultisigCreateModal({ isOpen, onClose, onCreated }) {
 
                 setProgress(2);
 
-                if (selectedFiles.length === 1) {
-                    // Single file: legacy format for backward compat
-                    const file = selectedFiles[0];
-                    const arrayBuffer = await file.arrayBuffer();
-                    const hashBuffer = await crypto.subtle.digest('SHA-256', arrayBuffer);
-                    const hashArray = Array.from(new Uint8Array(hashBuffer));
-                    const fileHash = hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
-
-                    const totalChunks = Math.ceil(file.size / CHUNK_SIZE);
-                    rawContent = JSON.stringify({
-                        file_name: file.name,
-                        mime_type: file.type || 'application/octet-stream',
-                        total_chunks: totalChunks,
-                        total_size: file.size,
-                        chunk_size: CHUNK_SIZE,
-                        file_hash: fileHash
-                    });
-                } else {
-                    // Multiple files: new format with chunk offsets
-                    let chunkOffset = 0;
-                    const filesMetaArray = [];
-
-                    for (const file of selectedFiles) {
-                        const totalChunks = Math.ceil(file.size / CHUNK_SIZE);
-                        const arrayBuffer = await file.arrayBuffer();
-                        const hashBuffer = await crypto.subtle.digest('SHA-256', arrayBuffer);
-                        const hashArray = Array.from(new Uint8Array(hashBuffer));
-                        const fileHash = hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
-
-                        filesMetaArray.push({
-                            file_name: file.name,
-                            mime_type: file.type || 'application/octet-stream',
-                            total_chunks: totalChunks,
-                            total_size: file.size,
-                            chunk_offset: chunkOffset,
-                            file_hash: fileHash
-                        });
-                        chunkOffset += totalChunks;
-                    }
-
-                    rawContent = JSON.stringify({
-                        files: filesMetaArray,
-                        total_chunks: chunkOffset,
-                        chunk_size: CHUNK_SIZE
-                    });
-                }
+                // Always hashed here: a workflow's content is signed by the
+                // creator, and the hash is what the integrity check compares.
+                rawContent = await buildFileMetadata(selectedFiles, { hash: true });
             } else {
                 rawContent = content;
             }

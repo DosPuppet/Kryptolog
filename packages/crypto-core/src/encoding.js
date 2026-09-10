@@ -40,12 +40,14 @@ export const fromHex = (hex) => {
     return out;
 };
 
-// SHA-256 of a UTF-8 string -> lowercase hex (matches Python hashlib.sha256().hexdigest()).
-export const sha256Hex = async (str) => {
-    const bytes = ENC.encode(str);
-    const digest = await crypto.subtle.digest('SHA-256', bytes);
-    return toHex(new Uint8Array(digest));
-};
+// SHA-256 -> lowercase hex (matches Python hashlib.sha256().hexdigest()).
+export const sha256HexBytes = async (bytes) =>
+    toHex(new Uint8Array(await crypto.subtle.digest('SHA-256', bytes)));
+
+// The same over a UTF-8 string. Separate from the bytes form on purpose: which
+// one a caller wants is a real decision — hashing a File's contents and hashing
+// its name are both plausible and give different answers.
+export const sha256Hex = async (str) => sha256HexBytes(ENC.encode(str));
 
 // Deterministic JSON with recursively sorted object keys. JSON.stringify would
 // NOT do: it preserves insertion order, so the sender and a verifier that

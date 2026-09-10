@@ -5,8 +5,9 @@ import API_ENDPOINTS from '../config';
 import { fetchAllPages, pageUrl } from '../utils/paging';
 import { generateSymmetricKey, encryptSymmetric, decryptSymmetric, domainSeparate, SIGNING_CONTEXT } from '../utils/crypto';
 import { encryptSecretTitle, decryptSecretTitle, isEncryptedTitle, LOCKED_TITLE } from '../utils/titles';
-import { uploadChunkedFile, downloadChunkedFile, uploadMultipleChunkedFiles, downloadFileByRange, CHUNK_SIZE } from '../utils/fileChunks';
+import { uploadChunkedFile, downloadChunkedFile, uploadMultipleChunkedFiles, downloadFileByRange } from '../utils/fileChunks';
 import { apiFetch } from '../services/api';
+import { buildFileMetadata } from '../utils/secretPayload';
 
 export function useSecrets(encryptionPublicKey, pqcAccount, options = {}) {
     const { token } = useAuth();
@@ -297,66 +298,10 @@ export function useSecrets(encryptionPublicKey, pqcAccount, options = {}) {
             if (fileList && fileList.length > 0) {
                 isChunkedFile = true;
 
-                if (fileList.length === 1) {
-                    // Single file: use legacy format for backward compat
-                    const file = fileList[0];
-                    const totalChunks = Math.ceil(file.size / CHUNK_SIZE);
-
-                    let fileHash = null;
-                    if (isSigned) {
-                        reportProgress(15, 'Hashing File...');
-                        const arrayBuffer = await file.arrayBuffer();
-                        const hashBuffer = await crypto.subtle.digest('SHA-256', arrayBuffer);
-                        const hashArray = Array.from(new Uint8Array(hashBuffer));
-                        fileHash = hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
-                    }
-
-                    fileMetadataStr = JSON.stringify({
-                        file_name: file.name,
-                        mime_type: file.type || 'application/octet-stream',
-                        total_chunks: totalChunks,
-                        total_size: file.size,
-                        chunk_size: CHUNK_SIZE,
-                        file_hash: fileHash
-                    });
-                } else {
-                    // Multiple files: new multi-file metadata format
-                    let chunkOffset = 0;
-                    const filesMetaArray = [];
-
-                    if (isSigned) {
-                        reportProgress(15, 'Hashing Files...');
-                    }
-
-                    for (const file of fileList) {
-                        const totalChunks = Math.ceil(file.size / CHUNK_SIZE);
-                        let fileHash = null;
-
-                        if (isSigned) {
-                            const arrayBuffer = await file.arrayBuffer();
-                            const hashBuffer = await crypto.subtle.digest('SHA-256', arrayBuffer);
-                            const hashArray = Array.from(new Uint8Array(hashBuffer));
-                            fileHash = hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
-                        }
-
-                        filesMetaArray.push({
-                            file_name: file.name,
-                            mime_type: file.type || 'application/octet-stream',
-                            total_chunks: totalChunks,
-                            total_size: file.size,
-                            chunk_offset: chunkOffset,
-                            file_hash: fileHash
-                        });
-                        chunkOffset += totalChunks;
-                    }
-
-                    fileMetadataStr = JSON.stringify({
-                        files: filesMetaArray,
-                        total_chunks: chunkOffset,
-                        chunk_size: CHUNK_SIZE
-                    });
-                }
-
+                fileMetadataStr = await buildFileMetadata(fileList, {
+                    hash: isSigned,
+                    onProgress: (msg) => reportProgress(15, msg),
+                });
                 payloadToEncrypt = fileMetadataStr;
             }
 
