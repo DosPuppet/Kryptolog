@@ -24,10 +24,6 @@ ML_KEM_768_PUBLIC_KEY_HEX_LEN = ML_KEM_768_PUBLIC_KEY_BYTES * 2
 ML_DSA_44_PUBLIC_KEY_HEX_LEN = ML_DSA_44_PUBLIC_KEY_BYTES * 2
 ML_DSA_44_SIGNATURE_HEX_LEN = ML_DSA_44_SIGNATURE_BYTES * 2
 
-# ML-DSA signatures are the largest field clients send; give the schema bound
-# some headroom over the exact size rather than pinning it at the byte.
-MAX_SIGNATURE_HEX_LEN = ML_DSA_44_SIGNATURE_HEX_LEN + 512
-
 
 def is_hex(value: str) -> bool:
     """True if `value` is non-empty, even-length, pure hex."""

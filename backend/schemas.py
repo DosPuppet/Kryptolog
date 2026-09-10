@@ -28,9 +28,6 @@ MAX_SECRET_BLOB_LEN = 500_000
 class UserBase(BaseModel):
     address: str = Field(..., max_length=MAX_ADDRESS_LEN)
 
-class UserCreate(UserBase):
-    encryption_public_key: str = Field(..., max_length=MAX_ADDRESS_LEN)
-
 class UserUpdate(BaseModel):
     username: Optional[str] = Field(None, max_length=200)
 
@@ -118,14 +115,6 @@ class FileChunkResponse(BaseModel):
     encrypted_data: str
 
     model_config = ConfigDict(from_attributes=True)
-
-class FileMetadata(BaseModel):
-    """Stored in Secret.encrypted_data for chunked files instead of the full content."""
-    file_name: str
-    mime_type: str
-    total_chunks: int
-    total_size: int       # Original file size in bytes
-    chunk_size: int       # Bytes per chunk before encryption
 
 class AccessGrantCreate(BaseModel):
     secret_id: int

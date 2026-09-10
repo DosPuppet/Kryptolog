@@ -50,19 +50,6 @@ def as_naive_utc(value: Optional[datetime]) -> Optional[datetime]:
     return value.astimezone(timezone.utc).replace(tzinfo=None)
 
 
-def grant_is_live(grant: Optional[models.AccessGrant], now: Optional[datetime] = None) -> bool:
-    """A grant is live when it exists and has not passed its expiry.
-
-    A NULL `expires_at` means "no expiry" — the grant lasts until revoked.
-    """
-    if grant is None:
-        return False
-    expires_at = as_naive_utc(grant.expires_at)
-    if expires_at is None:
-        return True
-    return expires_at > (now or utcnow_naive())
-
-
 def _live_grant_filter(now: datetime):
     """SQL predicate selecting grants that have not expired."""
     return or_(
