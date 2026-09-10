@@ -17,38 +17,8 @@
 import { ml_kem768 } from '@noble/post-quantum/ml-kem.js';
 import { ml_dsa44 } from '@noble/post-quantum/ml-dsa.js';
 
-// Bumped whenever a wire/storage format or shared primitive changes. The
-// byte-compat test asserts both app builds resolve the SAME version, so a
-// re-duplicated or version-skewed copy fails CI loudly.
-// 1.1.0: messageSigningBody now binds the actual ciphertext (the AES-GCM
-//        envelope object is serialized canonically instead of coercing to the
-//        constant "[object Object]"), so message signatures change.
-// 1.2.0: account keypair fields renamed to their FIPS names — kyber → mlkem
-//        (ML-KEM-768), dilithium → mldsa (ML-DSA-44). New vaults/backups write
-//        the new fields; normalizeAccount() maps legacy fields on load so older
-//        vaults and exported backups still open.
-// 1.3.0: encryption-key attestation (audit M-1) — an identity self-signs its
-//        ML-KEM key under the `key-attestation` context so peers can verify the
-//        directory's key binding offline; keyFingerprint() renders the pair as
-//        a Signal-style safety number for out-of-band comparison.
-// 1.4.0: two wire-format breaks, landed together so there is ONE incompatibility
-//        boundary rather than two.
-//        • encryptChunk/decryptChunk now REQUIRE an AAD binding the chunk to its
-//          (secret, index) — audit M-2. Chunks written before this no longer
-//          decrypt.
-//        • messageSigningBody now also covers `gid` and a digest of the key
-//          envelope (`keysh`), and is async — audit M-8. Signatures produced
-//          before this no longer verify.
-// 1.5.0: ADDITIVE — no wire or storage format change. deriveVaultKeyBits() /
-//        importVaultKey() expose the vault KDF's raw output so the extension can
-//        resume a session without keeping the password anywhere (audit M-4).
-//        deriveKey() is now composed from them and produces the identical key;
-//        the byte-compat suite pins the KDF output as a golden vector so that
-//        equivalence cannot regress silently.
-// 1.6.0: ADDITIVE/hardening — no wire or storage format change. fromHex() now
-//        THROWS on malformed input (audit L-9) instead of decoding non-hex to
-//        zero bytes and truncating odd-length strings, which turned a corrupted
-//        key into a valid-looking different one.
+// Bumped whenever a wire/storage format or shared primitive changes; the
+// per-version history is in CHANGELOG.md next to this file.
 export const CRYPTO_CORE_VERSION = '1.6.0';
 
 // Helper: Uint8Array/Array <-> Hex. Deliberately Buffer-free so this package
@@ -252,32 +222,20 @@ export const generateTransferCode = () => {
 
 // --- PQC Implementations ---
 
-// ML-KEM-768 keypair (encryption / key encapsulation).
 export const generateMlKemKeyPair = async () => {
-    try {
-        const { publicKey, secretKey } = ml_kem768.keygen();
-        return {
-            publicKey: toHex(publicKey),
-            privateKey: toHex(secretKey),
-        };
-    } catch (e) {
-        console.error("ML-KEM keygen failed", e);
-        throw e;
-    }
+    const { publicKey, secretKey } = ml_kem768.keygen();
+    return {
+        publicKey: toHex(publicKey),
+        privateKey: toHex(secretKey),
+    };
 };
 
-// ML-DSA-44 keypair (signing).
 export const generateMlDsaKeyPair = async () => {
-    try {
-        const { publicKey, secretKey } = ml_dsa44.keygen();
-        return {
-            publicKey: toHex(publicKey),
-            privateKey: toHex(secretKey),
-        };
-    } catch (e) {
-        console.error("ML-DSA keygen failed", e);
-        throw e;
-    }
+    const { publicKey, secretKey } = ml_dsa44.keygen();
+    return {
+        publicKey: toHex(publicKey),
+        privateKey: toHex(secretKey),
+    };
 };
 
 // Normalize a stored account to the current field names (compat, v1.2.0).
@@ -322,11 +280,6 @@ export const verifySignature = async (message, signatureHex, publicKeyHex) => {
 };
 
 export const encryptMessage = async (message, publicKeyHex) => {
-    // Hybrid Encryption (KEM + AES-GCM):
-    // 1. Kyber KEM Encapsulate -> Shared Secret (ss) + Ciphertext (ct)
-    // 2. Use ss as AES key
-    // 3. Encrypt message with ss (AES-GCM) -> content, iv
-
     const publicKey = fromHex(publicKeyHex);
 
     // ML-KEM-768 encapsulate -> { cipherText (1088B), sharedSecret (32B) }
@@ -346,7 +299,7 @@ export const encryptMessage = async (message, publicKeyHex) => {
     );
 
     return {
-        kem: toHex(ct), // Just send the KEM ciphertext (hex)
+        kem: toHex(ct),
         iv: toHex(iv),
         content: toHex(new Uint8Array(encryptedContent))
     };
@@ -380,7 +333,6 @@ export const decryptMessage = async (encryptedData, privateKeyHex) => {
 // --- Session Key Implementations (Local) ---
 
 export const generateSessionKey = async () => {
-    // Generate 256-bit AES key (32 bytes)
     const keyBytes = crypto.getRandomValues(new Uint8Array(32));
     return toHex(keyBytes);
 };
@@ -404,12 +356,12 @@ export const wrapSessionKey = async (sessionKeyHex, publicKeyHex) => {
     return {
         kem: toHex(ct),
         iv: toHex(iv),
-        encKey: toHex(new Uint8Array(encryptedKey)) // Standardized name
+        encKey: toHex(new Uint8Array(encryptedKey))
     };
 };
 
 export const unwrapSessionKey = async (wrappedKey, privateKeyHex) => {
-    // wrappedKey: { kem, iv, ct }
+    // wrappedKey: { kem, iv, encKey } — 'ct' is the pre-standardization name.
     const privateKey = fromHex(privateKeyHex);
     const ct = fromHex(wrappedKey.kem);
 
@@ -434,7 +386,6 @@ export const unwrapSessionKey = async (wrappedKey, privateKeyHex) => {
 
 export const encryptWithSessionKey = async (message, sessionKeyHex) => {
     const keyBytes = fromHex(sessionKeyHex);
-    // Use AES-GCM
     const iv = crypto.getRandomValues(new Uint8Array(12));
     const key = await crypto.subtle.importKey(
         "raw", keyBytes, "AES-GCM", false, ["encrypt"]
@@ -476,7 +427,6 @@ export const decryptWithSessionKey = async (encryptedData, sessionKeyHex) => {
 // --- Symmetric Encryption (AES-GCM 256) for Envelope / Large Files ---
 
 export const generateSymmetricKey = async () => {
-    // Generate 256-bit AES key (32 bytes)
     const keyBytes = crypto.getRandomValues(new Uint8Array(32));
     return toHex(keyBytes);
 };
@@ -587,8 +537,8 @@ export const decryptChunk = async (ivHex, ciphertextHex, keyHex, aad) => {
 // below so the two can never drift apart.
 const VAULT_KDF = {
     name: "PBKDF2",
-    iterations: 600000, // OWASP Recommended (was 100k)
-    hash: "SHA-512",    // Hardened from SHA-256
+    iterations: 600000, // OWASP floor for PBKDF2-HMAC-SHA512
+    hash: "SHA-512",
 };
 const VAULT_KEY_BITS = 256;
 
@@ -635,9 +585,6 @@ export async function deriveKey(password, salt) {
     return importVaultKey(await deriveVaultKeyBits(password, salt));
 }
 
-/**
- * Encrypts a data object (vault) with a password.
- */
 export const encryptVault = async (data, password) => {
     const salt = crypto.getRandomValues(new Uint8Array(16));
     const iv = crypto.getRandomValues(new Uint8Array(12));
@@ -659,9 +606,6 @@ export const encryptVault = async (data, password) => {
     };
 };
 
-/**
- * Decrypts a vault using a password.
- */
 export const decryptVault = async (encryptedVault, password) => {
     const salt = fromHex(encryptedVault.salt);
     const iv = fromHex(encryptedVault.iv);
@@ -705,9 +649,6 @@ export const encryptVaultWithKey = async (data, key, salt) => {
     };
 };
 
-/**
- * Decrypts a vault using a pre-derived CryptoKey.
- */
 export const decryptVaultWithKey = async (encryptedVault, key) => {
     const iv = fromHex(encryptedVault.iv);
     const data = fromHex(encryptedVault.data);
