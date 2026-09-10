@@ -161,6 +161,9 @@ Two structural items have been closed as well:
 landed — `AUDIT.md` section 0 carries the finding-by-finding status, and this table
 carries the commits.
 
+**Merged to `main` on 2026-09-10** (fast-forward from `audit-2026-09-03-followups`,
+`0125365`..`1be4b36`). Not pushed — `origin/main` is 8 commits behind.
+
 ### Still open from the remediation
 
 - **End-to-end recipe not run.** Everything is covered by automated tests except the
