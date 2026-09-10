@@ -1,4 +1,5 @@
 import API_ENDPOINTS from '../../config';
+import { fetchAllPages, pageUrl } from '../../utils/paging';
 import { sha256Hex, multisigApprovalMessage, decryptSymmetric } from '../../utils/crypto';
 import { assertSafeRecipient } from '../../services/trustedKeys';
 
@@ -19,10 +20,16 @@ export const signMultisigWorkflow = async ({ workflow, user, token, decryptPQC, 
     // 2. Fallback: Check SHARED/Access Grants (Legacy)
     if (!encryptedKey) {
         try {
-            const res = await fetch(API_ENDPOINTS.SECRETS.SHARED_WITH, {
-                headers: { 'Authorization': `Bearer ${token}` }
+            // Paged (audit O-3) and this is a lookup, not a listing: the grant
+            // we want may be on any page, and not finding it aborts the
+            // signature.
+            const shared = await fetchAllPages(async (page) => {
+                const res = await fetch(pageUrl(API_ENDPOINTS.SECRETS.SHARED_WITH, page), {
+                    headers: { 'Authorization': `Bearer ${token}` }
+                });
+                if (!res.ok) throw new Error(`Request failed: ${res.status}`);
+                return res.json();
             });
-            const shared = await res.json();
             const myShare = shared.find(s => s.secret_id === workflow.secret_id);
             if (myShare) {
                 encryptedKey = myShare.encrypted_key;

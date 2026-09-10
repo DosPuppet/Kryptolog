@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import { X, Clock, User, Trash2, Loader2, Info } from 'lucide-react';
 import API_ENDPOINTS from '../../config';
+import { fetchAllPages, pageUrl } from '../../utils/paging';
 import { useAuth } from '../../context/AuthContext';
 import { toast } from '../../utils/toast';
 import { confirmDialog } from '../../utils/confirm';
@@ -15,15 +16,16 @@ const SecretDetailsModal = ({ isOpen, onClose, secret }) => {
         setLoading(true);
         setError(null);
         try {
-            const res = await fetch(API_ENDPOINTS.SECRETS.ACCESS(secret.id), {
-                headers: { 'Authorization': `Bearer ${token}` }
+            // Paged (audit O-3): this panel is where access gets revoked, so a
+            // grantee missing from it is a grantee nobody can revoke.
+            const data = await fetchAllPages(async (page) => {
+                const res = await fetch(pageUrl(API_ENDPOINTS.SECRETS.ACCESS(secret.id), page), {
+                    headers: { 'Authorization': `Bearer ${token}` }
+                });
+                if (!res.ok) throw new Error("Failed to load access details");
+                return res.json();
             });
-            if (res.ok) {
-                const data = await res.json();
-                setGrants(data);
-            } else {
-                throw new Error("Failed to load access details");
-            }
+            setGrants(data);
         } catch (err) {
             console.error(err);
             setError(err.message);

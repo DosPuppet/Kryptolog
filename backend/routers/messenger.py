@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException, WebSocket, WebSocketDisconnect, status, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, WebSocket, WebSocketDisconnect, status, Request
 from dependencies import limiter
 from sqlalchemy import or_, func, case
 from sqlalchemy.orm import Session, defer, joinedload
@@ -78,11 +78,22 @@ async def send_message(request: Request, msg: schemas.MessageCreate, current_use
 
 @router.get("/conversations", response_model=List[schemas.ConversationResponse])
 @limiter.limit("30/minute")
-def get_conversations(request: Request, current_user: models.User = Depends(get_current_user), db: Session = Depends(get_db)):
+def get_conversations(
+    request: Request,
+    # Paged like the other list endpoints (audit O-3). This one is not in the
+    # finding — it names the secret and group lists — but it is the same
+    # defect: one row per person the user has ever exchanged a message with,
+    # with no ceiling. Cheaper per row than the others (the message body is
+    # deferred, so these are metadata), hence the same bounds as /history.
+    limit: int = Query(50, ge=1, le=100),
+    offset: int = Query(0, ge=0),
+    current_user: models.User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
     """
-    Fetch list of unique conversations for the current user.
+    Fetch a page of the current user's conversations, most recent first.
     Uses a subquery to find the latest message per conversation partner,
-    then batch-loads unread counts in a single query.
+    then batch-loads unread counts for that page in a single query.
     """
     partner_address_col = case(
         (models.Message.sender_address == current_user.address, models.Message.recipient_address),
@@ -104,17 +115,28 @@ def get_conversations(request: Request, current_user: models.User = Depends(get_
         defer(models.Message.content)
     ).filter(
         models.Message.id.in_(subquery.select())
-    ).order_by(models.Message.created_at.desc()).all()
-    
+    ).order_by(
+        models.Message.created_at.desc(),
+        # Tiebreaker: two messages can share a timestamp, and without a total
+        # order the same conversation can appear on two pages or on neither.
+        models.Message.id.desc(),
+    ).limit(limit).offset(offset).all()
+
     conversations = []
-    
-    # Batch-load unread counts grouped by sender
+
+    # Unread counts for this page's partners only — the whole point of paging
+    # is that nothing here scales with the user's total conversation count.
+    partner_addresses = {
+        m.recipient_address if m.sender_address == current_user.address else m.sender_address
+        for m in latest_messages
+    }
     unread_counts_query = db.query(
         models.Message.sender_address, func.count(models.Message.id)
     ).filter(
         models.Message.recipient_address == current_user.address,
+        models.Message.sender_address.in_(partner_addresses),
         models.Message.is_read == False
-    ).group_by(models.Message.sender_address).all()
+    ).group_by(models.Message.sender_address).all() if partner_addresses else []
 
     unread_map = {addr: count for addr, count in unread_counts_query}
 

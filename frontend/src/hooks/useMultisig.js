@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { useAuth } from '../context/AuthContext';
 import API_ENDPOINTS from '../config';
+import { fetchAllPages, pageUrl } from '../utils/paging';
 
 export function useMultisig() {
     const { token, user } = useAuth();
@@ -24,29 +25,33 @@ export function useMultisig() {
 
     const fetchWorkflows = async () => {
         try {
-            const res = await fetch(API_ENDPOINTS.SECRETS.LIST + '/../multisig/workflows', {
-                headers: { 'Authorization': `Bearer ${token}` }
+            // Paged (audit O-3): a workflow awaiting my signature must not be
+            // invisible because it sits past the first page.
+            const data = await fetchAllPages(async (page) => {
+                const res = await fetch(
+                    pageUrl(API_ENDPOINTS.SECRETS.LIST + '/../multisig/workflows', page),
+                    { headers: { 'Authorization': `Bearer ${token}` } }
+                );
+                if (!res.ok) throw new Error(`Request failed: ${res.status}`);
+                return res.json();
             });
-            if (res.ok) {
-                const data = await res.json();
-                setWorkflows(data);
+            setWorkflows(data);
 
-                // Calculate Action Required
-                if (user && user.address) {
-                    const count = data.filter(wf => {
-                        const myAddr = user.address.toLowerCase();
-                        // 1. I am a signer and haven't signed
-                        const isSigner = wf.signers.some(s => {
-                            const sAddr = s.user_address || (s.user && s.user.address);
-                            return sAddr && sAddr.toLowerCase() === myAddr && !s.has_signed;
-                        });
-                        // 2. Workflow is complete and I am a recipient (maybe notification needed? let's stick to signer actions for now for red dot)
-                        // Actually, if I created it and it's done?
-                        // Let's stick to "Blocking Actions": Need to sign.
-                        return isSigner && wf.status === 'pending';
-                    }).length;
-                    setActionRequiredCount(count);
-                }
+            // Calculate Action Required
+            if (user && user.address) {
+                const count = data.filter(wf => {
+                    const myAddr = user.address.toLowerCase();
+                    // 1. I am a signer and haven't signed
+                    const isSigner = wf.signers.some(s => {
+                        const sAddr = s.user_address || (s.user && s.user.address);
+                        return sAddr && sAddr.toLowerCase() === myAddr && !s.has_signed;
+                    });
+                    // 2. Workflow is complete and I am a recipient (maybe notification needed? let's stick to signer actions for now for red dot)
+                    // Actually, if I created it and it's done?
+                    // Let's stick to "Blocking Actions": Need to sign.
+                    return isSigner && wf.status === 'pending';
+                }).length;
+                setActionRequiredCount(count);
             }
         } catch (error) {
             console.error("Failed to fetch workflows", error);

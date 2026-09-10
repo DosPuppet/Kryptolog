@@ -2,6 +2,7 @@ import { createContext, useContext, useState, useEffect, useRef, useMemo } from 
 import { useAuth } from './AuthContext';
 import { usePQC } from './PQCContext';
 import API_ENDPOINTS from '../config';
+import { fetchAllPages, pageUrl } from '../utils/paging';
 import { encryptWithSessionKey, decryptWithSessionKey, messageSigningBody } from '../utils/crypto';
 import { isEncryptedTitle, LOCKED_TITLE } from '../utils/titles';
 import { assertSafeRecipient, attestationVerdict } from '../services/trustedKeys';
@@ -212,7 +213,11 @@ export const MessengerProvider = ({ children }) => {
 
     const fetchConversations = async () => {
         try {
-            const data = await api(`${API_ENDPOINTS.BASE}/messages/conversations`);
+            // Paged (audit O-3), same reason as the group list below: a
+            // conversation the sidebar does not list cannot be opened.
+            const data = await fetchAllPages(
+                (page) => api(pageUrl(`${API_ENDPOINTS.BASE}/messages/conversations`, page))
+            );
             setConversations(data);
         } catch (e) { console.error(e); }
         finally { setLoading(false); }
@@ -333,7 +338,11 @@ export const MessengerProvider = ({ children }) => {
 
     const fetchGroupConversations = async () => {
         try {
-            const data = await api(`${API_ENDPOINTS.GROUPS.LIST}`);
+            // Paged (audit O-3): a group missing from the sidebar is a
+            // conversation the user cannot open at all.
+            const data = await fetchAllPages(
+                (page) => api(pageUrl(API_ENDPOINTS.GROUPS.LIST, page))
+            );
             const withNames = await resolveGroupNames(data);
             setGroupConversations(prev => {
                 const unreadMap = {};

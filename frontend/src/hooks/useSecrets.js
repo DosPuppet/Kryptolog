@@ -2,6 +2,7 @@ import { useState, useEffect, useRef } from 'react';
 import { useAuth } from '../context/AuthContext';
 import { usePQC } from '../context/PQCContext';
 import API_ENDPOINTS from '../config';
+import { fetchAllPages, pageUrl } from '../utils/paging';
 import { generateSymmetricKey, encryptSymmetric, decryptSymmetric, domainSeparate, SIGNING_CONTEXT } from '../utils/crypto';
 import { encryptSecretTitle, decryptSecretTitle, isEncryptedTitle, LOCKED_TITLE } from '../utils/titles';
 import { uploadChunkedFile, downloadChunkedFile, uploadMultipleChunkedFiles, downloadFileByRange, CHUNK_SIZE } from '../utils/fileChunks';
@@ -69,15 +70,21 @@ export function useSecrets(authType, encryptionPublicKey, pqcAccount, options = 
         }));
     };
 
+    // The list endpoints are paged (audit O-3), and the vault has to show all
+    // of it: stopping at the first page would hide the user's own secrets with
+    // nothing on screen to say so.
+    const fetchList = (url) => fetchAllPages(async (page) => {
+        const res = await fetch(pageUrl(url, page), {
+            headers: { 'Authorization': `Bearer ${token}` }
+        });
+        if (!res.ok) throw new Error(`Request failed: ${res.status}`);
+        return res.json();
+    });
+
     const fetchSecrets = async () => {
         try {
-            const res = await fetch(API_ENDPOINTS.SECRETS.LIST, {
-                headers: { 'Authorization': `Bearer ${token}` }
-            });
-            if (res.ok) {
-                const data = await res.json();
-                setSecrets(await resolveTitles(data, s => s.name, s => s.encrypted_key));
-            }
+            const data = await fetchList(API_ENDPOINTS.SECRETS.LIST);
+            setSecrets(await resolveTitles(data, s => s.name, s => s.encrypted_key));
         } catch (error) {
             console.error("Failed to fetch secrets", error);
         } finally {
@@ -87,14 +94,9 @@ export function useSecrets(authType, encryptionPublicKey, pqcAccount, options = 
 
     const fetchSharedSecrets = async () => {
         try {
-            const res = await fetch(API_ENDPOINTS.SECRETS.SHARED_WITH, {
-                headers: { 'Authorization': `Bearer ${token}` }
-            });
-            if (res.ok) {
-                const data = await res.json();
-                // Grant objects: the title lives on grant.secret, the wrap on the grant.
-                setSharedSecrets(await resolveTitles(data, g => g.secret?.name, g => g.encrypted_key));
-            }
+            const data = await fetchList(API_ENDPOINTS.SECRETS.SHARED_WITH);
+            // Grant objects: the title lives on grant.secret, the wrap on the grant.
+            setSharedSecrets(await resolveTitles(data, g => g.secret?.name, g => g.encrypted_key));
         } catch (error) {
             console.error("Failed to fetch shared secrets", error);
         }

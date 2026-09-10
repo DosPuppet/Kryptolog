@@ -116,7 +116,7 @@ Two low-severity items have been picked off since:
   do not overlap, so a mixed fleet mutually reads empty presence for 90s (worst
   case: a push to a user who has the app in front of them).
 
-One structural item has been closed as well:
+Two structural items have been closed as well:
 
 - **O-2 is done** — `security/authorization.py` now answers the group and
   multisig questions too, instead of `groups.py` deriving membership three
@@ -126,6 +126,14 @@ One structural item has been closed as well:
   listing); `backend/tests/test_authorization_drift.py` pins each pair against
   the other over every configuration, which is the KRY-001 failure mode, and a
   role/capability table there covers every group endpoint at once.
+- **O-3 is done** — `GET /secrets`, `/secrets/shared-with-me`,
+  `/secrets/{id}/access`, `/multisig/workflows`, `GET /groups` and
+  `GET /messages/conversations` take `limit`/`offset`, bounded at both ends by
+  FastAPI like `GET /users`. **The SPA must page:** the lists are capped now,
+  so a caller that reads only the first response hides the user's own rows with
+  nothing on screen to say so — `frontend/src/utils/paging.js` walks to the end
+  and every list caller goes through it. Covered by
+  `backend/tests/test_pagination.py` and `frontend/src/test/paging.test.js`.
 
 `roadmap/AUDIT-REMEDIATION.md` has been deleted now that every item in it
 landed — `AUDIT.md` section 0 carries the finding-by-finding status, and this table
@@ -133,6 +141,12 @@ carries the commits.
 
 ### Still open from the remediation
 
+- **`GET /secrets` still carries `encrypted_data`.** Pagination bounds the row
+  count, not the bytes: at the schema's 500 KB ceiling one page of 50 is still
+  ~26 MB. The complete fix is to drop the payload from the list and add a
+  `GET /secrets/{id}` — which does not exist today, so the list is currently the
+  only way to read a secret's content. That is a wire-format break for the SPA,
+  left as a deliberate follow-up rather than smuggled into the O-3 commit.
 - **End-to-end recipe not run.** Everything is covered by automated tests except the
   manual pass, which needs a running stack and a browser: two accounts exchanging DMs;
   the WebSocket connecting through the corrected nginx `/api/` block; a multi-chunk

@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from dependencies import limiter
 from sqlalchemy.orm import Session, joinedload
 from sqlalchemy import func
@@ -14,6 +14,20 @@ from security import authorization
 import config
 
 router = APIRouter(tags=["secrets"])
+
+# Page sizes for the list endpoints (audit O-3). These used to return every row
+# the user owned, in one response, with no ceiling — and a Secret carries its
+# `encrypted_data` inline (500 KB by schema), so the response size was bounded
+# only by how many secrets the account happened to hold, against a worker that
+# PM2 restarts at 500 MB. Bounded at BOTH ends by FastAPI, like GET /users: the
+# ceiling alone still let `?limit=-1` reach PostgreSQL as `LIMIT -1`, which is a
+# hard error rather than an empty page.
+#
+# Payload-bearing lists get the smaller ceiling; grant rows are metadata only.
+SECRET_PAGE_MAX = 100
+SECRET_PAGE_DEFAULT = 50
+GRANT_PAGE_MAX = 200
+GRANT_PAGE_DEFAULT = 100
 
 # Secrets
 @router.post("/secrets", response_model=schemas.SecretResponse)
@@ -45,13 +59,21 @@ def create_secret(request: Request, secret: schemas.SecretCreate, current_user: 
 
 @router.get("/secrets", response_model=List[schemas.SecretResponse])
 @limiter.limit("60/minute")
-def get_secrets(request: Request, current_user: models.User = Depends(get_current_user), db: Session = Depends(get_db)):
+def get_secrets(
+    request: Request,
+    limit: int = Query(SECRET_PAGE_DEFAULT, ge=1, le=SECRET_PAGE_MAX),
+    offset: int = Query(0, ge=0),
+    current_user: models.User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
     results = db.query(models.Secret, models.AccessGrant.encrypted_key)\
         .options(joinedload(models.Secret.owner))\
         .join(models.AccessGrant, (models.AccessGrant.secret_id == models.Secret.id) & (models.AccessGrant.grantee_address == current_user.address))\
         .outerjoin(models.MultisigWorkflow, models.MultisigWorkflow.secret_id == models.Secret.id)\
         .filter(models.Secret.owner_address == current_user.address)\
         .filter(models.MultisigWorkflow.id == None)\
+        .order_by(models.Secret.id.desc())\
+        .limit(limit).offset(offset)\
         .all()
 
     response = []
@@ -191,7 +213,14 @@ def revoke_grant(request: Request, grant_id: int, current_user: models.User = De
 
 @router.get("/secrets/{secret_id}/access", response_model=List[schemas.AccessGrantResponse])
 @limiter.limit("60/minute")
-def get_secret_access(request: Request, secret_id: int, current_user: models.User = Depends(get_current_user), db: Session = Depends(get_db)):
+def get_secret_access(
+    request: Request,
+    secret_id: int,
+    limit: int = Query(GRANT_PAGE_DEFAULT, ge=1, le=GRANT_PAGE_MAX),
+    offset: int = Query(0, ge=0),
+    current_user: models.User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
     secret = db.query(models.Secret).filter(models.Secret.id == secret_id).first()
     if not secret:
         raise HTTPException(status_code=404, detail="Secret not found")
@@ -210,11 +239,17 @@ def get_secret_access(request: Request, secret_id: int, current_user: models.Use
 
     return db.query(models.AccessGrant).filter(
         models.AccessGrant.secret_id == secret_id
-    ).all()
+    ).order_by(models.AccessGrant.id).limit(limit).offset(offset).all()
 
 @router.get("/secrets/shared-with-me", response_model=List[schemas.AccessGrantResponse])
 @limiter.limit("60/minute")
-def get_shared_secrets(request: Request, current_user: models.User = Depends(get_current_user), db: Session = Depends(get_db)):
+def get_shared_secrets(
+    request: Request,
+    limit: int = Query(SECRET_PAGE_DEFAULT, ge=1, le=SECRET_PAGE_MAX),
+    offset: int = Query(0, ge=0),
+    current_user: models.User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
     now = datetime.now(timezone.utc)
 
     # Bulk-delete expired grants for this user
@@ -234,7 +269,7 @@ def get_shared_secrets(request: Request, current_user: models.User = Depends(get
         models.AccessGrant.grantee_address == current_user.address,
         models.Secret.owner_address != current_user.address,
         models.MultisigWorkflow.id == None
-    ).all()
+    ).order_by(models.AccessGrant.id.desc()).limit(limit).offset(offset).all()
 
 # NOTE: the /documents endpoints were removed (audit L-10). POST /documents
 # accepted an arbitrary `content_hash` and `signature`, verified neither, and

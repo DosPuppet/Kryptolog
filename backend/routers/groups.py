@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from dependencies import limiter
 from sqlalchemy import func
 from sqlalchemy.orm import Session, joinedload
@@ -16,6 +16,14 @@ router = APIRouter(
     prefix="/groups",
     tags=["groups"]
 )
+
+# Page size for GET /groups (audit O-3). A channel row drags in its whole
+# member list (up to 50, each with its user) plus the last message, so an
+# account in many groups produced a response nobody bounded. Bounded at both
+# ends by FastAPI, matching GET /users.
+GROUP_PAGE_MAX = 100
+GROUP_PAGE_DEFAULT = 50
+
 
 # ── Create Group ────────────────────────────────────────────────
 
@@ -107,53 +115,83 @@ async def create_group(
 @limiter.limit("30/minute")
 def list_groups(
     request: Request,
+    limit: int = Query(GROUP_PAGE_DEFAULT, ge=1, le=GROUP_PAGE_MAX),
+    offset: int = Query(0, ge=0),
     current_user: models.User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    channels = (
-        db.query(models.GroupChannel)
-        .options(joinedload(models.GroupChannel.members).joinedload(models.GroupMember.user))
-        .filter(
-            models.GroupChannel.id.in_(
-                authorization.member_channel_ids(db, current_user.address)
-            )
+    # Most-recent-activity order and the page boundary are decided in SQL
+    # (audit O-3): sorting the rows in Python after loading them would only
+    # sort whichever arbitrary rows the page happened to contain.
+    #
+    # GroupMessage.id is autoincrement, so max(id) per channel is that
+    # channel's latest message; max(created_at) alongside it is what the order
+    # is actually about. A channel with no messages falls back to its own
+    # created_at, which is what the previous Python sort did.
+    my_channels = authorization.member_channel_ids(db, current_user.address)
+    latest = (
+        db.query(
+            models.GroupMessage.channel_id.label("channel_id"),
+            func.max(models.GroupMessage.id).label("last_id"),
+            func.max(models.GroupMessage.created_at).label("last_at"),
         )
+        # Scoped to this user's channels, not aggregated over every group
+        # message in the system: the outer filter cannot be relied on to be
+        # pushed into the aggregate, and a listing whose cost is set by other
+        # people's traffic is the defect L-7 was about.
+        .filter(models.GroupMessage.channel_id.in_(my_channels))
+        .group_by(models.GroupMessage.channel_id)
+        .subquery()
+    )
+    activity = func.coalesce(latest.c.last_at, models.GroupChannel.created_at)
+
+    # Paged as bare ids first. Eager-loading the members here instead would put
+    # LIMIT on the joined member rows rather than on the channels.
+    page = (
+        db.query(models.GroupChannel.id, latest.c.last_id)
+        .outerjoin(latest, latest.c.channel_id == models.GroupChannel.id)
+        .filter(models.GroupChannel.id.in_(my_channels))
+        .order_by(activity.desc(), models.GroupChannel.id)
+        .limit(limit)
+        .offset(offset)
         .all()
     )
 
-    # Latest message per channel in two queries (was N+1). GroupMessage.id is
-    # autoincrement, so max(id) per channel is the most recent message; we then
-    # load those rows with their senders in one go.
-    channel_ids = [ch.id for ch in channels]
+    channel_ids = [row[0] for row in page]
+    if not channel_ids:
+        return []
+
+    channels = {
+        ch.id: ch
+        for ch in db.query(models.GroupChannel)
+        .options(joinedload(models.GroupChannel.members).joinedload(models.GroupMember.user))
+        .filter(models.GroupChannel.id.in_(channel_ids))
+        .all()
+    }
+
+    # The page's last messages with their senders, in one query (was N+1).
+    last_message_ids = [row[1] for row in page if row[1] is not None]
     latest_by_channel = {}
-    if channel_ids:
-        latest_ids = (
-            db.query(func.max(models.GroupMessage.id))
-            .filter(models.GroupMessage.channel_id.in_(channel_ids))
-            .group_by(models.GroupMessage.channel_id)
-            .scalar_subquery()
-        )
-        latest_messages = (
-            db.query(models.GroupMessage)
+    if last_message_ids:
+        latest_by_channel = {
+            m.channel_id: m
+            for m in db.query(models.GroupMessage)
             .options(joinedload(models.GroupMessage.sender))
-            .filter(models.GroupMessage.id.in_(latest_ids))
+            .filter(models.GroupMessage.id.in_(last_message_ids))
             .all()
-        )
-        latest_by_channel = {m.channel_id: m for m in latest_messages}
+        }
 
-    result = []
-    for ch in channels:
-        # Unread count: group has no per-user read tracking yet (would be a
-        # last_read_at on GroupMember). Left at 0 until that ships.
-        result.append({
-            "channel": ch,
-            "last_message": latest_by_channel.get(ch.id),
-            "unread_count": 0,  # TODO: per-user read tracking
-        })
-
-    # Sort by most recent activity
-    result.sort(key=lambda r: r["last_message"].created_at if r["last_message"] else r["channel"].created_at, reverse=True)
-    return result
+    return [
+        {
+            "channel": channels[cid],
+            "last_message": latest_by_channel.get(cid),
+            # Groups have no per-user read tracking yet (it would be a
+            # last_read_at on GroupMember). Left at 0 until that ships.
+            "unread_count": 0,
+        }
+        for cid in channel_ids
+        if cid in channels
+    ]
 
 
 # ── Get Group Details ───────────────────────────────────────────

@@ -1,6 +1,6 @@
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from dependencies import limiter
-from sqlalchemy.orm import Session, joinedload
+from sqlalchemy.orm import Session, joinedload, selectinload
 from typing import List
 from datetime import datetime, timezone
 import hashlib
@@ -14,6 +14,12 @@ router = APIRouter(
     prefix="/multisig",
     tags=["multisig"]
 )
+
+# Page size for GET /multisig/workflows (audit O-3). Each row eager-loads its
+# secret — `encrypted_data` included, 500 KB by schema — plus its signers and
+# recipients, and the endpoint used to return every one of them.
+WORKFLOW_PAGE_MAX = 100
+WORKFLOW_PAGE_DEFAULT = 50
 
 @router.post("/workflow", response_model=schemas.MultisigWorkflowResponse)
 @limiter.limit("5/minute")
@@ -127,18 +133,38 @@ def create_multisig_workflow(request: Request, workflow: schemas.MultisigWorkflo
 
 @router.get("/workflows", response_model=List[schemas.MultisigWorkflowResponse])
 @limiter.limit("60/minute")
-def list_multisig_workflows(request: Request, current_user: models.User = Depends(get_current_user), db: Session = Depends(get_db)):
-    # One query, not three merged in Python. "Owner, signer, or recipient of
-    # something completed" is the same rule `can_read_workflow` applies to a
-    # single workflow, so it is spelled once in security.authorization instead
-    # of being rebuilt here in SQL (audit O-2).
+def list_multisig_workflows(
+    request: Request,
+    limit: int = Query(WORKFLOW_PAGE_DEFAULT, ge=1, le=WORKFLOW_PAGE_MAX),
+    offset: int = Query(0, ge=0),
+    current_user: models.User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    # One query, not three merged in Python (audit O-2/O-3). "Owner, signer, or
+    # recipient of something completed" is the same rule `can_read_workflow`
+    # applies to a single workflow, so it is spelled once in
+    # security.authorization; and paging three separate result sets could not
+    # be made correct anyway, since neither half knows what the others hold.
     workflows = (
         authorization.readable_workflows(db, current_user.address)
-        .options(joinedload(models.MultisigWorkflow.secret))
+        .options(
+            # The response serialises the whole graph — owner, secret (and its
+            # owner), every signer and recipient with their user rows. Left
+            # lazy, one page of 50 workflows is several hundred queries.
+            # selectinload for the collections: one extra query each, and
+            # unlike a joined eager load it cannot interfere with LIMIT.
+            joinedload(models.MultisigWorkflow.owner),
+            joinedload(models.MultisigWorkflow.secret).joinedload(models.Secret.owner),
+            selectinload(models.MultisigWorkflow.signers).joinedload(models.MultisigWorkflowSigner.user),
+            selectinload(models.MultisigWorkflow.recipients).joinedload(models.MultisigWorkflowRecipient.user),
+        )
+        .order_by(models.MultisigWorkflow.id.desc())
+        .limit(limit)
+        .offset(offset)
         .all()
     )
 
-    # Batch-load owner grants for the owned workflows (eliminates N+1)
+    # Batch-load owner grants for the page's owned workflows (eliminates N+1)
     owned_secret_ids = [w.secret.id for w in workflows
                         if w.secret and w.owner_address == current_user.address]
     owner_grants = {}
