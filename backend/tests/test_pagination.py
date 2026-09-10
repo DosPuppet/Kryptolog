@@ -12,7 +12,7 @@ rows than the endpoints' own rate limits allow to be created in a minute, and
 the creation path is not what is under test.
 """
 import uuid
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 from conftest import (
     TEST_ENCRYPTION_KEY,
@@ -207,7 +207,7 @@ class TestGroupListPaging:
         sorting after the fetch would only sort whichever rows the page held,
         so the first page would not be the most recent groups."""
         token, user = user1
-        base = datetime.now(timezone.utc).replace(tzinfo=None)
+        base = datetime.now(UTC).replace(tzinfo=None)
         # Oldest activity first, so the expected order is the reverse.
         ids = [self._group(db_session, [user["address"]],
                            last_message_at=base - timedelta(hours=MANY - i))
@@ -227,7 +227,7 @@ class TestGroupListPaging:
         """What the Python sort did, kept: an empty channel falls back to its
         own created_at rather than sinking below every channel that has one."""
         token, user = user1
-        base = datetime.now(timezone.utc).replace(tzinfo=None)
+        base = datetime.now(UTC).replace(tzinfo=None)
         old = self._group(db_session, [user["address"]],
                           last_message_at=base - timedelta(days=2))
         empty = self._group(db_session, [user["address"]])
@@ -252,7 +252,7 @@ class TestConversationListPaging:
 
     def test_conversations_are_paged_most_recent_first(self, client, user1, db_session):
         token, user = user1
-        base = datetime.now(timezone.utc).replace(tzinfo=None)
+        base = datetime.now(UTC).replace(tzinfo=None)
 
         partners = []
         for i in range(MANY):

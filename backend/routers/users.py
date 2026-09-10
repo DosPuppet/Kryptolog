@@ -1,4 +1,3 @@
-from typing import List
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from sqlalchemy import func
@@ -63,7 +62,7 @@ def get_user(request: Request, address: str, current_user: models.User = Depends
         raise HTTPException(status_code=404, detail="User not found")
     return user
 
-@router.get("", response_model=List[schemas.UserResponse])
+@router.get("", response_model=list[schemas.UserResponse])
 @limiter.limit("30/minute")
 def list_users(
     request: Request,

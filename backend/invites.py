@@ -6,7 +6,7 @@ over-spend it (no read-then-write race). Times are naive UTC to match the
 DateTime columns elsewhere, which are declared without timezone=True.
 """
 import secrets
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 from sqlalchemy import or_
 from sqlalchemy.orm import Session
@@ -17,7 +17,7 @@ import models
 def _utcnow() -> datetime:
     # Naive UTC, consistent with the other datetime columns as read back from
     # the database (avoids mixing aware/naive in the expiry comparison).
-    return datetime.now(timezone.utc).replace(tzinfo=None)
+    return datetime.now(UTC).replace(tzinfo=None)
 
 
 def generate_code() -> str:

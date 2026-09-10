@@ -4,7 +4,7 @@ The audit's headline finding: an AccessGrant that had passed its expires_at
 still unlocked the file-chunk endpoints, because only the *listing* endpoints
 filtered on expiry.
 """
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 from conftest import (
     TEST_ENCRYPTION_KEY,
@@ -18,7 +18,7 @@ import models
 
 
 def _naive_utc(dt):
-    return dt.astimezone(timezone.utc).replace(tzinfo=None)
+    return dt.astimezone(UTC).replace(tzinfo=None)
 
 
 def _make_shared_secret_with_chunk(client, owner_token, grantee_address, expires_in=None):
@@ -61,7 +61,7 @@ def _expire_grant(db_session, grant_id):
     grant = db_session.query(models.AccessGrant).filter(
         models.AccessGrant.id == grant_id
     ).first()
-    grant.expires_at = _naive_utc(datetime.now(timezone.utc)) - timedelta(minutes=1)
+    grant.expires_at = _naive_utc(datetime.now(UTC)) - timedelta(minutes=1)
     db_session.commit()
 
 

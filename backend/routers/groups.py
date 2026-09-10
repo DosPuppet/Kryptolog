@@ -1,5 +1,4 @@
 import uuid
-from typing import List
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from sqlalchemy import func
@@ -109,7 +108,7 @@ async def create_group(
 
 # ── List My Groups ──────────────────────────────────────────────
 
-@router.get("", response_model=List[schemas.GroupConversationResponse])
+@router.get("", response_model=list[schemas.GroupConversationResponse])
 @limiter.limit("30/minute")
 def list_groups(
     request: Request,
@@ -280,7 +279,7 @@ async def send_group_message(
 
 # ── Group Message History ───────────────────────────────────────
 
-@router.post("/{channel_id}/history", response_model=List[schemas.GroupMessageResponse])
+@router.post("/{channel_id}/history", response_model=list[schemas.GroupMessageResponse])
 @limiter.limit("60/minute")
 def get_group_history(
     request: Request,

@@ -25,7 +25,6 @@ import logging
 import os
 import time
 import uuid
-from typing import Dict, List, Optional, Set
 
 from fastapi import WebSocket
 
@@ -46,20 +45,20 @@ PRESENCE_HEARTBEAT_SECONDS = 30  # refresh cadence — keep well under the TTL
 
 
 class ConnectionManager:
-    def __init__(self, redis_url: Optional[str] = None):
+    def __init__(self, redis_url: str | None = None):
         # A list per address: one identity may hold several tabs or devices.
-        self.active_connections: Dict[str, List[WebSocket]] = {}
+        self.active_connections: dict[str, list[WebSocket]] = {}
         # Focused = the app is in front of the user, so a push would be noise.
-        self.focused_connections: Set[WebSocket] = set()
+        self.focused_connections: set[WebSocket] = set()
         # Shared mode: per-socket id + address for the Redis presence keys
-        self._conn_ids: Dict[WebSocket, str] = {}
-        self._conn_addr: Dict[WebSocket, str] = {}
+        self._conn_ids: dict[WebSocket, str] = {}
+        self._conn_addr: dict[WebSocket, str] = {}
         self._redis_url = redis_url if redis_url is not None else os.getenv("REDIS_URL")
         self._redis = None        # async client: pub/sub + presence writes
         self._redis_sync = None   # sync client: presence reads from sync code (push path)
         self._pubsub = None
-        self._listener_task: Optional[asyncio.Task] = None
-        self._heartbeat_task: Optional[asyncio.Task] = None
+        self._listener_task: asyncio.Task | None = None
+        self._heartbeat_task: asyncio.Task | None = None
 
     # ---------- lifecycle ----------
 
@@ -158,7 +157,7 @@ class ConnectionManager:
         return f"{conn_id}:{state}"
 
     @classmethod
-    def _presence_members(cls, conn_id: str) -> List[str]:
+    def _presence_members(cls, conn_id: str) -> list[str]:
         """Every spelling one connection can have in the set.
 
         Its state is part of the member, so a focus change has to remove the
@@ -194,7 +193,7 @@ class ConnectionManager:
         except Exception as e:
             logger.warning("WS presence write failed: %s", e)
 
-    def _presence_states(self, addr: str) -> List[str]:
+    def _presence_states(self, addr: str) -> list[str]:
         """The states of `addr`'s live connections, in ONE keyed read.
 
         This was `scan_iter(match=f"{PRESENCE_PREFIX}{addr}:*")` — a walk of
@@ -223,7 +222,7 @@ class ConnectionManager:
             self._conn_addr[websocket] = user_address
             await self._presence_write(websocket, "blurred")
 
-    async def disconnect(self, websocket: WebSocket, user_address: Optional[str]):
+    async def disconnect(self, websocket: WebSocket, user_address: str | None):
         self.focused_connections.discard(websocket)
         if user_address in self.active_connections:
             if websocket in self.active_connections[user_address]:

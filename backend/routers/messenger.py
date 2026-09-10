@@ -1,7 +1,6 @@
 import asyncio
 import json
 import logging
-from typing import List
 
 from fastapi import (
     APIRouter,
@@ -82,7 +81,7 @@ async def send_message(request: Request, msg: schemas.MessageCreate, current_use
 
     return new_msg
 
-@router.get("/conversations", response_model=List[schemas.ConversationResponse])
+@router.get("/conversations", response_model=list[schemas.ConversationResponse])
 @limiter.limit("30/minute")
 def get_conversations(
     request: Request,
@@ -160,7 +159,7 @@ def get_conversations(
     
     return conversations
 
-@router.post("/history", response_model=List[schemas.MessageResponse])
+@router.post("/history", response_model=list[schemas.MessageResponse])
 @limiter.limit("60/minute")
 def get_message_history(request: Request, req: schemas.HistoryRequest, current_user: models.User = Depends(get_current_user), db: Session = Depends(get_db)):
     partner_address = req.partner_address.lower()
@@ -216,7 +215,7 @@ async def websocket_endpoint(websocket: WebSocket):
     try:
         try:
             data = await asyncio.wait_for(websocket.receive_text(), timeout=WS_AUTH_TIMEOUT_SECONDS)
-        except asyncio.TimeoutError:
+        except TimeoutError:
             await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
             return
         auth_data = json.loads(data)

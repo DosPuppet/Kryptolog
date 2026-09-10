@@ -1,6 +1,5 @@
 import hashlib
-from datetime import datetime, timezone
-from typing import List
+from datetime import UTC, datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from sqlalchemy.orm import Session, joinedload, selectinload
@@ -128,7 +127,7 @@ def create_multisig_workflow(request: Request, workflow: schemas.MultisigWorkflo
 
     return new_workflow
 
-@router.get("/workflows", response_model=List[schemas.MultisigWorkflowSummaryResponse])
+@router.get("/workflows", response_model=list[schemas.MultisigWorkflowSummaryResponse])
 @limiter.limit("60/minute")
 def list_multisig_workflows(
     request: Request,
@@ -346,7 +345,7 @@ def sign_multisig_workflow(request: Request, workflow_id: int, sig_req: schemas.
 
     signer.has_signed = True
     signer.signature = sig_req.signature
-    signer.signed_at = datetime.now(timezone.utc)
+    signer.signed_at = datetime.now(UTC)
 
     # Store Recipient Keys (Release Mechanism) — only on the completing signature.
     if is_completing:
@@ -417,7 +416,7 @@ def reject_multisig_workflow(request: Request, workflow_id: int, reject_req: sch
     # the owner can then delete the blocked workflow.
     wf.status = "rejected"
     wf.rejected_by = current_user.address.lower()
-    wf.rejected_at = datetime.now(timezone.utc)
+    wf.rejected_at = datetime.now(UTC)
     db.commit()
 
     sender_name = current_user.username or f"{current_user.address[:8]}..."

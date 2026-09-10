@@ -11,7 +11,7 @@ GET  /transfers/{id}  — unauthenticated (the target device has no identity yet
                         guarded by the unguessable id, single-use, and TTL.
 """
 import secrets as _secrets
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy.orm import Session
@@ -26,7 +26,7 @@ router = APIRouter(prefix="/transfers", tags=["transfers"])
 
 
 def _now() -> datetime:
-    return datetime.now(timezone.utc)
+    return datetime.now(UTC)
 
 
 def _as_naive(value: datetime) -> datetime:
@@ -34,7 +34,7 @@ def _as_naive(value: datetime) -> datetime:
     read back are naive while freshly-built values may still be aware."""
     if value.tzinfo is None:
         return value
-    return value.astimezone(timezone.utc).replace(tzinfo=None)
+    return value.astimezone(UTC).replace(tzinfo=None)
 
 
 @router.post("", response_model=schemas.KeyTransferCreateResponse)

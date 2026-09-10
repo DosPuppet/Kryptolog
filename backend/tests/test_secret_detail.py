@@ -10,7 +10,7 @@ So the lists return summaries and `GET /secrets/{id}` returns the content. The
 assertions below are mostly about *absence*, which is the awkward kind: a
 response that stops carrying a field looks fine until something needed it.
 """
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 from conftest import auth_header
 
@@ -18,7 +18,7 @@ import models
 
 
 def _naive_utc(dt):
-    return dt.astimezone(timezone.utc).replace(tzinfo=None)
+    return dt.astimezone(UTC).replace(tzinfo=None)
 
 
 PAYLOAD = "ab" * 64
@@ -180,7 +180,7 @@ class TestSecretDetail:
 
         row = db_session.query(models.AccessGrant).filter(
             models.AccessGrant.id == grant["id"]).first()
-        row.expires_at = _naive_utc(datetime.now(timezone.utc)) - timedelta(minutes=1)
+        row.expires_at = _naive_utc(datetime.now(UTC)) - timedelta(minutes=1)
         db_session.commit()
 
         assert client.get(f"/secrets/{secret['id']}",

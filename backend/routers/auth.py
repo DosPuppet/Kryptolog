@@ -1,4 +1,4 @@
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from sqlalchemy.orm import Session
@@ -30,7 +30,7 @@ def get_nonce(request: Request, address: str, db: Session = Depends(get_db)):
 
     # Cleanup expired nonces first (lazy cleanup). Naive UTC throughout to
     # match the timezone-less expires_at column.
-    now = datetime.now(timezone.utc).replace(tzinfo=None)
+    now = datetime.now(UTC).replace(tzinfo=None)
     db.query(models.Nonce).filter(models.Nonce.expires_at <= now).delete()
 
     nonce_val = auth.generate_nonce()
@@ -59,7 +59,7 @@ def login(request: Request, login_req: schemas.LoginRequest, db: Session = Depen
     # crypto happens after the claim is already settled.
     #
     # Naive UTC to match the (timezone-less) expires_at column.
-    now_naive = datetime.now(timezone.utc).replace(tzinfo=None)
+    now_naive = datetime.now(UTC).replace(tzinfo=None)
     claimed = (
         db.query(models.Nonce)
         .filter(
@@ -155,7 +155,7 @@ def login(request: Request, login_req: schemas.LoginRequest, db: Session = Depen
         # Only stamp when a key was already present (a genuine change), not when
         # backfilling a key onto an identity that had none.
         if user.encryption_public_key:
-            user.key_changed_at = datetime.now(timezone.utc)
+            user.key_changed_at = datetime.now(UTC)
         user.encryption_public_key = login_req.encryption_public_key
         # The old attestation signed the old key — never leave a stale one.
         user.encryption_key_attestation = attestation

@@ -9,6 +9,7 @@ They are inherently probabilistic: a passing run does not prove the absence of
 a race, but the pre-fix code fails these reliably (verified by reverting).
 """
 import threading
+from datetime import UTC
 
 import pytest
 from conftest import (
@@ -148,14 +149,14 @@ class TestNonceIsSingleUse:
         assert retry.status_code == 400, retry.text
 
     def test_expired_nonce_is_refused(self, client, db_session):
-        from datetime import datetime, timedelta, timezone
+        from datetime import datetime, timedelta
         do_login(client, TEST_USER_ADDRESS, TEST_ENCRYPTION_KEY, "A")
         nonce = client.get(f"/auth/nonce/{TEST_USER_ADDRESS}").json()["nonce"]
 
         row = db_session.query(models.Nonce).filter(
             models.Nonce.address == TEST_USER_ADDRESS.lower()
         ).first()
-        row.expires_at = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(minutes=1)
+        row.expires_at = datetime.now(UTC).replace(tzinfo=None) - timedelta(minutes=1)
         db_session.commit()
 
         resp = client.post("/auth/login", json={

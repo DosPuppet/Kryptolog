@@ -1,5 +1,4 @@
-from datetime import datetime, timedelta, timezone
-from typing import List
+from datetime import UTC, datetime, timedelta
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from sqlalchemy import func
@@ -76,7 +75,7 @@ def create_secret(request: Request, secret: schemas.SecretCreate, current_user: 
     new_secret.encrypted_key = secret.encrypted_key
     return new_secret
 
-@router.get("/secrets", response_model=List[schemas.SecretSummaryResponse])
+@router.get("/secrets", response_model=list[schemas.SecretSummaryResponse])
 @limiter.limit("60/minute")
 def get_secrets(
     request: Request,
@@ -185,7 +184,7 @@ async def share_secret(request: Request, grant: schemas.AccessGrantCreate, curre
 
     expires_at = None
     if grant.expires_in:
-        expires_at = datetime.now(timezone.utc) + timedelta(seconds=grant.expires_in)
+        expires_at = datetime.now(UTC) + timedelta(seconds=grant.expires_in)
 
     new_grant = models.AccessGrant(
         secret_id=grant.secret_id,
@@ -237,7 +236,7 @@ def revoke_grant(request: Request, grant_id: int, current_user: models.User = De
     db.commit()
     return {"status": "ok"}
 
-@router.get("/secrets/{secret_id}/access", response_model=List[schemas.AccessGrantResponse])
+@router.get("/secrets/{secret_id}/access", response_model=list[schemas.AccessGrantResponse])
 @limiter.limit("60/minute")
 def get_secret_access(
     request: Request,
@@ -254,7 +253,7 @@ def get_secret_access(
     if not authorization.can_manage_secret(db, secret, current_user.address):
         raise HTTPException(status_code=403, detail="Not authorized")
 
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     db.query(models.AccessGrant).filter(
         models.AccessGrant.secret_id == secret_id,
         models.AccessGrant.expires_at.isnot(None),
@@ -266,7 +265,7 @@ def get_secret_access(
         models.AccessGrant.secret_id == secret_id
     ).order_by(models.AccessGrant.id).limit(limit).offset(offset).all()
 
-@router.get("/secrets/shared-with-me", response_model=List[schemas.SharedSecretResponse])
+@router.get("/secrets/shared-with-me", response_model=list[schemas.SharedSecretResponse])
 @limiter.limit("60/minute")
 def get_shared_secrets(
     request: Request,
@@ -275,7 +274,7 @@ def get_shared_secrets(
     current_user: models.User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
 
     db.query(models.AccessGrant).filter(
         models.AccessGrant.grantee_address == current_user.address,

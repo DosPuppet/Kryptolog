@@ -1,5 +1,4 @@
 from datetime import datetime
-from typing import List, Optional
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
@@ -30,18 +29,18 @@ class UserBase(BaseModel):
     address: str = Field(..., max_length=MAX_ADDRESS_LEN)
 
 class UserUpdate(BaseModel):
-    username: Optional[str] = Field(None, max_length=200)
+    username: str | None = Field(None, max_length=200)
 
 class UserResponse(UserBase):
-    username: Optional[str]
-    encryption_public_key: Optional[str]
+    username: str | None
+    encryption_public_key: str | None
     created_at: datetime
     # When this identity's encryption key last changed (audit S1). Null = never
     # changed since creation. Clients use it to flag/verify key swaps.
-    key_changed_at: Optional[datetime] = None
+    key_changed_at: datetime | None = None
     # Self-signed ML-KEM key attestation (audit M-1) — peers verify this against
     # the address before encrypting to encryption_public_key.
-    encryption_key_attestation: Optional[str] = None
+    encryption_key_attestation: str | None = None
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -77,7 +76,7 @@ class SecretSummaryResponse(BaseModel):
     created_at: datetime
     name: str
     type: str
-    encrypted_key: Optional[str] = None # The specific key for the requesting user (joined from AccessGrant)
+    encrypted_key: str | None = None # The specific key for the requesting user (joined from AccessGrant)
     owner: UserResponse
 
     model_config = ConfigDict(from_attributes=True)
@@ -121,7 +120,7 @@ class AccessGrantCreate(BaseModel):
     secret_id: int
     grantee_address: str = Field(..., max_length=MAX_ADDRESS_LEN)
     encrypted_key: str = Field(..., max_length=50_000) # Key encrypted for grantee
-    expires_in: Optional[int] = None # Seconds
+    expires_in: int | None = None # Seconds
 
 class AccessGrantResponse(BaseModel):
     """A grant on its own — who holds access, and until when.
@@ -136,8 +135,8 @@ class AccessGrantResponse(BaseModel):
     grantee_address: str
     encrypted_key: str
     created_at: datetime
-    expires_at: Optional[datetime]
-    grantee: Optional[UserResponse]
+    expires_at: datetime | None
+    grantee: UserResponse | None
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -154,22 +153,22 @@ class LoginRequest(BaseModel):
     address: str = Field(..., max_length=MAX_ADDRESS_LEN)
     signature: str = Field(..., max_length=64_000)
     nonce: str = Field(..., max_length=200)
-    encryption_public_key: Optional[str] = Field(None, max_length=MAX_ADDRESS_LEN)
+    encryption_public_key: str | None = Field(None, max_length=MAX_ADDRESS_LEN)
     # Self-signed attestation of encryption_public_key (audit M-1). Optional for
     # compat with older clients; verified server-side when present.
-    encryption_key_attestation: Optional[str] = Field(None, max_length=64_000)
-    username: Optional[str] = Field(None, max_length=200)
+    encryption_key_attestation: str | None = Field(None, max_length=64_000)
+    username: str | None = Field(None, max_length=200)
     # Access filter (audit §5): only consulted when the server requires invites
     # AND this is a brand-new identity. Ignored for existing users.
-    invite_code: Optional[str] = Field(None, max_length=200)
+    invite_code: str | None = Field(None, max_length=200)
 
 class MultisigWorkflowBase(BaseModel):
     name: str = Field(..., max_length=200)
 
 class MultisigWorkflowCreate(MultisigWorkflowBase):
     secret_data: SecretCreate # Embedded secret creation
-    signers: List[str] # List of addresses
-    recipients: List[str] # List of addresses
+    signers: list[str] # List of addresses
+    recipients: list[str] # List of addresses
     signer_keys: dict[str, str] # map address -> encrypted_key
     recipient_keys: dict[str, str] # map address -> encrypted_key
     threshold: int = Field(..., ge=1) # N in N-of-M; must be <= len(signers)
@@ -177,17 +176,17 @@ class MultisigWorkflowCreate(MultisigWorkflowBase):
 class MultisigWorkflowSignerResponse(BaseModel):
     user_address: str
     has_signed: bool
-    signature: Optional[str] = None
-    signed_at: Optional[datetime]
-    encrypted_key: Optional[str]
-    user: Optional[UserResponse]
+    signature: str | None = None
+    signed_at: datetime | None
+    encrypted_key: str | None
+    user: UserResponse | None
 
     model_config = ConfigDict(from_attributes=True)
 
 class MultisigWorkflowRecipientResponse(BaseModel):
     user_address: str
-    encrypted_key: Optional[str]
-    user: Optional[UserResponse]
+    encrypted_key: str | None
+    user: UserResponse | None
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -204,14 +203,14 @@ class MultisigWorkflowSummaryResponse(MultisigWorkflowBase):
     secret_id: int
     owner_address: str
     status: str
-    threshold: Optional[int] = None # N in N-of-M; NULL ⇒ N-of-N (= len(signers))
-    rejected_by: Optional[str] = None
+    threshold: int | None = None # N in N-of-M; NULL ⇒ N-of-N (= len(signers))
+    rejected_by: str | None = None
     created_at: datetime
     owner: UserResponse
     secret: SecretSummaryResponse
-    owner_encrypted_key: Optional[str] = None # Explicitly pass owner key here to avoid nesting issues
-    signers: List[MultisigWorkflowSignerResponse]
-    recipients: List[MultisigWorkflowRecipientResponse]
+    owner_encrypted_key: str | None = None # Explicitly pass owner key here to avoid nesting issues
+    signers: list[MultisigWorkflowSignerResponse]
+    recipients: list[MultisigWorkflowRecipientResponse]
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -222,10 +221,10 @@ class MultisigWorkflowResponse(MultisigWorkflowSummaryResponse):
 class MultisigSignatureRequest(BaseModel):
     # 64KB limit for PQC signatures
     signature: str = Field(..., max_length=64_000)
-    recipient_keys: Optional[dict[str, str]] = None # Only provided by the completing signer
+    recipient_keys: dict[str, str] | None = None # Only provided by the completing signer
 
 class MultisigRejectRequest(BaseModel):
-    reason: Optional[str] = Field(None, max_length=500)
+    reason: str | None = Field(None, max_length=500)
 
 class MessageBase(BaseModel):
     recipient_address: str = Field(..., max_length=MAX_ADDRESS_LEN)
@@ -240,8 +239,8 @@ class MessageResponse(MessageBase):
     is_read: bool = False
     created_at: datetime
     content: str # Relax output limit for legacy messages
-    sender: Optional[UserResponse]
-    recipient: Optional[UserResponse]
+    sender: UserResponse | None
+    recipient: UserResponse | None
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -252,8 +251,8 @@ class MessageSummaryResponse(BaseModel):
     recipient_address: str
     is_read: bool = False
     created_at: datetime
-    sender: Optional[UserResponse] = None
-    recipient: Optional[UserResponse] = None
+    sender: UserResponse | None = None
+    recipient: UserResponse | None = None
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -275,13 +274,13 @@ class GroupChannelCreate(BaseModel):
     # Names are E2EE blobs (audit M-3): a per-member key-wrap map, so the cap
     # scales with group size (~2.3KB/member) rather than title length.
     name: str = Field(..., min_length=1, max_length=MAX_DISPLAY_NAME_LEN)
-    member_addresses: List[str] = Field(..., min_length=1)
+    member_addresses: list[str] = Field(..., min_length=1)
 
 class GroupMemberResponse(BaseModel):
     user_address: str
     role: str
     joined_at: datetime
-    user: Optional[UserResponse] = None
+    user: UserResponse | None = None
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -290,7 +289,7 @@ class GroupChannelResponse(BaseModel):
     name: str
     owner_address: str
     created_at: datetime
-    members: List[GroupMemberResponse] = []
+    members: list[GroupMemberResponse] = []
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -303,13 +302,13 @@ class GroupMessageResponse(BaseModel):
     sender_address: str
     content: str
     created_at: datetime
-    sender: Optional[UserResponse] = None
+    sender: UserResponse | None = None
 
     model_config = ConfigDict(from_attributes=True)
 
 class GroupConversationResponse(BaseModel):
     channel: GroupChannelResponse
-    last_message: Optional[GroupMessageResponse] = None
+    last_message: GroupMessageResponse | None = None
     unread_count: int = 0
 
     model_config = ConfigDict(from_attributes=True)

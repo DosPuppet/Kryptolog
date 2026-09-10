@@ -12,7 +12,6 @@ Sizes are FIPS 203 / 204 constants for the parameter sets this project uses:
     ML-DSA-44   public key  1312 bytes -> 2624 hex chars
     ML-DSA-44   signature   2420 bytes -> 4840 hex chars
 """
-from typing import Optional
 
 # Byte lengths (FIPS 203/204).
 ML_KEM_768_PUBLIC_KEY_BYTES = 1184
@@ -36,7 +35,7 @@ def is_hex(value: str) -> bool:
         return False
 
 
-def is_valid_hex_of_length(value: Optional[str], hex_len: int) -> bool:
+def is_valid_hex_of_length(value: str | None, hex_len: int) -> bool:
     """True if `value` is valid hex of exactly `hex_len` characters."""
     if not value or not isinstance(value, str):
         return False
@@ -45,7 +44,7 @@ def is_valid_hex_of_length(value: Optional[str], hex_len: int) -> bool:
     return is_hex(value)
 
 
-def is_valid_ml_kem_public_key(value: Optional[str]) -> bool:
+def is_valid_ml_kem_public_key(value: str | None) -> bool:
     """True if `value` is a well-formed hex ML-KEM-768 public key.
 
     Structural only — and that is the ceiling, not an omission. ML-KEM has no
@@ -58,12 +57,12 @@ def is_valid_ml_kem_public_key(value: Optional[str]) -> bool:
     return is_valid_hex_of_length(value, ML_KEM_768_PUBLIC_KEY_HEX_LEN)
 
 
-def is_valid_ml_dsa_public_key(value: Optional[str]) -> bool:
+def is_valid_ml_dsa_public_key(value: str | None) -> bool:
     """True if `value` is a well-formed hex ML-DSA-44 public key (= an address)."""
     return is_valid_hex_of_length(value, ML_DSA_44_PUBLIC_KEY_HEX_LEN)
 
 
-def is_valid_ml_dsa_signature(value: Optional[str]) -> bool:
+def is_valid_ml_dsa_signature(value: str | None) -> bool:
     """True if `value` is a well-formed hex ML-DSA-44 signature."""
     return is_valid_hex_of_length(value, ML_DSA_44_SIGNATURE_HEX_LEN)
 
@@ -79,7 +78,7 @@ def is_valid_ml_dsa_signature(value: Optional[str]) -> bool:
 LEGACY_MIN_KEY_LEN = 500
 
 
-def is_usable_encryption_key(value: Optional[str], strict: bool = False) -> bool:
+def is_usable_encryption_key(value: str | None, strict: bool = False) -> bool:
     """True if `value` can serve as a messenger encryption key.
 
     strict=True demands an exact, well-formed ML-KEM-768 hex key.

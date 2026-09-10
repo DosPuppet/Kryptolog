@@ -22,7 +22,7 @@ Steps 1-2 alone are a TOCTOU race; 3 is what actually closes it.
 import ipaddress
 import logging
 import socket
-from typing import List, Sequence
+from collections.abc import Sequence
 from urllib.parse import urlparse
 
 import requests
@@ -67,7 +67,7 @@ def _address_is_safe(ip: ipaddress._BaseAddress) -> bool:
     return bool(getattr(ip, "is_global", True))
 
 
-def resolve_safe_addresses(hostname: str, port: int) -> List[str]:
+def resolve_safe_addresses(hostname: str, port: int) -> list[str]:
     """Resolve `hostname`, requiring every returned address to be safe.
 
     Every address must pass: a name resolving to both a public and an internal
@@ -97,7 +97,7 @@ def resolve_safe_addresses(hostname: str, port: int) -> List[str]:
     return addresses
 
 
-def validate_push_endpoint(endpoint: str) -> List[str]:
+def validate_push_endpoint(endpoint: str) -> list[str]:
     """Validate a Web Push endpoint URL. Returns the resolved safe addresses.
 
     Raises UnsafeUrlError with a caller-safe message on any violation.

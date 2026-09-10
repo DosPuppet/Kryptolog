@@ -29,7 +29,6 @@ than `.casefold()` precisely so the two sides agree: casefold is more
 aggressive than SQL's lower() and the pair would disagree on e.g. ß/ss.
 """
 import unicodedata
-from typing import Optional
 
 from sqlalchemy import func
 from sqlalchemy.orm import Session
@@ -77,7 +76,7 @@ _SCRIPT_FAMILIES = {
 }
 
 
-def _script_family(char: str) -> Optional[str]:
+def _script_family(char: str) -> str | None:
     try:
         name = unicodedata.name(char)
     except ValueError:  # unnamed character
@@ -85,7 +84,7 @@ def _script_family(char: str) -> Optional[str]:
     return _SCRIPT_FAMILIES.get(name.split()[0])
 
 
-def normalize_username(value: Optional[str]) -> Optional[str]:
+def normalize_username(value: str | None) -> str | None:
     """Canonicalize a submitted username, or raise InvalidUsername.
 
     Returns None for None (the caller decides whether the field was optional).
@@ -143,7 +142,7 @@ def normalize_username(value: Optional[str]) -> Optional[str]:
     return collapsed
 
 
-def username_taken(db: Session, username: str, *, exclude_address: Optional[str] = None) -> bool:
+def username_taken(db: Session, username: str, *, exclude_address: str | None = None) -> bool:
     """True if any OTHER user already holds this username, ignoring case.
 
     Callers must pass an already-normalized name (normalize_username): this

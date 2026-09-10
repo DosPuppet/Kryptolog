@@ -22,8 +22,7 @@ Datetime convention: `AccessGrant.expires_at` is `DateTime` without
 an aware value (see `share_secret`), so comparisons here normalise to naive UTC
 rather than assuming either form.
 """
-from datetime import datetime, timezone
-from typing import Optional
+from datetime import UTC, datetime
 
 from sqlalchemy import and_, or_
 from sqlalchemy.orm import Session
@@ -31,23 +30,23 @@ from sqlalchemy.orm import Session
 import models
 
 
-def normalize_address(address: Optional[str]) -> Optional[str]:
+def normalize_address(address: str | None) -> str | None:
     """Lowercase an address for comparison against stored values."""
     return address.lower() if address is not None else None
 
 
 def utcnow_naive() -> datetime:
     """Current UTC as a naive datetime, matching the DateTime columns."""
-    return datetime.now(timezone.utc).replace(tzinfo=None)
+    return datetime.now(UTC).replace(tzinfo=None)
 
 
-def as_naive_utc(value: Optional[datetime]) -> Optional[datetime]:
+def as_naive_utc(value: datetime | None) -> datetime | None:
     """Normalise a possibly-aware datetime to naive UTC for comparison."""
     if value is None:
         return None
     if value.tzinfo is None:
         return value
-    return value.astimezone(timezone.utc).replace(tzinfo=None)
+    return value.astimezone(UTC).replace(tzinfo=None)
 
 
 def _live_grant_filter(now: datetime):
@@ -60,7 +59,7 @@ def _live_grant_filter(now: datetime):
 
 def find_live_grant(
     db: Session, secret_id: int, user_address: str
-) -> Optional[models.AccessGrant]:
+) -> models.AccessGrant | None:
     """Return this user's non-expired grant on the secret, if any."""
     now = utcnow_naive()
     return (
@@ -149,7 +148,7 @@ GROUP_ADMIN_ROLES = ("owner", "admin")
 
 def find_group_member(
     db: Session, channel_id: str, user_address: str
-) -> Optional[models.GroupMember]:
+) -> models.GroupMember | None:
     """This address's membership row on the channel, or None.
 
     THE membership lookup. It stays a query even for callers that already hold
@@ -187,7 +186,7 @@ def member_channel_ids(db: Session, user_address: str):
     )
 
 
-def can_administer_group(member: Optional[models.GroupMember]) -> bool:
+def can_administer_group(member: models.GroupMember | None) -> bool:
     """Add members, remove other members, rename the channel: owner or admin.
 
     Renaming sits here rather than with the owner-only powers because the
@@ -197,7 +196,7 @@ def can_administer_group(member: Optional[models.GroupMember]) -> bool:
     return member is not None and member.role in GROUP_ADMIN_ROLES
 
 
-def can_manage_group_roles(member: Optional[models.GroupMember]) -> bool:
+def can_manage_group_roles(member: models.GroupMember | None) -> bool:
     """Promote or demote a member: owner only.
 
     Narrower than `can_administer_group` on purpose — an admin who could mint
@@ -207,7 +206,7 @@ def can_manage_group_roles(member: Optional[models.GroupMember]) -> bool:
 
 
 def can_remove_group_member(
-    member: Optional[models.GroupMember], target_address: str
+    member: models.GroupMember | None, target_address: str
 ) -> bool:
     """Remove a member: anyone may remove themselves, others need owner/admin."""
     if member is None:
@@ -222,7 +221,7 @@ def can_remove_group_member(
 
 def find_workflow_signer(
     db: Session, workflow_id: int, user_address: str
-) -> Optional[models.MultisigWorkflowSigner]:
+) -> models.MultisigWorkflowSigner | None:
     """This address's signer row on the workflow, or None.
 
     Callers need the row itself (to record the signature), so this returns it
@@ -240,7 +239,7 @@ def find_workflow_signer(
 
 def find_workflow_recipient(
     db: Session, workflow_id: int, user_address: str
-) -> Optional[models.MultisigWorkflowRecipient]:
+) -> models.MultisigWorkflowRecipient | None:
     """This address's recipient row on the workflow, or None."""
     return (
         db.query(models.MultisigWorkflowRecipient)
@@ -253,7 +252,7 @@ def find_workflow_recipient(
 
 
 def can_read_workflow(
-    db: Session, workflow: Optional[models.MultisigWorkflow], user_address: str
+    db: Session, workflow: models.MultisigWorkflow | None, user_address: str
 ) -> bool:
     """Read the workflow and the secret behind it.
 
@@ -307,7 +306,7 @@ def readable_workflows(db: Session, user_address: str):
 
 
 def can_delete_workflow(
-    workflow: Optional[models.MultisigWorkflow], user_address: str
+    workflow: models.MultisigWorkflow | None, user_address: str
 ) -> bool:
     """Delete a workflow: the initiator only."""
     if workflow is None:
@@ -315,7 +314,7 @@ def can_delete_workflow(
     return normalize_address(workflow.owner_address) == normalize_address(user_address)
 
 
-def workflow_is_deletable(workflow: Optional[models.MultisigWorkflow]) -> bool:
+def workflow_is_deletable(workflow: models.MultisigWorkflow | None) -> bool:
     """A workflow may only be deleted before release.
 
     A completed workflow has already handed the secret to its recipients, so
