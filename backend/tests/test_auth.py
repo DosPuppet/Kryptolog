@@ -17,6 +17,7 @@ class TestNonce:
         nonce2 = get_nonce(client, TEST_USER_ADDRESS)
         assert isinstance(nonce2, str)
         assert len(nonce2) == 32
+        assert nonce2 != nonce1, "second call must mint a fresh nonce"
 
     def test_get_nonce_normalizes_to_lowercase(self, client):
         # Uppercase hex is still a well-formed address, so it passes validation

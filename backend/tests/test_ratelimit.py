@@ -145,7 +145,7 @@ def test_limit_survives_a_varying_path_parameter(client, user1):
     # Well-formed but unregistered addresses: distinct urls, all 404 through
     # the handler, and the limiter must still see them as one route.
     statuses = [
-        client.get(f"/users/{'%064x' % i}", headers=headers).status_code
+        client.get(f"/users/{i:064x}", headers=headers).status_code
         for i in range(35)
     ]
     assert 429 in statuses, f"path parameter opened a fresh quota; saw {sorted(set(statuses))}"
@@ -158,5 +158,5 @@ def test_unauthenticated_nonce_limit_survives_a_varying_address(client):
     address, so an unbounded quota here is the table-growth path audit L-5
     closed the shape of and N-2 reopened the volume of.
     """
-    statuses = [client.get(f"/auth/nonce/{'%064x' % i}").status_code for i in range(15)]
+    statuses = [client.get(f"/auth/nonce/{i:064x}").status_code for i in range(15)]
     assert 429 in statuses, f"path parameter opened a fresh quota; saw {sorted(set(statuses))}"

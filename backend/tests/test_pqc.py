@@ -58,7 +58,8 @@ def test_liboqs_roundtrip_and_tamper():
     # tampered message must fail
     assert oqs.Signature(SIG_ALG).verify(b"round-trip messagX", sig, pk) is False
     # tampered signature must fail
-    bad = bytearray(sig); bad[0] ^= 0x01
+    bad = bytearray(sig)
+    bad[0] ^= 0x01
     assert oqs.Signature(SIG_ALG).verify(msg, bytes(bad), pk) is False
 
 

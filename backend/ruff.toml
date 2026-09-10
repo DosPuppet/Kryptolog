@@ -1,0 +1,28 @@
+# Backend lint + format gate. The frontend and extension have had a blocking
+# eslint gate since the audit remediation; this is its Python counterpart, and
+# it is what stops the 2026-09 cleanup drifting back.
+target-version = "py312"
+line-length = 100
+
+# Migrations are generated artifacts. Alembic's template always writes
+# `import sqlalchemy as sa` whether or not the revision uses it, and rewriting a
+# revision that has already run buys nothing.
+extend-exclude = ["alembic/versions", ".venv"]
+
+[lint]
+select = ["E4", "E7", "E9", "F", "I", "UP"]
+ignore = [
+    # `Column == False` is the correct SQLAlchemy spelling: it renders
+    # `col = false` in SQL. Ruff's suggested `not Column` evaluates the column's
+    # Python truthiness instead, which is a different query. (NULL checks are
+    # the opposite case and DO use .is_(None), which ruff does not flag.)
+    "E712",
+]
+
+[lint.per-file-ignores]
+# These import after code on purpose: main.py builds the app object first,
+# conftest.py must set env vars before anything reads them, and alembic/env.py
+# follows Alembic's own template.
+"main.py" = ["E402"]
+"tests/conftest.py" = ["E402"]
+"alembic/env.py" = ["E402"]

@@ -8,7 +8,7 @@ import pytest
 
 from conftest import (
     TEST_USER_ADDRESS, TEST_USER_ADDRESS_2, TEST_ENCRYPTION_KEY,
-    get_nonce, do_login, auth_header, synthetic_address,
+    get_nonce, do_login, synthetic_address,
 )
 import invites
 from database import get_db

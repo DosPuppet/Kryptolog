@@ -16,8 +16,8 @@ from datetime import datetime, timedelta, timezone
 
 import models
 from conftest import (
-    TEST_USER_ADDRESS, TEST_USER_ADDRESS_2, TEST_ENCRYPTION_KEY,
-    auth_header, do_login,
+    TEST_ENCRYPTION_KEY,
+    auth_header,
 )
 
 # Deliberately more than one default page (50) but less than two, so a full

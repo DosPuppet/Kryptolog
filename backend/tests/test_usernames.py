@@ -7,7 +7,7 @@ before this; every other way of writing "alice" was a separate registration.
 import pytest
 
 from conftest import (
-    TEST_USER_ADDRESS, TEST_USER_ADDRESS_2, TEST_ENCRYPTION_KEY,
+    TEST_USER_ADDRESS, TEST_ENCRYPTION_KEY,
     do_login, auth_header, get_nonce, synthetic_address,
 )
 from security.usernames import InvalidUsername, normalize_username
@@ -132,7 +132,6 @@ class TestNormalizeThroughTheApi:
                    headers=auth_header(token1))  # wrong owner, ignored
 
         # user2 takes "carol"; user1 then tries the fullwidth spelling of it.
-        token2 = None
         _, _ = user2
         resp = client.put(
             f"/users/{TEST_USER_ADDRESS}",

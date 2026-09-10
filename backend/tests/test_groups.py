@@ -4,7 +4,7 @@ Tests for the Group Channels feature.
 import pytest
 from conftest import (
     do_login, auth_header,
-    TEST_USER_ADDRESS, TEST_USER_ADDRESS_2, TEST_USER_ADDRESS_3, TEST_ENCRYPTION_KEY,
+    TEST_USER_ADDRESS_3, TEST_ENCRYPTION_KEY,
 )
 
 
