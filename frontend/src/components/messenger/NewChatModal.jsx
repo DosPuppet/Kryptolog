@@ -3,6 +3,7 @@ import { X, Search, Loader2 } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
 import API_ENDPOINTS from '../../config';
 import { apiFetch } from '../../services/api';
+import { avatarInitial, displayName } from '../../utils/format';
 
 const NewChatModal = ({ isOpen, onClose, onStartChat }) => {
     const { user, token } = useAuth();
@@ -75,11 +76,11 @@ const NewChatModal = ({ isOpen, onClose, onStartChat }) => {
                                     className="w-full p-3 rounded-lg flex items-center gap-3 hover:bg-slate-100 dark:hover:bg-slate-700 transition-colors text-left"
                                 >
                                     <div className="w-10 h-10 rounded-full bg-gradient-to-br from-indigo-500 to-purple-500 flex items-center justify-center text-white font-bold shrink-0">
-                                        {(u.username || u.address).substring(0, 1).toUpperCase()}
+                                        {avatarInitial(displayName(u))}
                                     </div>
                                     <div className="overflow-hidden">
                                         <div className="font-medium text-slate-900 dark:text-white truncate">
-                                            {u.username || `${u.address.substring(0, 8)}...`}
+                                            {displayName(u)}
                                         </div>
                                         <div className="text-xs text-slate-500 font-mono truncate">
                                             {u.address}

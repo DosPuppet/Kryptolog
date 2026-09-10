@@ -6,6 +6,7 @@ import { checkContactKey, trustContactKey, attestationVerdict } from '../../serv
 import { safetyNumber } from '../../utils/fingerprint';
 import { confirmDialog } from '../../utils/confirm';
 import { apiFetch } from '../../services/api';
+import { avatarInitial, displayName } from '../../utils/format';
 
 const ShareModal = ({ isOpen, onClose, secret, onShare }) => {
     const { token, user } = useAuth();
@@ -171,11 +172,11 @@ const ShareModal = ({ isOpen, onClose, secret, onShare }) => {
                                     className={`w-full p-3 rounded-lg flex items-center gap-3 transition-colors text-left ${selectedUser?.address === u.address ? 'bg-indigo-50 dark:bg-indigo-900/30' : 'hover:bg-slate-100 dark:hover:bg-slate-700'}`}
                                 >
                                     <div className="w-10 h-10 rounded-full bg-gradient-to-br from-indigo-500 to-purple-500 flex items-center justify-center text-white font-bold shrink-0">
-                                        {(u.username || u.address).substring(0, 1).toUpperCase()}
+                                        {avatarInitial(displayName(u))}
                                     </div>
                                     <div className="overflow-hidden flex-1">
                                         <div className="font-medium text-slate-900 dark:text-white truncate">
-                                            {u.username || `${u.address.substring(0, 8)}...`}
+                                            {displayName(u)}
                                         </div>
                                         <div className="text-xs text-slate-500 font-mono truncate">
                                             {u.address}

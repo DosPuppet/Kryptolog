@@ -4,6 +4,7 @@ import { useAuth } from '../../context/AuthContext';
 import API_ENDPOINTS from '../../config';
 import { toast } from '../../utils/toast';
 import { apiFetch } from '../../services/api';
+import { avatarInitial, displayName } from '../../utils/format';
 
 const CreateGroupModal = ({ isOpen, onClose, onCreate }) => {
     const { user, token } = useAuth();
@@ -103,7 +104,7 @@ const CreateGroupModal = ({ isOpen, onClose, onCreate }) => {
                                 onClick={() => toggleMember(m)}
                                 className="flex items-center gap-1 bg-indigo-100 dark:bg-indigo-900/30 text-indigo-700 dark:text-indigo-300 px-2 py-1 rounded-full text-xs font-medium hover:bg-indigo-200 dark:hover:bg-indigo-900/50 transition-colors"
                             >
-                                {m.username || `${m.address.substring(0, 8)}...`}
+                                {displayName(m)}
                                 <X className="w-3 h-3" />
                             </button>
                         ))}
@@ -145,11 +146,11 @@ const CreateGroupModal = ({ isOpen, onClose, onCreate }) => {
                                         className={`w-full p-3 rounded-lg flex items-center gap-3 transition-colors text-left ${isSelected ? 'bg-indigo-50 dark:bg-indigo-900/20' : 'hover:bg-slate-100 dark:hover:bg-slate-700'}`}
                                     >
                                         <div className="w-10 h-10 rounded-full bg-gradient-to-br from-indigo-500 to-purple-500 flex items-center justify-center text-white font-bold shrink-0">
-                                            {(u.username || u.address).substring(0, 1).toUpperCase()}
+                                            {avatarInitial(displayName(u))}
                                         </div>
                                         <div className="flex-1 overflow-hidden">
                                             <div className="font-medium text-slate-900 dark:text-white truncate">
-                                                {u.username || `${u.address.substring(0, 8)}...`}
+                                                {displayName(u)}
                                             </div>
                                             <div className="text-xs text-slate-500 font-mono truncate">{u.address}</div>
                                         </div>

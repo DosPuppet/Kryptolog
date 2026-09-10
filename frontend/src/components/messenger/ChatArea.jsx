@@ -2,6 +2,7 @@ import { useState, useEffect, useRef } from 'react';
 import { ArrowLeft, Shield, Loader2, Send, Lock, MessageSquare } from 'lucide-react';
 import MessageAuthBadge from './MessageAuthBadge';
 import { useAuth } from '../../context/AuthContext';
+import { avatarInitial, displayName } from '../../utils/format';
 
 const ChatArea = ({ activeConversation, onBack, onSend, loadingMessages, sending, onDecrypt }) => {
     const { user } = useAuth();
@@ -42,11 +43,11 @@ const ChatArea = ({ activeConversation, onBack, onSend, loadingMessages, sending
                     <ArrowLeft className="w-5 h-5 dark:text-white" />
                 </button>
                 <div className="w-8 h-8 rounded-full bg-gradient-to-br from-indigo-500 to-purple-500 flex items-center justify-center text-white font-bold shadow-sm">
-                    {(activeConversation.user.username || activeConversation.user.address).substring(0, 1).toUpperCase()}
+                    {avatarInitial(displayName(activeConversation.user))}
                 </div>
                 <div>
                     <h3 className="font-bold text-slate-900 dark:text-white">
-                        {activeConversation.user.username || `${activeConversation.user.address.substring(0, 8)}...`}
+                        {displayName(activeConversation.user)}
                     </h3>
                     <div className="flex items-center gap-1 text-xs text-emerald-600 dark:text-emerald-400">
                         <Shield className="w-3 h-3" /> End-to-End Encrypted

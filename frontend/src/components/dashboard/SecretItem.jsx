@@ -6,6 +6,7 @@ import { verifySignaturePQC, domainSeparate, SIGNING_CONTEXT } from '../../utils
 import API_ENDPOINTS from '../../config';
 import { toast } from '../../utils/toast';
 import { apiFetch } from '../../services/api';
+import { formatSize } from '../../utils/format';
 
 const SecretItem = ({ secret, decryptedContent, onDecrypt, onLock, onDelete, onShare, onViewDetails, viewMode = 'grid', isSharedView }) => {
     const { theme } = useTheme();
@@ -96,13 +97,6 @@ const SecretItem = ({ secret, decryptedContent, onDecrypt, onLock, onDelete, onS
         }
     };
 
-    const formatFileSize = (bytes) => {
-        if (!bytes) return '';
-        if (bytes < 1024) return `${bytes} B`;
-        if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
-        return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
-    };
-
     // Render Logic
     let content = decryptedContent;
     let isSignedDoc = false;
@@ -158,7 +152,7 @@ const SecretItem = ({ secret, decryptedContent, onDecrypt, onLock, onDelete, onS
                                         <FileText className="w-4 h-4 text-indigo-300" />
                                         <span className="font-medium text-indigo-300">{item.name}</span>
                                         <span className="text-xs text-slate-500">
-                                            ({item.mime}{item.size ? ` · ${formatFileSize(item.size)}` : ''})
+                                            ({item.mime}{item.size ? ` · ${formatSize(item.size)}` : ''})
                                         </span>
                                         <a
                                             href={item.content}
@@ -191,7 +185,7 @@ const SecretItem = ({ secret, decryptedContent, onDecrypt, onLock, onDelete, onS
                             <FileText className="w-4 h-4" />
                             <span className="font-medium">{parsed.name}</span>
                             <span className="text-xs text-slate-500">
-                                ({parsed.mime}{parsed.size ? ` · ${formatFileSize(parsed.size)}` : ''})
+                                ({parsed.mime}{parsed.size ? ` · ${formatSize(parsed.size)}` : ''})
                             </span>
                         </div>
                         {isImage && (

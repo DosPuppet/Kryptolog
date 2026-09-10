@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { useAuth } from '../../context/AuthContext';
 import { Loader2, Plus, PenTool, Upload, FileText, Check, Shield, Trash2 } from 'lucide-react';
 import { toast } from '../../utils/toast';
+import { formatSize } from '../../utils/format';
 
 const CreateSecret = ({ onCreate, onCancel }) => {
     const { authType } = useAuth();
@@ -29,7 +30,6 @@ const CreateSecret = ({ onCreate, onCancel }) => {
         e.target.value = ''; // reset to allow re-selecting same file
     };
     const removeFile = (index) => setSelectedFiles(prev => prev.filter((_, i) => i !== index));
-    const formatSize = (bytes) => bytes < 1024 ? `${bytes} B` : bytes < 1024 * 1024 ? `${(bytes / 1024).toFixed(1)} KB` : `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 
     const MAX_FILE_SIZE = 50 * 1024 * 1024; // 50MB (chunked upload supports larger files)
 

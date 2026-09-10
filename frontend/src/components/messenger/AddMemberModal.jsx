@@ -4,6 +4,7 @@ import { useAuth } from '../../context/AuthContext';
 import API_ENDPOINTS from '../../config';
 import { toast } from '../../utils/toast';
 import { apiFetch } from '../../services/api';
+import { avatarInitial, displayName } from '../../utils/format';
 
 const AddMemberModal = ({ isOpen, onClose, onAdd, currentMembers = [] }) => {
     const { user, token } = useAuth();
@@ -79,11 +80,11 @@ const AddMemberModal = ({ isOpen, onClose, onAdd, currentMembers = [] }) => {
                     <div className="mb-4 p-3 bg-indigo-50 dark:bg-indigo-900/20 rounded-lg flex items-center justify-between border border-indigo-100 dark:border-indigo-900/40">
                         <div className="flex items-center gap-3 overflow-hidden">
                             <div className="w-8 h-8 rounded-full bg-gradient-to-br from-indigo-500 to-purple-500 flex items-center justify-center text-white font-bold shrink-0">
-                                {(selectedUser.username || selectedUser.address).substring(0, 1).toUpperCase()}
+                                {avatarInitial(displayName(selectedUser))}
                             </div>
                             <div className="flex-1 overflow-hidden">
                                 <div className="font-medium text-slate-900 dark:text-white truncate">
-                                    {selectedUser.username || `${selectedUser.address.substring(0, 8)}...`}
+                                    {displayName(selectedUser)}
                                 </div>
                             </div>
                         </div>
@@ -127,11 +128,11 @@ const AddMemberModal = ({ isOpen, onClose, onAdd, currentMembers = [] }) => {
                                     className={`w-full p-3 rounded-lg flex items-center gap-3 transition-colors text-left ${selectedUser?.address === u.address ? 'bg-indigo-50 dark:bg-indigo-900/20 ring-1 ring-indigo-500' : 'hover:bg-slate-100 dark:hover:bg-slate-700'}`}
                                 >
                                     <div className="w-10 h-10 rounded-full bg-gradient-to-br from-indigo-500 to-purple-500 flex items-center justify-center text-white font-bold shrink-0">
-                                        {(u.username || u.address).substring(0, 1).toUpperCase()}
+                                        {avatarInitial(displayName(u))}
                                     </div>
                                     <div className="flex-1 overflow-hidden">
                                         <div className="font-medium text-slate-900 dark:text-white truncate">
-                                            {u.username || `${u.address.substring(0, 8)}...`}
+                                            {displayName(u)}
                                         </div>
                                         <div className="text-xs text-slate-500 font-mono truncate">{u.address}</div>
                                     </div>

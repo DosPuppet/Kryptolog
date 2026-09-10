@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { MessageSquare, Plus, Lock, Users } from 'lucide-react';
+import { avatarInitial, displayName } from '../../utils/format';
 
 const ConversationList = ({ conversations, activeConversation, onSelect, onNewChat, groupConversations, activeGroupConversation, onSelectGroup, onNewGroup }) => {
 
@@ -72,7 +73,7 @@ const ConversationList = ({ conversations, activeConversation, onSelect, onNewCh
                                             ? 'bg-white/20 text-white backdrop-blur-sm'
                                             : 'bg-gradient-to-br from-indigo-500 to-purple-500 text-white'
                                             }`}>
-                                            {(c.user.username || c.user.address).substring(0, 1).toUpperCase()}
+                                            {avatarInitial(displayName(c.user))}
                                         </div>
                                         {c.unread_count > 0 && (
                                             <div className="absolute -top-1 -right-1 min-w-[20px] h-5 px-1 bg-red-500 rounded-full border-2 border-white dark:border-slate-900 flex items-center justify-center animate-in zoom-in">
@@ -89,7 +90,7 @@ const ConversationList = ({ conversations, activeConversation, onSelect, onNewCh
                                                 ? 'text-white'
                                                 : 'text-slate-900 dark:text-white'
                                                 }`}>
-                                                {c.user.username || `${c.user.address.substring(0, 8)}...`}
+                                                {displayName(c.user)}
                                             </span>
                                             {c.last_message && (
                                                 <span className={`text-[10px] ${activeConversation?.user.address === c.user.address

@@ -9,6 +9,7 @@ import API_ENDPOINTS from '../config';
 import { uploadChunkedFile, uploadMultipleChunkedFiles, CHUNK_SIZE } from '../utils/fileChunks';
 import { toast } from '../utils/toast';
 import { apiFetch } from '../services/api';
+import { formatSize } from '../utils/format';
 
 export default function MultisigCreateModal({ isOpen, onClose, onCreated }) {
     const { user, token } = useAuth();
@@ -40,7 +41,6 @@ export default function MultisigCreateModal({ isOpen, onClose, onCreated }) {
         e.target.value = '';
     };
     const removeFile = (index) => setSelectedFiles(prev => prev.filter((_, i) => i !== index));
-    const formatSize = (bytes) => bytes < 1024 ? `${bytes} B` : bytes < 1024 * 1024 ? `${(bytes / 1024).toFixed(1)} KB` : `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 
     const [signers, setSigners] = useState([]); // List of user objects
     const [recipients, setRecipients] = useState([]); // List of user objects
