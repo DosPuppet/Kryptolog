@@ -3,9 +3,9 @@ Shared test fixtures for Kryptolog backend tests.
 
 Runs against a real PostgreSQL database (TEST_DATABASE_URL, defaulting to the
 `kryptolog_test` DB on the docker-compose Postgres). PQC signing runs
-in-process via liboqs (ML-DSA-44) — there is no sidecar to mock. We only stub
-the login-challenge check `auth.verify_signature` (tests post a placeholder
-client signature); JWT issuance and verification run for real against an
+in-process via liboqs (ML-DSA-44) — there is no sidecar to mock. Two client
+signature checks are stubbed (see `_mock_pqc`) because the tests post
+placeholder signatures; JWT issuance and verification run for real against an
 ephemeral server key.
 """
 
@@ -144,7 +144,7 @@ def _mock_pqc():
     the login challenge (`verify_signature`) and the multisig approval
     (`verify_message_signature`). Tests that need the *real* verifier override
     these (see test_multisig signature-gate test / the unit tests in test_pqc).
-    Real ML-DSA-44 JWT issue/verify (in-process liboqs) is left untouched."""
+    Server-side token issue/verify is left untouched (HS256, audit §2/§3)."""
     with patch("auth.verify_signature", return_value=True), \
          patch("auth.verify_message_signature", return_value=True):
         yield

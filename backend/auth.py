@@ -10,7 +10,7 @@ logger = logging.getLogger("kryptolog.auth")
 
 # --- Post-quantum signature config (NIST FIPS 204) ---
 # liboqs (ML-DSA-44) is used in-process to verify CLIENT login challenges and
-# multisig/document approvals — the only place server-side PQC is genuinely
+# multisig approvals — the only place server-side PQC is genuinely
 # needed (the old Node `pqc_service.js` sidecar, audit A1/M1, is gone). Byte
 # encodings are interop-verified against the browser/extension's
 # @noble/post-quantum (see tests/test_pqc.py).
@@ -69,8 +69,8 @@ def generate_nonce():
 
 
 # Domain separation (audit H1): every signed payload is wrapped with a context
-# tag so a signature minted for one purpose (e.g. approving multisig/document
-# content) can never be replayed as another (e.g. this login challenge). The
+# tag so a signature minted for one purpose (e.g. approving multisig content)
+# can never be replayed as another (e.g. this login challenge). The
 # context is fixed here in code, never drawn from user-supplied content, and the
 # header line cannot be reproduced by a content body, so the namespaces are
 # disjoint. Clients apply the identical wrapper (frontend `domainSeparate`).
@@ -116,7 +116,7 @@ def multisig_approval_message(workflow_id, secret_id, ciphertext_sha256_hex: str
     hash the ciphertext it stores. A signer therefore signs the SHA-256 of the
     workflow's stored ciphertext, bound to the workflow + secret id. Domain-
     separated under `multisig-approval` (H1) so it can't be replayed as a login
-    or a content/document signature. Clients build the byte-identical string
+    challenge. Clients build the byte-identical string
     (frontend `multisigApprovalMessage`)."""
     body = f"workflow={workflow_id}\nsecret={secret_id}\nct={ciphertext_sha256_hex}"
     return _domain_separate(_CTX_MULTISIG, body)

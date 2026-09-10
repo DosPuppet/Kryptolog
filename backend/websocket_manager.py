@@ -214,7 +214,7 @@ class ConnectionManager:
     # ---------- registry ----------
 
     async def connect(self, websocket: WebSocket, user_address: str):
-        # WebSocket is already accepted in main.py
+        # The socket is accepted by the /ws endpoint, before authentication.
         if user_address not in self.active_connections:
             self.active_connections[user_address] = []
         self.active_connections[user_address].append(websocket)

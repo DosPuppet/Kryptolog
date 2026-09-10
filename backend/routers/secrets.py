@@ -361,7 +361,7 @@ def upload_chunk(request: Request, chunk: schemas.FileChunkUpload,
     new_chunk_size = len(chunk.encrypted_data) / 2
 
     if (current_total_bytes + new_chunk_size) > config.MAX_TOTAL_FILE_SIZE:
-        raise HTTPException(status_code=413, detail="File too large (Max 50MB)")
+        raise HTTPException(status_code=413, detail=f"File too large (max {config.MAX_TOTAL_FILE_SIZE // (1024 * 1024)}MB)")
 
     new_chunk = models.FileChunk(
         secret_id=chunk.secret_id,

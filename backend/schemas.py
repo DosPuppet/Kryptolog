@@ -48,7 +48,7 @@ class SecretBase(BaseModel):
     # Encrypted title blob (audit M-3): marker + AES-GCM envelope JSON. Legacy
     # plaintext names remain valid (they're just short strings).
     name: str = Field(..., max_length=10_000)
-    type: str = Field("standard") # 'standard' | 'signed_document'
+    type: str = Field("standard") # 'standard' | 'file' | 'signed_document'
     # 500KB limit for SecretBase.encrypted_data. Large files use FileChunks.
     encrypted_data: str = Field(..., max_length=MAX_SECRET_BLOB_LEN)
     # Key is small, keeping strict limit
