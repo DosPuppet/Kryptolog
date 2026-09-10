@@ -8,9 +8,10 @@ import models
 import schemas
 from database import get_db
 from dependencies import get_current_user, limiter
+from routers.secrets import create_secret_with_owner_grant
 from security import authorization
 from utils.clock import utcnow_naive
-from utils.push import notify_user_push
+from utils.push import display_name, notify_user_push
 
 router = APIRouter(prefix="/multisig", tags=["multisig"])
 
@@ -54,25 +55,8 @@ def create_multisig_workflow(
             detail="All signers and recipients must be registered users",
         )
 
-    new_secret = models.Secret(
-        owner_address=current_user.address,
-        name=workflow.secret_data.name,
-        type=workflow.secret_data.type,
-        encrypted_data=workflow.secret_data.encrypted_data,
-    )
-    db.add(new_secret)
-    db.flush()
-
-    # Schema validation ensures encrypted_key is present in secret_data
-    owner_grant = models.AccessGrant(
-        secret_id=new_secret.id,
-        grantee_address=current_user.address,
-        encrypted_key=workflow.secret_data.encrypted_key,
-    )
-    db.add(owner_grant)
-
-    db.commit()  # Commit secret and grant
-    db.refresh(new_secret)
+    # Schema validation guarantees secret_data carries the owner's wrapped key.
+    new_secret = create_secret_with_owner_grant(db, current_user, workflow.secret_data)
 
     new_workflow = models.MultisigWorkflow(
         name=workflow.name,
@@ -113,7 +97,7 @@ def create_multisig_workflow(
     db.commit()
     db.refresh(new_workflow)
 
-    sender_name = current_user.username or f"{current_user.address[:8]}..."
+    sender_name = display_name(current_user)
     for signer_addr in workflow.signers:
         s_addr = signer_addr.lower()
         if s_addr != current_user.address:
@@ -398,7 +382,7 @@ def sign_multisig_workflow(
     # at all. This also releases the FOR UPDATE lock taken above.
     db.commit()
 
-    sender_name = current_user.username or f"{current_user.address[:8]}..."
+    sender_name = display_name(current_user)
 
     # Notifications are best-effort and deliberately AFTER the commit — a push
     # failure must never roll back a recorded signature.
@@ -462,7 +446,7 @@ def reject_multisig_workflow(
     wf.rejected_at = utcnow_naive()
     db.commit()
 
-    sender_name = current_user.username or f"{current_user.address[:8]}..."
+    sender_name = display_name(current_user)
     if wf.owner_address != current_user.address:
         notify_user_push(
             db,

@@ -21,7 +21,7 @@ import schemas
 from database import SessionLocal, get_db
 from dependencies import get_current_user, limiter, user_for_token
 from security.crypto_validation import is_usable_encryption_key
-from utils.push import notify_user_push_async
+from utils.push import display_name, notify_user_push_async
 from websocket_manager import manager
 
 logger = logging.getLogger("kryptolog.messenger")
@@ -72,7 +72,7 @@ async def send_message(
 
     await manager.send_personal_message(msg_data, recipient_addr)
 
-    sender_name = current_user.username or f"{current_user.address[:8]}..."
+    sender_name = display_name(current_user)
     await notify_user_push_async(
         db,
         recipient_addr,

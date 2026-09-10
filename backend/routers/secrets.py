@@ -12,7 +12,7 @@ from database import get_db
 from dependencies import get_current_user, limiter
 from security import authorization
 from utils.clock import utcnow_naive
-from utils.push import notify_user_push_async
+from utils.push import display_name, notify_user_push_async
 from websocket_manager import manager
 
 router = APIRouter(tags=["secrets"])
@@ -64,6 +64,41 @@ def _refuse_if_workflow_managed(db: Session, secret_id: int, verb: str) -> None:
         )
 
 
+def create_secret_with_owner_grant(
+    db: Session, owner: models.User, secret_data: schemas.SecretBase
+) -> models.Secret:
+    """Create a secret and the owner's own access grant, and commit both.
+
+    A secret is useless without a grant: the content is encrypted under a key
+    only AccessGrant carries, so creating one without the other leaves a row
+    its own owner cannot read. Multisig workflow creation builds the same pair,
+    which is why this is a function rather than eight statements in two files.
+    """
+    secret = models.Secret(
+        owner_address=owner.address,
+        name=secret_data.name,
+        type=secret_data.type,
+        encrypted_data=secret_data.encrypted_data,
+    )
+    db.add(secret)
+    db.flush()  # assigns secret.id, which the grant needs
+
+    db.add(
+        models.AccessGrant(
+            secret_id=secret.id,
+            grantee_address=owner.address,
+            encrypted_key=secret_data.encrypted_key,
+        )
+    )
+    db.commit()
+    db.refresh(secret)
+
+    # Not a column: the response carries the caller's wrap, which lives on
+    # AccessGrant. Set on the instance so Pydantic can read it.
+    secret.encrypted_key = secret_data.encrypted_key
+    return secret
+
+
 @router.post("/secrets", response_model=schemas.SecretResponse)
 @limiter.limit("20/minute")
 def create_secret(
@@ -72,28 +107,7 @@ def create_secret(
     current_user: models.User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    new_secret = models.Secret(
-        owner_address=current_user.address,
-        name=secret.name,
-        type=secret.type,
-        encrypted_data=secret.encrypted_data,
-    )
-    db.add(new_secret)
-    db.flush()  # Flush to get ID
-
-    owner_grant = models.AccessGrant(
-        secret_id=new_secret.id,
-        grantee_address=current_user.address,
-        encrypted_key=secret.encrypted_key,
-    )
-    db.add(owner_grant)
-    db.commit()
-    db.refresh(new_secret)
-
-    # Not a column: the response carries the caller's wrap, which lives on
-    # AccessGrant. Set on the instance so Pydantic can read it.
-    new_secret.encrypted_key = secret.encrypted_key
-    return new_secret
+    return create_secret_with_owner_grant(db, current_user, secret)
 
 
 @router.get("/secrets", response_model=list[schemas.SecretSummaryResponse])
@@ -229,7 +243,7 @@ async def share_secret(
         grantee_address,
     )
 
-    sender_name = current_user.username or f"{current_user.address[:8]}..."
+    sender_name = display_name(current_user)
     await notify_user_push_async(
         db,
         grantee_address,

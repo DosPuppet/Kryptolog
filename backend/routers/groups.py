@@ -10,7 +10,7 @@ from database import get_db
 from dependencies import get_current_user, limiter
 from security import authorization
 from security.crypto_validation import is_usable_encryption_key
-from utils.push import notify_many_push_async
+from utils.push import display_name, notify_many_push_async
 from websocket_manager import manager
 
 router = APIRouter(prefix="/groups", tags=["groups"])
@@ -260,7 +260,7 @@ async def send_group_message(
     msg_json = schemas.GroupMessageResponse.model_validate(msg).model_dump(mode="json")
     msg_data = {"type": "NEW_GROUP_MESSAGE", "message": msg_json}
 
-    sender_name = current_user.username or f"{current_user.address[:8]}..."
+    sender_name = display_name(current_user)
 
     for member in channel.members:
         await manager.send_personal_message(msg_data, member.user_address)

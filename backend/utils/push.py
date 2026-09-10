@@ -9,6 +9,17 @@ from security.url_guard import UnsafeUrlError, build_guarded_session
 
 logger = logging.getLogger(__name__)
 
+
+def display_name(user) -> str:
+    """How to name a user in a notification the server composes itself.
+
+    Falls back to a truncated address because the username is optional. The
+    length is a display choice, not a security one, but it was written out six
+    times, so changing it meant finding all six.
+    """
+    return user.username or f"{user.address[:8]}..."
+
+
 # Hard ceiling on how long one push may take (connect + read, seconds).
 #
 # `requests` — and therefore pywebpush — defaults to NO timeout. The endpoint is
