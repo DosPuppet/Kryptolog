@@ -1,12 +1,13 @@
 import { useState } from 'react';
-import { Lock, Copy, FileText, Share2, Trash2, FileSignature, BadgeCheck, AlertTriangle, Download, Users, ShieldCheck, ChevronDown } from 'lucide-react';
+import { Lock, Copy, FileText, Share2, Trash2, FileSignature, BadgeCheck, AlertTriangle, Users, ShieldCheck, ChevronDown } from 'lucide-react';
 import { useTheme } from '../../context/ThemeContext';
 import { useAuth } from '../../context/AuthContext';
 import { verifySignaturePQC, domainSeparate, SIGNING_CONTEXT } from '../../utils/crypto';
 import API_ENDPOINTS from '../../config';
 import { toast } from '../../utils/toast';
 import { apiFetch } from '../../services/api';
-import { formatSize } from '../../utils/format';
+import { unwrapSignedDocument, readFileDescriptor } from '../../utils/secretContent';
+import SecretContentPane from './SecretContentPane';
 
 const SecretItem = ({ secret, decryptedContent, onDecrypt, onLock, onDelete, onShare, onViewDetails, viewMode = 'grid', isSharedView }) => {
     const { theme } = useTheme();
@@ -97,115 +98,17 @@ const SecretItem = ({ secret, decryptedContent, onDecrypt, onLock, onDelete, onS
         }
     };
 
-    // Render Logic
-    let content = decryptedContent;
-    let isSignedDoc = false;
-    let signedPayload = null;
+    // The one place in this Tailwind codebase with hard-coded hex, written out
+    // twice before. Kept as inline style because it is read from the theme
+    // context rather than expressed as a dark: variant.
+    const contentPaneStyle = {
+        backgroundColor: theme === 'dark' ? '#152033' : '#f8fafc',
+        borderColor: theme === 'dark' ? '#1e3048' : '#e2e8f0',
+        color: theme === 'dark' ? '#cbd5e1' : '#1e293b',
+    };
 
-    if (content) {
-        try {
-            const parsed = JSON.parse(content);
-            if (parsed.signature && parsed.signerPublicKey && parsed.content) {
-                isSignedDoc = true;
-                signedPayload = parsed;
-                content = parsed.content;
-
-                // If useSecrets dynamically injected local Blob URLs for chunked files.
-                // Multi-file signed documents carry `fileUrls` (an array already shaped
-                // as {name, mime, content, size}); single files carry `fileUrl`/`fileMeta`.
-                if (parsed.fileUrls && Array.isArray(parsed.fileUrls)) {
-                    content = JSON.stringify({
-                        type: 'files',
-                        items: parsed.fileUrls
-                    });
-                } else if (parsed.fileUrl && parsed.fileMeta) {
-                    content = JSON.stringify({
-                        type: 'file',
-                        name: parsed.fileMeta.file_name,
-                        mime: parsed.fileMeta.mime_type,
-                        content: parsed.fileUrl,
-                        size: parsed.fileMeta.total_size
-                    });
-                }
-            }
-        } catch { /* best-effort: failure is non-fatal */ }
-    }
-
-    // Inner Content (File/Text)
-    let innerDisplay = content;
-    let isFile = false;
-
-    if (content) {
-        try {
-            const parsed = JSON.parse(content);
-            if (parsed && parsed.type === 'files' && parsed.items) {
-                // Multi-file secret
-                isFile = true;
-                innerDisplay = (
-                    <div className="flex flex-col gap-2">
-                        <div className="text-xs text-slate-500 mb-1">{parsed.items.length} files</div>
-                        {parsed.items.map((item, idx) => {
-                            const isImage = item.mime && item.mime.startsWith('image/');
-                            return (
-                                <div key={idx} className="flex flex-col gap-1">
-                                    <div className="flex items-center gap-2">
-                                        <FileText className="w-4 h-4 text-indigo-300" />
-                                        <span className="font-medium text-indigo-300">{item.name}</span>
-                                        <span className="text-xs text-slate-500">
-                                            ({item.mime}{item.size ? ` · ${formatSize(item.size)}` : ''})
-                                        </span>
-                                        <a
-                                            href={item.content}
-                                            download={item.name}
-                                            className="flex items-center gap-1 px-2 py-1 bg-indigo-600 hover:bg-indigo-500 text-white rounded text-xs transition-colors ml-auto"
-                                        >
-                                            <Download className="w-3 h-3" /> Download
-                                        </a>
-                                    </div>
-                                    {isImage && (
-                                        <img
-                                            src={item.content}
-                                            alt={item.name}
-                                            className="max-w-xs max-h-32 rounded-lg border border-slate-700 object-contain ml-6"
-                                        />
-                                    )}
-                                </div>
-                            );
-                        })}
-                    </div>
-                );
-            } else if (parsed && parsed.type === 'file' && parsed.content) {
-                isFile = true;
-
-                const isImage = parsed.mime && parsed.mime.startsWith('image/');
-
-                innerDisplay = (
-                    <div className="flex flex-col gap-2">
-                        <div className="flex items-center gap-2 text-indigo-300">
-                            <FileText className="w-4 h-4" />
-                            <span className="font-medium">{parsed.name}</span>
-                            <span className="text-xs text-slate-500">
-                                ({parsed.mime}{parsed.size ? ` · ${formatSize(parsed.size)}` : ''})
-                            </span>
-                        </div>
-                        {isImage && (
-                            <img
-                                src={parsed.content}
-                                alt={parsed.name}
-                                className="max-w-xs max-h-48 rounded-lg border border-slate-700 object-contain"
-                            />
-                        )}
-                        <button
-                            onClick={() => handleDownload(content)}
-                            className="flex items-center gap-2 px-3 py-2 bg-indigo-600 hover:bg-indigo-500 text-white rounded-lg text-sm w-fit transition-colors"
-                        >
-                            <Download className="w-4 h-4" /> Download File
-                        </button>
-                    </div>
-                );
-            }
-        } catch { /* best-effort: failure is non-fatal */ }
-    }
+    const { content, isSignedDoc, signedPayload } = unwrapSignedDocument(decryptedContent);
+    const isFile = readFileDescriptor(content) !== null;
 
     // === LIST VIEW ===
     if (viewMode === 'list') {
@@ -318,10 +221,10 @@ const SecretItem = ({ secret, decryptedContent, onDecrypt, onLock, onDelete, onS
                         )}
 
                         <div
-                            style={{ backgroundColor: theme === 'dark' ? '#152033' : '#f8fafc', borderColor: theme === 'dark' ? '#1e3048' : '#e2e8f0', color: theme === 'dark' ? '#cbd5e1' : '#1e293b' }}
+                            style={contentPaneStyle}
                             className="p-3 rounded-lg border font-mono text-sm whitespace-pre-wrap break-all relative group"
                         >
-                            {innerDisplay}
+                            <SecretContentPane content={content} onDownload={handleDownload} />
                             {!isFile && (
                                 <button
                                     onClick={() => handleCopy(content)}
@@ -432,10 +335,10 @@ const SecretItem = ({ secret, decryptedContent, onDecrypt, onLock, onDelete, onS
                     )}
 
                     <div
-                        style={{ backgroundColor: theme === 'dark' ? '#152033' : '#f8fafc', borderColor: theme === 'dark' ? '#1e3048' : '#e2e8f0', color: theme === 'dark' ? '#cbd5e1' : '#1e293b' }}
+                        style={contentPaneStyle}
                         className="p-4 rounded-lg border font-mono text-sm whitespace-pre-wrap break-all relative group"
                     >
-                        {innerDisplay}
+                        <SecretContentPane content={content} onDownload={handleDownload} />
                         {!isFile && (
                             <button
                                 onClick={() => handleCopy(content)}
