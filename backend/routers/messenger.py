@@ -23,8 +23,6 @@ router = APIRouter(
 @router.post("", response_model=schemas.MessageResponse)
 @limiter.limit("20/minute")
 async def send_message(request: Request, msg: schemas.MessageCreate, current_user: models.User = Depends(get_current_user), db: Session = Depends(get_db)):
-    if len(msg.content) > 10000:
-        raise HTTPException(status_code=400, detail="Message too long")
     recipient_addr = msg.recipient_address.lower()
     recipient = db.query(models.User).filter(models.User.address == recipient_addr).first()
     if not recipient:
@@ -157,9 +155,6 @@ def get_conversations(
 @router.post("/history", response_model=List[schemas.MessageResponse])
 @limiter.limit("60/minute")
 def get_message_history(request: Request, req: schemas.HistoryRequest, current_user: models.User = Depends(get_current_user), db: Session = Depends(get_db)):
-    if req.limit > 100:
-        req.limit = 100
-    
     partner_address = req.partner_address.lower()
     
     msgs = db.query(models.Message).filter(

@@ -335,7 +335,8 @@ class Token(BaseModel):
 
 class KeyTransferCreate(BaseModel):
     # Client-side-encrypted vault blob (JSON of {salt, iv, data}, all hex). The
-    # server never sees the passphrase that decrypts it. Size-capped (config).
+    # server never sees the passphrase that decrypts it. This bound is the only
+    # cap: the router's 413 sat above a larger config value and never fired.
     ciphertext: str = Field(..., max_length=4_000_000)
 
 class KeyTransferCreateResponse(BaseModel):

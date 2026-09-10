@@ -230,9 +230,6 @@ async def send_group_message(
     current_user: models.User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    if len(data.content) > 50000:
-        raise HTTPException(status_code=400, detail="Message too long")
-
     channel = (
         db.query(models.GroupChannel)
         .options(joinedload(models.GroupChannel.members))

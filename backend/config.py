@@ -7,8 +7,6 @@ MAX_TOTAL_FILE_SIZE = 50 * 1024 * 1024
 
 # Device-to-device key transfer relay (encrypted vault blob held briefly).
 KEY_TRANSFER_TTL_MINUTES = 10
-# Generous ceiling for an encrypted multi-account vault blob (hex JSON).
-MAX_KEY_TRANSFER_SIZE = 4 * 1024 * 1024
 
 
 def invites_required() -> bool:

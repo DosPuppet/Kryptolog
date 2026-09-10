@@ -43,9 +43,6 @@ def create_transfer(
     current_user: models.User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    if len(body.ciphertext) > config.MAX_KEY_TRANSFER_SIZE:
-        raise HTTPException(status_code=413, detail="Transfer payload too large")
-
     # Opportunistically purge expired rows so the table can't accumulate.
     # Naive UTC comparison to match the (timezone-less) column.
     db.query(models.KeyTransfer).filter(
