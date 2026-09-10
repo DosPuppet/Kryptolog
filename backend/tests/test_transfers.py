@@ -1,9 +1,12 @@
 """Tests for the device-to-device key transfer relay (/transfers)."""
-import models
 from conftest import (
-    TEST_USER_ADDRESS, TEST_ENCRYPTION_KEY,
-    do_login, auth_header,
+    TEST_ENCRYPTION_KEY,
+    TEST_USER_ADDRESS,
+    auth_header,
+    do_login,
 )
+
+import models
 
 BLOB = '{"salt":"00","iv":"11","data":"deadbeef"}'
 
@@ -45,7 +48,7 @@ class TestClaimTransfer:
         tid = client.post("/transfers", json={"ciphertext": BLOB}, headers=auth_header(token)).json()["id"]
         # Force-expire the row. Naive UTC to match the column convention — an
         # aware datetime gets shifted through the Postgres session timezone.
-        from datetime import datetime, timezone, timedelta
+        from datetime import datetime, timedelta, timezone
         row = db_session.query(models.KeyTransfer).filter(models.KeyTransfer.id == tid).first()
         row.expires_at = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(minutes=1)
         db_session.commit()

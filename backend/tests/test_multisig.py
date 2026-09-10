@@ -1,8 +1,7 @@
 """Tests for /multisig endpoints — workflow creation, signing, completion."""
 
 import pytest
-
-from conftest import auth_header, do_login, synthetic_address, TEST_ENCRYPTION_KEY
+from conftest import TEST_ENCRYPTION_KEY, auth_header, do_login, synthetic_address
 
 
 def _create_workflow(client, token, signer_addresses, recipient_addresses=None, threshold=None):

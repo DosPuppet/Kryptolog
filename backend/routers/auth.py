@@ -1,10 +1,16 @@
-from fastapi import APIRouter, Depends, HTTPException, status, Request
-from dependencies import limiter, get_current_user
+from datetime import datetime, timedelta, timezone
+
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from sqlalchemy.orm import Session
-from datetime import datetime, timezone, timedelta
-import models, schemas, auth, config, invites
+
+import auth
+import config
+import invites
+import models
+import schemas
 from database import get_db
-from security.crypto_validation import is_valid_ml_kem_public_key, is_valid_ml_dsa_public_key
+from dependencies import get_current_user, limiter
+from security.crypto_validation import is_valid_ml_dsa_public_key, is_valid_ml_kem_public_key
 from security.usernames import InvalidUsername, normalize_username, username_taken
 
 router = APIRouter(

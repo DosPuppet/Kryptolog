@@ -1,8 +1,8 @@
-import os
 import json
-from pywebpush import webpush, WebPushException
 import logging
+import os
 
+from pywebpush import WebPushException, webpush
 from starlette.concurrency import run_in_threadpool
 
 from security.url_guard import UnsafeUrlError, build_guarded_session

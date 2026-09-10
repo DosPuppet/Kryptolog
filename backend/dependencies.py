@@ -1,13 +1,15 @@
-import os
 import logging
-from fastapi import Depends, HTTPException, status, Request
+import os
+
+from fastapi import Depends, HTTPException, Request, status
 from fastapi.security import OAuth2PasswordBearer
+from slowapi import Limiter
+from slowapi.util import get_remote_address
 from sqlalchemy.orm import Session
+
 import auth
 import models
 from database import get_db
-from slowapi import Limiter
-from slowapi.util import get_remote_address
 
 logger = logging.getLogger("kryptolog.ratelimit")
 

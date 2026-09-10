@@ -1,10 +1,11 @@
 import asyncio
 import threading
+from unittest.mock import MagicMock, patch
 
 import pytest
+
 from models import PushSubscription
 from utils.push import PUSH_TIMEOUT_SECONDS, notify_user_push, notify_user_push_async
-from unittest.mock import patch, MagicMock
 
 
 @pytest.fixture(autouse=True)

@@ -6,7 +6,7 @@ over-spend it (no read-then-write race). Times are naive UTC to match the
 DateTime columns elsewhere, which are declared without timezone=True.
 """
 import secrets
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import or_
 from sqlalchemy.orm import Session

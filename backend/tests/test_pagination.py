@@ -14,11 +14,12 @@ the creation path is not what is under test.
 import uuid
 from datetime import datetime, timedelta, timezone
 
-import models
 from conftest import (
     TEST_ENCRYPTION_KEY,
     auth_header,
 )
+
+import models
 
 # Deliberately more than one default page (50) but less than two, so a full
 # walk is exactly two requests and a short second page proves the end.

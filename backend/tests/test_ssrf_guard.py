@@ -3,8 +3,9 @@
 Covers the address matrix from the audit plus the redirect / DNS-rebinding
 variants that made the finding exploitable in the first place.
 """
-import pytest
 from unittest.mock import patch
+
+import pytest
 
 from security.url_guard import (
     UnsafeUrlError,

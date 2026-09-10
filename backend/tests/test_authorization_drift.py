@@ -16,10 +16,10 @@ protect against a missing check; they protect against a one-sided edit.
 import uuid
 
 import pytest
+from conftest import TEST_ENCRYPTION_KEY, auth_header, synthetic_address
 
 import models
 from security import authorization
-from conftest import TEST_ENCRYPTION_KEY, auth_header, synthetic_address
 
 STATUSES = ("pending", "completed", "rejected")
 ROLES = ("owner", "signer", "recipient", "signer+recipient", "stranger")

@@ -1,8 +1,12 @@
 """Tests for /auth endpoints — nonce generation and login flow."""
 
 from conftest import (
-    TEST_USER_ADDRESS, TEST_ENCRYPTION_KEY,
-    get_nonce, do_login, auth_header, synthetic_address,
+    TEST_ENCRYPTION_KEY,
+    TEST_USER_ADDRESS,
+    auth_header,
+    do_login,
+    get_nonce,
+    synthetic_address,
 )
 
 

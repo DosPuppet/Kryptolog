@@ -1,7 +1,6 @@
 """Tests for /users endpoints — user CRUD, authorization, and directory auth."""
 
 import pytest
-
 from conftest import auth_header
 
 

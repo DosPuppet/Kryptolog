@@ -3,12 +3,11 @@ Tests for the Group Channels feature.
 """
 import pytest
 from conftest import (
-    do_login, auth_header,
-    TEST_USER_ADDRESS_3, TEST_ENCRYPTION_KEY,
+    TEST_ENCRYPTION_KEY,
+    TEST_USER_ADDRESS_3,
+    auth_header,
+    do_login,
 )
-
-
-
 
 
 @pytest.fixture()
@@ -269,8 +268,9 @@ class TestGroupMembers:
         application check alone is not the invariant. uq_group_member_channel_user
         is, so a duplicate cannot exist for `remove_member` to miss.
         """
-        import models
         from sqlalchemy.exc import IntegrityError
+
+        import models
 
         token1, u1 = user1
         _, u2 = user2

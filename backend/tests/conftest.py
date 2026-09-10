@@ -10,9 +10,11 @@ ephemeral server key.
 """
 
 import hashlib
-import sys, os
-import pytest
+import os
+import sys
 from unittest.mock import patch
+
+import pytest
 
 # Ensure backend root is importable
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
@@ -37,10 +39,9 @@ from fastapi.testclient import TestClient
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
-from models import Base
 from database import get_db
 from main import app
-
+from models import Base
 
 # ---------- Database (real Postgres, fresh schema per test) ----------
 
@@ -60,7 +61,6 @@ app.dependency_overrides[get_db] = override_get_db
 
 
 from security.crypto_validation import ML_DSA_44_PUBLIC_KEY_HEX_LEN
-
 
 # ---------- Constants ----------
 

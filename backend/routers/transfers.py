@@ -11,14 +11,16 @@ GET  /transfers/{id}  — unauthenticated (the target device has no identity yet
                         guarded by the unguessable id, single-use, and TTL.
 """
 import secrets as _secrets
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy.orm import Session
 
-import models, schemas, config
+import config
+import models
+import schemas
 from database import get_db
-from dependencies import limiter, get_current_user
+from dependencies import get_current_user, limiter
 
 router = APIRouter(prefix="/transfers", tags=["transfers"])
 

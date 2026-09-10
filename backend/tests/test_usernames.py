@@ -5,11 +5,15 @@ identically must not be two accounts. `normalize_username` only handled case
 before this; every other way of writing "alice" was a separate registration.
 """
 import pytest
-
 from conftest import (
-    TEST_USER_ADDRESS, TEST_ENCRYPTION_KEY,
-    do_login, auth_header, get_nonce, synthetic_address,
+    TEST_ENCRYPTION_KEY,
+    TEST_USER_ADDRESS,
+    auth_header,
+    do_login,
+    get_nonce,
+    synthetic_address,
 )
+
 from security.usernames import InvalidUsername, normalize_username
 
 

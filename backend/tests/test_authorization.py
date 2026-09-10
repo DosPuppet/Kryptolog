@@ -6,11 +6,15 @@ filtered on expiry.
 """
 from datetime import datetime, timedelta, timezone
 
-import models
 from conftest import (
-    TEST_USER_ADDRESS, TEST_USER_ADDRESS_2, TEST_ENCRYPTION_KEY,
-    do_login, auth_header,
+    TEST_ENCRYPTION_KEY,
+    TEST_USER_ADDRESS,
+    TEST_USER_ADDRESS_2,
+    auth_header,
+    do_login,
 )
+
+import models
 
 
 def _naive_utc(dt):

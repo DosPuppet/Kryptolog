@@ -12,13 +12,17 @@ fully-signed workflow in `pending` with no recovery path.
 import threading
 
 import pytest
+from conftest import (
+    TEST_ENCRYPTION_KEY,
+    TestingSessionLocal,
+    auth_header,
+    do_login,
+    synthetic_address,
+)
 from fastapi.testclient import TestClient
 from sqlalchemy.exc import IntegrityError
 
 import models
-from conftest import (
-    TEST_ENCRYPTION_KEY, TestingSessionLocal, auth_header, do_login, synthetic_address,
-)
 from main import app
 
 

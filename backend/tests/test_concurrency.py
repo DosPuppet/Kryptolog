@@ -11,13 +11,16 @@ a race, but the pre-fix code fails these reliably (verified by reverting).
 import threading
 
 import pytest
+from conftest import (
+    TEST_ENCRYPTION_KEY,
+    TEST_USER_ADDRESS,
+    TestingSessionLocal,
+    auth_header,
+    do_login,
+)
 from fastapi.testclient import TestClient
 
 import models
-from conftest import (
-    TEST_USER_ADDRESS, TEST_ENCRYPTION_KEY,
-    TestingSessionLocal, do_login, auth_header,
-)
 from main import app
 
 CONCURRENCY = 24

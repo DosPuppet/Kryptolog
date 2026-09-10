@@ -5,11 +5,15 @@ creation*. `config.invites_required()` is read at call time, so we toggle the
 env var per-test with monkeypatch.
 """
 import pytest
-
 from conftest import (
-    TEST_USER_ADDRESS, TEST_USER_ADDRESS_2, TEST_ENCRYPTION_KEY,
-    get_nonce, do_login, synthetic_address,
+    TEST_ENCRYPTION_KEY,
+    TEST_USER_ADDRESS,
+    TEST_USER_ADDRESS_2,
+    do_login,
+    get_nonce,
+    synthetic_address,
 )
+
 import invites
 from database import get_db
 from main import app

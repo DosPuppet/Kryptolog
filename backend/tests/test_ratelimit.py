@@ -7,7 +7,7 @@ trusted proxy, otherwise a client could spoof headers to dodge limits.
 
 from starlette.requests import Request
 
-from dependencies import client_ip, TRUSTED_PROXY_IPS, _ratelimit_storage_uri
+from dependencies import TRUSTED_PROXY_IPS, _ratelimit_storage_uri, client_ip
 
 
 def _request(peer_host, headers=None):

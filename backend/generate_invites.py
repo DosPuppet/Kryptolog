@@ -13,10 +13,9 @@ Examples:
 """
 import argparse
 
-from database import SessionLocal
-from models import Base
-from database import engine
 import invites
+from database import SessionLocal, engine
+from models import Base
 
 
 def main():

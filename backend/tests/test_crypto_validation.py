@@ -3,8 +3,8 @@ import pytest
 
 from security.crypto_validation import (
     LEGACY_MIN_KEY_LEN,
-    ML_KEM_768_PUBLIC_KEY_HEX_LEN,
     ML_DSA_44_PUBLIC_KEY_HEX_LEN,
+    ML_KEM_768_PUBLIC_KEY_HEX_LEN,
     is_hex,
     is_usable_encryption_key,
     is_valid_ml_dsa_public_key,

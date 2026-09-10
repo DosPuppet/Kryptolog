@@ -5,8 +5,9 @@ push through a field. The cryptographic format checks live in
 security/crypto_validation.py and are covered by test_crypto_validation.py.
 """
 
-import schemas
 from conftest import TEST_ENCRYPTION_KEY, TEST_USER_ADDRESS, auth_header, do_login
+
+import schemas
 
 
 class TestBoundsAreSane:

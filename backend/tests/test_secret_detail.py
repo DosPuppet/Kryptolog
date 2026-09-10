@@ -12,8 +12,9 @@ response that stops carrying a field looks fine until something needed it.
 """
 from datetime import datetime, timedelta, timezone
 
-import models
 from conftest import auth_header
+
+import models
 
 
 def _naive_utc(dt):

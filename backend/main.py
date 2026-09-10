@@ -1,21 +1,22 @@
+import logging
+import os
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-import logging
-import os
 
 # Configure root logging once, at the app entrypoint, so module loggers
 # (kryptolog.*) emit. Honors LOG_LEVEL (default INFO).
 logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO").upper())
 logger = logging.getLogger("kryptolog.main")
 
-from routers import auth, users, secrets, multisig, messenger, groups, notifications, transfers
-from dependencies import limiter
+from fastapi import Request
 from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 from starlette.middleware.base import BaseHTTPMiddleware
-from fastapi import Request
+
+from dependencies import limiter
+from routers import auth, groups, messenger, multisig, notifications, secrets, transfers, users
 
 # ── App & Middleware (initialised FIRST so CORS always works) ───
 
@@ -80,6 +81,7 @@ app.add_middleware(SecurityHeadersMiddleware)
 
 # CORS configuration
 import config
+
 origins = config.get_allowed_origins()
 if origins:
     logger.info("Loaded ALLOWED_ORIGINS: %s", origins)
@@ -119,6 +121,7 @@ app.add_middleware(
 # router module above. In production this raises if no persistent JWT secret is
 # set, so the process never starts serving with an ephemeral one.
 import auth as signing
+
 signing.get_jwt_secret()
 
 # ── Routers ─────────────────────────────────────────────────────

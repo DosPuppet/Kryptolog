@@ -1,8 +1,9 @@
-import pytest
 from unittest.mock import patch
 from uuid import uuid4
 
+import pytest
 from conftest import TEST_USER_ADDRESS_2
+
 
 # Chunk payloads must be real hex (audit M-2): FileChunkUpload rejects anything
 # else, and upload_chunk's size accounting divides length by 2 to get bytes,
@@ -318,7 +319,7 @@ class TestMultisigChunkAccess:
 
     def test_recipient_blocked_before_completion(self, client, user1, user2):
         """A recipient should NOT access chunks while the workflow is still pending."""
-        from conftest import do_login, TEST_ENCRYPTION_KEY, TEST_USER_ADDRESS_3
+        from conftest import TEST_ENCRYPTION_KEY, TEST_USER_ADDRESS_3, do_login
         token1, _ = user1
         _, u2 = user2
 
@@ -334,7 +335,7 @@ class TestMultisigChunkAccess:
 
     def test_recipient_can_access_after_completion(self, client, user1, user2):
         """After all signers sign, the recipient should be able to access chunks."""
-        from conftest import do_login, TEST_ENCRYPTION_KEY, TEST_USER_ADDRESS_3
+        from conftest import TEST_ENCRYPTION_KEY, TEST_USER_ADDRESS_3, do_login
         token1, _ = user1
         token2, u2 = user2
 

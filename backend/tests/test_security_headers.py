@@ -17,6 +17,7 @@ class TestSecurityHeaders:
         """X-XSS-Protection is obsolete and its legacy auditor had bypasses;
         emitting it is noise at best."""
         from fastapi.testclient import TestClient
+
         from main import app
         r = TestClient(app).get("/")
         assert "X-XSS-Protection" not in r.headers

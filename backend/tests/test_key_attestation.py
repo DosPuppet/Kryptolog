@@ -7,18 +7,20 @@ cover storage, rejection, backfill, key-change replacement, and one real
 ML-DSA-44 round-trip through the endpoint (liboqs, no mocks).
 """
 
-import sys, os
+import os
+import sys
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-import auth as auth_module
 from conftest import (
-    TEST_USER_ADDRESS,
     TEST_ENCRYPTION_KEY,
+    TEST_USER_ADDRESS,
     auth_header,
     do_login,
     get_nonce,
 )
+
+import auth as auth_module
 
 FAKE_ATTESTATION = "aa" * 100
 

@@ -3,12 +3,11 @@
 Imports the SQLAlchemy models and database engine from the Kryptolog backend
 so that autogenerate can detect schema changes.
 """
-import sys
 import os
+import sys
 from logging.config import fileConfig
 
-from sqlalchemy import engine_from_config
-from sqlalchemy import pool
+from sqlalchemy import engine_from_config, pool
 
 from alembic import context
 
@@ -17,6 +16,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 
 # Import the application's Base metadata for autogenerate support
 from models import Base
+
 target_metadata = Base.metadata
 
 # Alembic Config object
@@ -26,6 +26,7 @@ config = context.config
 # placeholder alembic.ini carries so the app engine and Alembic always target
 # the same database (incl. the startup upgrade in main.py).
 from database import SQLALCHEMY_DATABASE_URL
+
 config.set_main_option("sqlalchemy.url", SQLALCHEMY_DATABASE_URL)
 
 # Batch mode is only needed for SQLite's limited ALTER TABLE; on Postgres it
