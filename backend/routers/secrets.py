@@ -195,6 +195,8 @@ async def share_secret(
     current_user: models.User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
+    grantee_address = authorization.normalize_address(grant.grantee_address)
+
     secret = db.query(models.Secret).filter(models.Secret.id == grant.secret_id).first()
     if not secret:
         raise HTTPException(status_code=404, detail="Secret not found")
@@ -213,9 +215,7 @@ async def share_secret(
             status_code=400, detail="Cannot manually share a secret managed by a Multisig Workflow"
         )
 
-    grantee = (
-        db.query(models.User).filter(models.User.address == grant.grantee_address.lower()).first()
-    )
+    grantee = db.query(models.User).filter(models.User.address == grantee_address).first()
     if not grantee:
         raise HTTPException(status_code=404, detail="Grantee not found")
 
@@ -223,7 +223,7 @@ async def share_secret(
         db.query(models.AccessGrant)
         .filter(
             models.AccessGrant.secret_id == grant.secret_id,
-            models.AccessGrant.grantee_address == grant.grantee_address.lower(),
+            models.AccessGrant.grantee_address == grantee_address,
         )
         .first()
     )
@@ -238,7 +238,7 @@ async def share_secret(
 
     new_grant = models.AccessGrant(
         secret_id=grant.secret_id,
-        grantee_address=grant.grantee_address.lower(),
+        grantee_address=grantee_address,
         encrypted_key=grant.encrypted_key,
         expires_at=expires_at,
     )
@@ -255,13 +255,13 @@ async def share_secret(
                 "grant_id": new_grant.id,
             },
         },
-        grant.grantee_address.lower(),
+        grantee_address,
     )
 
     sender_name = current_user.username or f"{current_user.address[:8]}..."
     await notify_user_push_async(
         db,
-        grant.grantee_address.lower(),
+        grantee_address,
         title="Secret Shared",
         # Generic body: secret titles are E2EE blobs the server can't read (M-3).
         body=f"{sender_name} shared a secure secret with you",
