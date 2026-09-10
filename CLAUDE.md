@@ -13,7 +13,7 @@ Monorepo, four parts:
 | `backend/` | FastAPI + SQLAlchemy + Alembic, PostgreSQL. Routers in `routers/`, shared security rules in `security/` (`authorization.py`, `crypto_validation.py`, `url_guard.py`, `usernames.py`). |
 | `frontend/` | React 19 SPA (Vite). Messenger state is split under `src/context/messenger/`. |
 | `trustkeys/` | MV3 browser extension — the key custodian. Service worker under `src/background/`. |
-| `packages/crypto-core/` | `@kryptolog/crypto-core`: one copy of every crypto primitive, consumed by **both** clients via a `file:` dependency. |
+| `packages/crypto-core/` | `@kryptolog/crypto-core`: one copy of every crypto primitive, consumed by **both** clients via a `file:` dependency. Split into `encoding`/`signing`/`pqc`/`aead`/`vault`/`webauthn`, all re-exported from `src/index.js` — import the package root, never a submodule. |
 
 `crypto-core` exists so the SPA and the extension can never drift apart on wire format.
 Byte-for-byte compatibility is enforced by golden vectors in CI, not by a "keep in sync"
@@ -58,7 +58,7 @@ real path and then needs `@noble/post-quantum` next to it, so run `npm ci` insid
   last audit; match the existing density and tone. Where a line exists because of a
   specific finding, reference its id (`audit S1`, `KRY-005`, `audit M-1`) so the reason
   survives the next refactor. See `backend/routers/auth.py`, `backend/security/url_guard.py`,
-  and `packages/crypto-core/src/index.js` for the standard.
+  and `packages/crypto-core/src/{encoding,signing}.js` for the standard.
 - **Wire-format changes are a clean cutover.** No compatibility fallbacks — a fallback is
   a downgrade path. Bump `CRYPTO_CORE_VERSION` and regenerate the golden vectors
   *deliberately*; never let a vector auto-update, that defeats their purpose.
@@ -166,6 +166,84 @@ carries the commits.
 **Merged to `main` on 2026-09-10** (fast-forward from `audit-2026-09-03-followups`,
 `0125365`..`1be4b36`). Not pushed — `origin/main` is 8 commits behind.
 
+## Code-quality pass — 2026-09-10
+
+Branch `cleanup-2026-09` (`b8f444a`..`d9c3270`, 37 commits). Not a remediation:
+this was a review for simplification, shorter modules and comment quality. Every
+commit leaves all four packages green, so the history can be bisected or stopped
+at any point.
+
+**A backend lint gate now exists.** `ruff check .` and `ruff format --check .`
+are blocking CI steps, matching the two eslint gates. Config in
+`backend/ruff.toml`. Three mechanical commits (import sort, typing
+modernization, whole-tree format) are separated from every real change so they
+can be skimmed and skipped. **E712 is disabled on purpose:** `Column == False`
+renders as `col = false` in SQL, while ruff's suggested `not Column` asks Python
+for the column object's truthiness and builds a different query.
+
+### What moved
+
+| Area | Change |
+|---|---|
+| `backend/utils/clock.py` | New. The one naive-UTC clock; models, routers and `security/` all use it. |
+| `backend/security/authorization.py` | Gained `purge_expired_grants` and `is_workflow_managed`, both moved out of `secrets.py`. |
+| `backend/routers/secrets.py` | `_check_secret_access` → `_load_secret(requires=...)`, used by all six paths. 513 → 469 lines. |
+| `backend/routers/auth.py` | `login` split into claim / verify / upsert / mint. 144 → 26 lines. |
+| `backend/routers/{groups,multisig,messenger}.py` | One row loader each; `remove_member`, `sign_multisig_workflow` and `websocket_endpoint` split. |
+| `packages/crypto-core/src/` | One 766-line file → six modules (`encoding`, `signing`, `pqc`, `aead`, `vault`, `webauthn`) re-exported from a 34-line `index.js`. Public surface unchanged. |
+| `frontend/src/services/api.js` | New. Replaced 35 hand-written `Bearer` headers across 18 files and three error conventions. |
+| `frontend/src/utils/` | New `format.js`, `secretPayload.js`, `secretContent.js`, each with tests. |
+| `frontend/src/context/PQCContext.jsx` | Nine custody dispatchers → one `withCustody` factory, and its first tests. |
+| `trustkeys/src/background/index.js` | 34-arm switch → a `HANDLERS` table. The sender-gating posture is now readable as a table. |
+
+### Behaviour changes (each its own `[BEHAVIOUR]` commit)
+
+- **Naive UTC everywhere.** Aware writes into naive columns worked by accident;
+  the two expiry comparisons in `secrets.py` were resolved by the session
+  TimeZone and were correct only while the server ran in UTC. Pinned by
+  `backend/tests/test_clock.py`, which walks every mapped column.
+- **`CRYPTO_CORE_VERSION` 1.6.0 → 1.7.0.** `unwrapSessionKey` no longer accepts
+  the legacy `ct` field name. Wrapped keys stored by a client older than the
+  `encKey` rename no longer unwrap. **This is the fourth cumulative cutover**
+  (1.3.0 → 1.7.0); see the list below before deploying against real data.
+  `packages/crypto-core/package.json` is now synced to the constant.
+- **Two dead endpoints removed.** `POST /groups/{id}/mark-read` marked nothing,
+  and the reject-workflow `reason` was validated and discarded. Both still
+  tolerate a body, so no client breaks.
+- **PWA-safe confirm** on reject and delete workflow. `window.confirm` silently
+  drops the action in installed PWAs, which is why `utils/confirm.js` exists.
+- **Unreachable router guards deleted.** Three sat behind an equal-or-tighter
+  Pydantic bound. The transfer 413 sat *above* the schema cap, so it could never
+  fire, and the config constant it read had no other reader.
+- **Multisig create errors** now surface the server's reason instead of a flat
+  "Failed to create workflow".
+
+### Deliberately not done
+
+- **`MessengerContext.jsx` stays at 657 lines.** Its DM and group halves share
+  about fifteen closure values, so splitting them into hooks means threading all
+  of that through a parameter list — plausibly worse to read than the banner
+  comments it has now. Worth doing only alongside a state-shape change.
+- **`MultisigCreateModal.jsx` is 522 lines**, down from 593. The wizard step
+  panels and a shared user-picker are still worth extracting.
+- **`ProofAudit.jsx` (514)** still renders a 120-line IIFE inside its JSX.
+- **The `<Modal>` shell** for ten overlays was dropped: visual-only, untested,
+  ten files, lowest value per review minute in the plan.
+- **The external `CHECK_CONNECTION` arm** answers `connected: true`
+  unconditionally with a hardcoded version, and has no in-repo caller. Left
+  alone because `externally_connectable` is by definition callable from outside
+  this repo. Worth a decision.
+- **37 of 44 route handlers still have no docstring**, which is also the whole
+  `/docs` surface, since FastAPI publishes them as the OpenAPI description.
+
+### Still open from before, unchanged
+
+Everything under "Still open from the remediation" below still applies. The
+end-to-end manual recipe has **not** been run, and it now matters more: `login`,
+`sign_multisig_workflow` and the WebSocket handshake were all split, and
+`conftest.py` patches both signature verifiers to `True` as `autouse`, so no
+backend test exercises a real login or approval signature.
+
 ### Still open from the remediation
 
 - **End-to-end recipe not run.** Everything is covered by automated tests except the
@@ -173,9 +251,10 @@ carries the commits.
   the WebSocket connecting through the corrected nginx `/api/` block; a multi-chunk
   file round-tripping to confirm the AAD binding; locking/unlocking the extension to
   confirm the idle alarm fires. Do this before any real deployment.
-- **Three cutover breaks are cumulative.** `CRYPTO_CORE_VERSION` went 1.3.0 → 1.6.0.
+- **Four cutover breaks are cumulative.** `CRYPTO_CORE_VERSION` went 1.3.0 → 1.7.0.
   Existing chunk uploads no longer decrypt, existing message signatures no longer
-  verify, and unsigned legacy messages no longer decrypt at all. Fine for a
+  verify, unsigned legacy messages no longer decrypt at all, and (1.7.0) wrapped
+  session keys stored under the old `ct` field name no longer unwrap. Fine for a
   pre-production system; a decision if there is real data.
 - **Mixed-script usernames are grandfathered.** The new rule applies on write; existing
   rows are only NFKC-normalized. Migration `f6a7b8c9d0e5` reports collisions but
