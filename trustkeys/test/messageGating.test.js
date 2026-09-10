@@ -104,3 +104,56 @@ describe('unknown message types', () => {
         expect(res.error).toMatch(/unknown message type/i);
     });
 });
+
+
+describe('the dispatch table and this list agree', () => {
+    // The list above is hand-maintained; the table is what actually runs. If a
+    // new internal-only handler is added to one and not the other, the
+    // enumeration above silently stops covering it. This closes that gap.
+    it('every type flagged internal in the table is enumerated here', async () => {
+        const { INTERNAL_ONLY_TYPES } = await import('../src/background/index.js');
+        const enumerated = new Set(INTERNAL_ONLY.map(r => r.type));
+        const missing = INTERNAL_ONLY_TYPES.filter(t => !enumerated.has(t));
+        expect(missing).toEqual([]);
+    });
+
+    it('every type enumerated here is flagged internal in the table', async () => {
+        const { INTERNAL_ONLY_TYPES } = await import('../src/background/index.js');
+        const flagged = new Set(INTERNAL_ONLY_TYPES);
+        const unflagged = [...new Set(INTERNAL_ONLY.map(r => r.type))].filter(t => !flagged.has(t));
+        expect(unflagged).toEqual([]);
+    });
+});
+
+describe('the authoritative-origin gate (audit M4)', () => {
+    // GET_ACTIVE_ACCOUNT had no test, despite carrying the rule that a page may
+    // only read the account if its own origin is a connected site — and despite
+    // deliberately ignoring request.origin, which a page controls.
+    it('serves the extension pages', async () => {
+        const h = await bootWithVault({});
+        const res = await h.send({ type: 'GET_ACTIVE_ACCOUNT' }, internalSender());
+        expect(res.success).toBe(true);
+        expect(res.account).toBeTruthy();
+    });
+
+    it('serves a connected page', async () => {
+        const h = await bootWithVault({ connect: ['https://app.example'] });
+        const res = await h.send({ type: 'GET_ACTIVE_ACCOUNT' }, pageSender('https://app.example'));
+        expect(res.success).toBe(true);
+    });
+
+    it('refuses a page that is not connected', async () => {
+        const h = await bootWithVault({ connect: ['https://app.example'] });
+        const res = await h.send({ type: 'GET_ACTIVE_ACCOUNT' }, pageSender('https://evil.example'));
+        expect(res.success).toBe(false);
+    });
+
+    it('ignores an origin the page supplies, using the authoritative one', async () => {
+        const h = await bootWithVault({ connect: ['https://app.example'] });
+        const res = await h.send(
+            { type: 'GET_ACTIVE_ACCOUNT', origin: 'https://app.example' },
+            pageSender('https://evil.example')
+        );
+        expect(res.success).toBe(false);
+    });
+});
