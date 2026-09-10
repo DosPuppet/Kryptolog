@@ -1,7 +1,14 @@
 from datetime import datetime
 from typing import Annotated
 
-from pydantic import BaseModel, ConfigDict, Field, PlainSerializer, field_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    PlainSerializer,
+    WithJsonSchema,
+    field_validator,
+)
 
 from security.crypto_validation import is_hex
 from utils.clock import to_wire_utc
@@ -12,7 +19,13 @@ from utils.clock import to_wire_utc
 # utils/clock.to_wire_utc for what that cost us. Applying this to some datetime
 # fields and not others is the failure mode, so test_wire_datetimes.py walks
 # every model in this file and fails on a bare `datetime`.
-UtcDateTime = Annotated[datetime, PlainSerializer(to_wire_utc, return_type=str)]
+UtcDateTime = Annotated[
+    datetime,
+    PlainSerializer(to_wire_utc, return_type=str),
+    # `return_type=str` alone would document these as plain strings and drop
+    # `format: date-time` from /docs, which is the whole OpenAPI surface.
+    WithJsonSchema({"type": "string", "format": "date-time"}, mode="serialization"),
+]
 
 # --- Input bounds (audit KRY-010) -------------------------------------------
 #
