@@ -102,7 +102,6 @@ RATE_LIMITED_ENDPOINTS = {
     "routers.users.update_user",
     "routers.users.get_user",
     "routers.messenger.mark_read",
-    "routers.groups.mark_group_read",
 }
 
 

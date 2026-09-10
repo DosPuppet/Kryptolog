@@ -435,10 +435,15 @@ def sign_multisig_workflow(
 def reject_multisig_workflow(
     request: Request,
     workflow_id: int,
-    reject_req: schemas.MultisigRejectRequest,
     current_user: models.User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
+    """Block a workflow permanently. Takes no body.
+
+    It used to bind a `reason`, which was validated and then never read: there
+    is no column for it, and no client sent one. A body is still accepted and
+    ignored, so nothing that posts one breaks.
+    """
     # Same row lock as /sign — reject and the completing signature both decide
     # the terminal status, so they must serialize against each other. Without
     # it, a reject that read `pending` could commit "rejected" AFTER the

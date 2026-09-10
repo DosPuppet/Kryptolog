@@ -252,10 +252,6 @@ class MultisigSignatureRequest(BaseModel):
     recipient_keys: dict[str, str] | None = None  # Only provided by the completing signer
 
 
-class MultisigRejectRequest(BaseModel):
-    reason: str | None = Field(None, max_length=500)
-
-
 class MessageBase(BaseModel):
     recipient_address: str = Field(..., max_length=MAX_ADDRESS_LEN)
     content: str = Field(..., max_length=10_000)  # Encrypted Blob (Max 10KB)

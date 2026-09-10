@@ -41,7 +41,6 @@ export const API_ENDPOINTS = {
         REMOVE_MEMBER: (channelId, addr) => `${API_BASE_URL}/groups/${channelId}/members/${addr}`,
         UPDATE_ROLE: (channelId, addr) => `${API_BASE_URL}/groups/${channelId}/members/${addr}/role`,
         DETAILS: (channelId) => `${API_BASE_URL}/groups/${channelId}`,
-        MARK_READ: (channelId) => `${API_BASE_URL}/groups/${channelId}/mark-read`,
     },
     MULTISIG: {
         // Note the singular/plural split, which mirrors the server: the

@@ -213,8 +213,9 @@ def list_groups(
         {
             "channel": channels[cid],
             "last_message": latest_by_channel.get(cid),
-            # Groups have no per-user read tracking yet (it would be a
-            # last_read_at on GroupMember). Left at 0 until that ships.
+            # Groups have no per-user read tracking: it would need a
+            # last_read_at on GroupMember, which does not exist. Always 0, and
+            # the SPA does not render a group unread badge because of it.
             "unread_count": 0,
         }
         for cid in channel_ids
@@ -608,22 +609,3 @@ async def update_group(
         await manager.send_personal_message(event, m.user_address)
 
     return channel
-
-
-# ── Mark Read ───────────────────────────────────────────────────
-
-
-@router.post("/{channel_id}/mark-read")
-@limiter.limit("60/minute")
-def mark_group_read(
-    request: Request,
-    channel_id: str,
-    current_user: models.User = Depends(get_current_user),
-    db: Session = Depends(get_db),
-):
-    if not authorization.is_group_member(db, channel_id, current_user.address):
-        raise HTTPException(status_code=403, detail="Not a member of this group")
-
-    # For now, just acknowledge. Full read tracking can be added with a
-    # last_read_at timestamp on GroupMember if needed.
-    return {"status": "ok"}
