@@ -164,14 +164,19 @@ landed — `AUDIT.md` section 0 carries the finding-by-finding status, and this 
 carries the commits.
 
 **Merged to `main` on 2026-09-10** (fast-forward from `audit-2026-09-03-followups`,
-`0125365`..`1be4b36`). Not pushed — `origin/main` is 8 commits behind.
+`0125365`..`1be4b36`).
 
 ## Code-quality pass — 2026-09-10
 
-Branch `cleanup-2026-09` (`b8f444a`..`d9c3270`, 37 commits). Not a remediation:
+Branch `cleanup-2026-09` (`b8f444a`..`a5f7e62`, 43 commits). Not a remediation:
 this was a review for simplification, shorter modules and comment quality. Every
 commit leaves all four packages green, so the history can be bisected or stopped
 at any point.
+
+**Merged to `main` on 2026-09-10** (fast-forward, `b8f444a`..`a5f7e62`), with all
+four suites, both builds and all four lint/format/drift gates green at `a5f7e62`.
+Neither merge is pushed — `origin/main` is 43 commits behind, and both branches
+are still around at the merged commit.
 
 **A backend lint gate now exists.** `ruff check .` and `ruff format --check .`
 are blocking CI steps, matching the two eslint gates. Config in
