@@ -56,7 +56,6 @@ const SecretItem = ({ secret, decryptedContent, onDecrypt, onLock, onDelete, onS
     };
 
     const handleDownloadProof = (secretName, docData) => {
-        const isPQC = docData.signerPublicKey.length > 200;
         const proof = {
             type: 'kryptolog_signed_document_proof',
             version: '1.0',
@@ -67,7 +66,7 @@ const SecretItem = ({ secret, decryptedContent, onDecrypt, onLock, onDelete, onS
             },
             signer: {
                 publicKey: docData.signerPublicKey,
-                algorithm: isPQC ? 'DILITHIUM2' : 'ECDSA',
+                algorithm: 'DILITHIUM2',
             },
             signature: docData.signature,
         };

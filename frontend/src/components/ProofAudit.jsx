@@ -77,7 +77,6 @@ export default function ProofAudit() {
         // PQC (ML-DSA-44) only; legacy ECDSA proofs are unsupported.
         const signedBody = domainSeparate(SIGNING_CONTEXT.CONTENT, doc.content);
         const isValid = isPQC && await verifySignaturePQC(signedBody, signature, signer.publicKey);
-        const recoveredAddress = null;
 
         setResults({
             type: 'single',
@@ -88,7 +87,6 @@ export default function ProofAudit() {
                 algorithm: signer.algorithm,
                 valid: isValid,
                 username: signer.username || null,
-                recoveredAddress,
             }]
         });
     };
@@ -112,7 +110,6 @@ export default function ProofAudit() {
         for (const entry of proofData.signatures) {
             const isPQC = entry.algorithm === 'DILITHIUM2';
             let isValid = false;
-            const recoveredAddress = null;
 
             // 'signer' approvals need the ciphertext hash; 'creator' uses content.
             const message = entry.role === 'signer' ? approvalBody : creatorBody;
@@ -133,7 +130,6 @@ export default function ProofAudit() {
                 username: entry.username || null,
                 role: entry.role,
                 signedAt: entry.signed_at,
-                recoveredAddress,
             });
         }
 

@@ -28,13 +28,12 @@ export const downloadMultisigProof = async ({
 
     // Creator (implicit signer)
     if (creatorSignature) {
-        const isPQC = workflow.owner_address.length > 200;
         signatures.push({
             address: workflow.owner_address,
             username: workflow.owner?.username || null,
             signature: creatorSignature,
             signed_at: workflow.created_at,
-            algorithm: isPQC ? 'DILITHIUM2' : 'ECDSA',
+            algorithm: 'DILITHIUM2',
             role: 'creator',
         });
     }
@@ -42,13 +41,12 @@ export const downloadMultisigProof = async ({
     // Explicit signers
     for (const s of workflow.signers) {
         if (s.has_signed && s.signature) {
-            const isPQC = s.user_address.length > 200;
             signatures.push({
                 address: s.user_address,
                 username: s.user?.username || null,
                 signature: s.signature,
                 signed_at: s.signed_at,
-                algorithm: isPQC ? 'DILITHIUM2' : 'ECDSA',
+                algorithm: 'DILITHIUM2',
                 role: 'signer',
             });
         }
