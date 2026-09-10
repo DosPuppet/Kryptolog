@@ -26,6 +26,11 @@ export const CRYPTO_CORE_VERSION = '1.6.0';
 // with no Node polyfill dependency — that's what lets a single symlinked copy
 // build cleanly in both Vite apps. Output is byte-identical to the previous
 // Buffer.from(...).toString('hex') (lowercase, two chars per byte).
+// Module-level like the _HEX table below: these are stateless and were being
+// reallocated on every encrypt, decrypt, digest and canonicalisation.
+const ENC = new TextEncoder();
+const DEC = new TextDecoder();
+
 const _HEX = [];
 for (let i = 0; i < 256; i++) _HEX.push(i.toString(16).padStart(2, '0'));
 export const toHex = (arr) => {
@@ -63,7 +68,7 @@ const KEM_KDF_INFO = 'Kryptolog/ML-KEM-768/AES-GCM/v1';
 const kemAesKey = async (sharedSecret, usage) => {
     const ikm = await crypto.subtle.importKey('raw', sharedSecret, 'HKDF', false, ['deriveKey']);
     return crypto.subtle.deriveKey(
-        { name: 'HKDF', hash: 'SHA-256', salt: new Uint8Array(0), info: new TextEncoder().encode(KEM_KDF_INFO) },
+        { name: 'HKDF', hash: 'SHA-256', salt: new Uint8Array(0), info: ENC.encode(KEM_KDF_INFO) },
         ikm,
         { name: 'AES-GCM', length: 256 },
         false,
@@ -106,7 +111,7 @@ const canonicalCiphertext = (ct) =>
 
 // SHA-256 of a UTF-8 string -> lowercase hex (matches Python hashlib.sha256().hexdigest()).
 export const sha256Hex = async (str) => {
-    const bytes = new TextEncoder().encode(str);
+    const bytes = ENC.encode(str);
     const digest = await crypto.subtle.digest('SHA-256', bytes);
     return toHex(new Uint8Array(digest));
 };
@@ -258,7 +263,7 @@ export const normalizeAccount = (account) => {
 // ML-DSA-44 detached signature over the UTF-8 message bytes.
 export const signMessage = async (message, privateKeyHex) => {
     const secretKey = fromHex(privateKeyHex);
-    const msgBytes = new TextEncoder().encode(message);
+    const msgBytes = ENC.encode(message);
     // noble API: sign(message, secretKey) -> detached signature
     const signature = ml_dsa44.sign(msgBytes, secretKey);
     return toHex(signature);
@@ -270,7 +275,7 @@ export const verifySignature = async (message, signatureHex, publicKeyHex) => {
     try {
         const signature = fromHex(signatureHex);
         const publicKey = fromHex(publicKeyHex);
-        const msgBytes = new TextEncoder().encode(message);
+        const msgBytes = ENC.encode(message);
         // noble API: verify(signature, message, publicKey) -> boolean
         return ml_dsa44.verify(signature, msgBytes, publicKey);
     } catch (e) {
@@ -288,9 +293,7 @@ export const encryptMessage = async (message, publicKeyHex) => {
     // Derive the AES key from the shared secret via HKDF (audit S5).
     const iv = crypto.getRandomValues(new Uint8Array(12));
     const key = await kemAesKey(new Uint8Array(ss), ["encrypt"]);
-
-    const enc = new TextEncoder();
-    const encodedMsg = enc.encode(message);
+    const encodedMsg = ENC.encode(message);
 
     const encryptedContent = await crypto.subtle.encrypt(
         { name: "AES-GCM", iv: iv },
@@ -325,16 +328,46 @@ export const decryptMessage = async (encryptedData, privateKeyHex) => {
         key,
         content
     );
-
-    const dec = new TextDecoder();
-    return dec.decode(decryptedContent);
+    return DEC.decode(decryptedContent);
 };
 
-// --- Session Key Implementations (Local) ---
+// --- AES-GCM: session keys, envelopes, and chunks ---
 
-export const generateSessionKey = async () => {
-    const keyBytes = crypto.getRandomValues(new Uint8Array(32));
-    return toHex(keyBytes);
+/** Import a hex AES-256 key. One helper, so every call site agrees on the algorithm. */
+const importAesKey = async (keyHex) =>
+    crypto.subtle.importKey("raw", fromHex(keyHex), "AES-GCM", false, ["encrypt", "decrypt"]);
+
+/** A fresh 256-bit AES key, hex-encoded. */
+export const generateSessionKey = async () => toHex(crypto.getRandomValues(new Uint8Array(32)));
+
+/**
+ * AES-GCM a string under a hex key, returning { iv, [field] }.
+ *
+ * `field` names the ciphertext property because two callers disagree about it:
+ * the message envelope calls it `content`, the file envelope `ciphertext`. Both
+ * shapes are on the wire already, so they stay — but the bytes are produced
+ * here, once, rather than by two functions that must not drift.
+ */
+const aeadEncrypt = async (plaintext, keyHex, field) => {
+    const iv = crypto.getRandomValues(new Uint8Array(12));
+    const key = await importAesKey(keyHex);
+    const encrypted = await crypto.subtle.encrypt(
+        { name: "AES-GCM", iv: iv },
+        key,
+        ENC.encode(plaintext)
+    );
+    return { iv: toHex(iv), [field]: toHex(new Uint8Array(encrypted)) };
+};
+
+/** Inverse of aeadEncrypt, reading the ciphertext from `field`. */
+const aeadDecrypt = async (envelope, keyHex, field) => {
+    const key = await importAesKey(keyHex);
+    const decrypted = await crypto.subtle.decrypt(
+        { name: "AES-GCM", iv: fromHex(envelope.iv) },
+        key,
+        fromHex(envelope[field])
+    );
+    return DEC.decode(decrypted);
 };
 
 export const wrapSessionKey = async (sessionKeyHex, publicKeyHex) => {
@@ -384,99 +417,25 @@ export const unwrapSessionKey = async (wrappedKey, privateKeyHex) => {
     return toHex(new Uint8Array(decryptedKeyBytes));
 };
 
-export const encryptWithSessionKey = async (message, sessionKeyHex) => {
-    const keyBytes = fromHex(sessionKeyHex);
-    const iv = crypto.getRandomValues(new Uint8Array(12));
-    const key = await crypto.subtle.importKey(
-        "raw", keyBytes, "AES-GCM", false, ["encrypt"]
-    );
+export const encryptWithSessionKey = (message, sessionKeyHex) =>
+    aeadEncrypt(message, sessionKeyHex, "content");
 
-    const enc = new TextEncoder();
-    const encrypted = await crypto.subtle.encrypt(
-        { name: "AES-GCM", iv: iv },
-        key,
-        enc.encode(message)
-    );
+export const decryptWithSessionKey = (encryptedData, sessionKeyHex) =>
+    aeadDecrypt(encryptedData, sessionKeyHex, "content");
 
-    return {
-        iv: toHex(iv),
-        content: toHex(new Uint8Array(encrypted))
-    };
-};
+// The envelope/large-file pair. Same primitive as the session-key pair above,
+// differing only in what the ciphertext property is called on the wire.
 
-export const decryptWithSessionKey = async (encryptedData, sessionKeyHex) => {
-    // encryptedData: { iv, content }
-    const keyBytes = fromHex(sessionKeyHex);
-    const iv = fromHex(encryptedData.iv);
-    const content = fromHex(encryptedData.content);
+/** Alias of generateSessionKey: both are a 256-bit AES key and always were. */
+export const generateSymmetricKey = generateSessionKey;
 
-    const key = await crypto.subtle.importKey(
-        "raw", keyBytes, "AES-GCM", false, ["decrypt"]
-    );
+export const encryptSymmetric = (content, keyHex) =>
+    aeadEncrypt(content, keyHex, "ciphertext");
 
-    const decrypted = await crypto.subtle.decrypt(
-        { name: "AES-GCM", iv: iv },
-        key,
-        content
-    );
-
-    const dec = new TextDecoder();
-    return dec.decode(decrypted);
-};
-
-// --- Symmetric Encryption (AES-GCM 256) for Envelope / Large Files ---
-
-export const generateSymmetricKey = async () => {
-    const keyBytes = crypto.getRandomValues(new Uint8Array(32));
-    return toHex(keyBytes);
-};
-
-export const encryptSymmetric = async (content, keyHex) => {
-    const keyBytes = fromHex(keyHex);
-    const iv = crypto.getRandomValues(new Uint8Array(12));
-    const key = await crypto.subtle.importKey(
-        "raw", keyBytes, "AES-GCM", false, ["encrypt"]
-    );
-
-    const enc = new TextEncoder();
-    const encrypted = await crypto.subtle.encrypt(
-        { name: "AES-GCM", iv: iv },
-        key,
-        enc.encode(content)
-    );
-
-    return {
-        iv: toHex(iv),
-        ciphertext: toHex(new Uint8Array(encrypted))
-    };
-};
-
-export const decryptSymmetric = async (encryptedObject, keyHex) => {
-    // encryptedObject: { iv, ciphertext }
-    const keyBytes = fromHex(keyHex);
-    const iv = fromHex(encryptedObject.iv);
-    const ciphertext = fromHex(encryptedObject.ciphertext);
-
-    const key = await crypto.subtle.importKey(
-        "raw", keyBytes, "AES-GCM", false, ["decrypt"]
-    );
-
-    const decrypted = await crypto.subtle.decrypt(
-        { name: "AES-GCM", iv: iv },
-        key,
-        ciphertext
-    );
-
-    const dec = new TextDecoder();
-    return dec.decode(decrypted);
-};
+export const decryptSymmetric = (encryptedObject, keyHex) =>
+    aeadDecrypt(encryptedObject, keyHex, "ciphertext");
 
 // --- Binary Chunk Encryption (for chunked file uploads) ---
-
-const importAesKey = async (keyHex) => {
-    const keyBytes = fromHex(keyHex);
-    return crypto.subtle.importKey("raw", keyBytes, "AES-GCM", false, ["encrypt", "decrypt"]);
-};
 
 // Associated data binding a chunk to its position (audit M-2).
 //
@@ -499,7 +458,7 @@ const aadBytes = (aad, fn) => {
     if (typeof aad !== 'string' || aad === '') {
         throw new Error(`${fn}: aad is required — build it with chunkAad(secretId, chunkIndex) (audit M-2)`);
     }
-    return new TextEncoder().encode(aad);
+    return ENC.encode(aad);
 };
 
 /**
@@ -544,7 +503,7 @@ const VAULT_KEY_BITS = 256;
 
 const vaultKeyMaterial = (password) => crypto.subtle.importKey(
     "raw",
-    new TextEncoder().encode(password),
+    ENC.encode(password),
     { name: "PBKDF2" },
     false,
     ["deriveBits", "deriveKey"]
@@ -589,9 +548,7 @@ export const encryptVault = async (data, password) => {
     const salt = crypto.getRandomValues(new Uint8Array(16));
     const iv = crypto.getRandomValues(new Uint8Array(12));
     const key = await deriveKey(password, salt);
-
-    const enc = new TextEncoder();
-    const encodedData = enc.encode(JSON.stringify(data));
+    const encodedData = ENC.encode(JSON.stringify(data));
 
     const encryptedContent = await crypto.subtle.encrypt(
         { name: "AES-GCM", iv: iv },
@@ -619,9 +576,7 @@ export const decryptVault = async (encryptedVault, password) => {
             key,
             data
         );
-
-        const dec = new TextDecoder();
-        return JSON.parse(dec.decode(decryptedContent));
+        return JSON.parse(DEC.decode(decryptedContent));
     } catch (e) {
         throw new Error("Incorrect password or corrupted data");
     }
@@ -633,8 +588,7 @@ export const decryptVault = async (encryptedVault, password) => {
  */
 export const encryptVaultWithKey = async (data, key, salt) => {
     const iv = crypto.getRandomValues(new Uint8Array(12));
-    const enc = new TextEncoder();
-    const encodedData = enc.encode(JSON.stringify(data));
+    const encodedData = ENC.encode(JSON.stringify(data));
 
     const encryptedContent = await crypto.subtle.encrypt(
         { name: "AES-GCM", iv: iv },
@@ -659,9 +613,7 @@ export const decryptVaultWithKey = async (encryptedVault, key) => {
             key,
             data
         );
-
-        const dec = new TextDecoder();
-        return JSON.parse(dec.decode(decryptedContent));
+        return JSON.parse(DEC.decode(decryptedContent));
     } catch (e) {
         throw new Error("Decryption failed with cached key");
     }
