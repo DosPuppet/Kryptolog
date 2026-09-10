@@ -264,49 +264,58 @@ export const PQCProvider = ({ children }) => {
         return performServerLogin(accountId, encryptionKey, (msg) => vaultService.sign(msg, newLocalPassword), account.name, inviteCode);
     };
 
-    const generateSessionKey = async () => {
+    // Every custody operation answers the same question first: is the key held
+    // by the extension, or by an unlocked local vault, or is neither available?
+    // That was nine copies of one if/else-if/throw, including nine copies of the
+    // error string, which is the sort of thing that ends up saying two different
+    // things after a rename.
+    //
+    // `prompt` is the password prompt the local-vault path needs; the extension
+    // never takes one, because it holds the key itself and shows its own
+    // approval window. Omit it for operations the vault can do without
+    // unlocking a private key, or pass a function to decide per call — chat
+    // message signing skips the prompt once the signing key is cached.
+    const withCustody = (viaExtension, viaVault, prompt) => async (...args) => {
         if (isExtensionAvailable && window.trustkeys) {
-            return await window.trustkeys.generateSessionKey();
-        } else if (!vaultService.isLocked) {
-            return await vaultService.generateSessionKey();
+            return viaExtension(...args);
+        }
+        if (!vaultService.isLocked) {
+            const ask = typeof prompt === 'function' ? prompt(...args) : prompt;
+            const password = ask ? await requestPassword(ask) : undefined;
+            return viaVault(password, ...args);
         }
         throw new Error("PQC Provider not ready (Locked or Missing)");
     };
 
-    const wrapSessionKey = async (sessionKey, publicKey) => {
-        if (isExtensionAvailable && window.trustkeys) {
-            return await window.trustkeys.wrapSessionKey(sessionKey, publicKey);
-        } else if (!vaultService.isLocked) {
-            return await vaultService.wrapSessionKey(sessionKey, publicKey);
-        }
-        throw new Error("PQC Provider not ready (Locked or Missing)");
-    };
+    const generateSessionKey = withCustody(
+        () => window.trustkeys.generateSessionKey(),
+        () => vaultService.generateSessionKey(),
+    );
 
-    const unwrapSessionKey = async (wrappedKey) => {
-        if (isExtensionAvailable && window.trustkeys) {
-            return await window.trustkeys.unwrapSessionKey(wrappedKey);
-        } else if (!vaultService.isLocked) {
-            const password = await requestPassword("Enter password to unwrap session key:");
-            return await vaultService.unwrapSessionKey(wrappedKey, password);
-        }
-        throw new Error("PQC Provider not ready (Locked or Missing)");
-    };
+    const wrapSessionKey = withCustody(
+        (sessionKey, publicKey) => window.trustkeys.wrapSessionKey(sessionKey, publicKey),
+        (_pw, sessionKey, publicKey) => vaultService.wrapSessionKey(sessionKey, publicKey),
+    );
 
-    const unwrapManySessionKeys = async (wrappedKeys) => {
-        if (isExtensionAvailable && window.trustkeys) {
-            if (window.trustkeys.unwrapManySessionKeys) {
-                return await window.trustkeys.unwrapManySessionKeys(wrappedKeys);
-            }
-            // Fallback for older extension versions
-            return await Promise.all(wrappedKeys.map(wk => window.trustkeys.unwrapSessionKey(wk)));
-        } else if (!vaultService.isLocked) {
-            // Local Vault: ONE prompt
-            const password = await requestPassword("Enter password to unlock session keys (Batch):");
-            return await vaultService.unwrapManySessionKeys(wrappedKeys, password);
-        }
-        throw new Error("PQC Provider not ready (Locked or Missing)");
-    };
+    const unwrapSessionKey = withCustody(
+        (wrappedKey) => window.trustkeys.unwrapSessionKey(wrappedKey),
+        (password, wrappedKey) => vaultService.unwrapSessionKey(wrappedKey, password),
+        "Enter password to unwrap session key:",
+    );
 
+    const unwrapManySessionKeys = withCustody(
+        (wrappedKeys) => window.trustkeys.unwrapManySessionKeys
+            ? window.trustkeys.unwrapManySessionKeys(wrappedKeys)
+            // Older extension without the batch call: one round trip each.
+            : Promise.all(wrappedKeys.map(wk => window.trustkeys.unwrapSessionKey(wk))),
+        (password, wrappedKeys) => vaultService.unwrapManySessionKeys(wrappedKeys, password),
+        // One prompt for the whole batch, not one per key.
+        "Enter password to unlock session keys (Batch):",
+    );
+
+    // Not withCustody: this one does NOT require custody of a private key when a
+    // recipient's public key is supplied, so its second branch is the in-process
+    // library rather than the vault, and a locked vault is not an error.
     const encrypt = async (content, publicKey) => {
         if (isExtensionAvailable && window.trustkeys) {
             return await window.trustkeys.encrypt(content, publicKey || mlkemKey);
@@ -326,72 +335,60 @@ export const PQCProvider = ({ children }) => {
         }
     };
 
-    const sign = async (message) => {
-        if (isExtensionAvailable && window.trustkeys) {
-            return await window.trustkeys.sign(message);
-        } else if (!vaultService.isLocked) {
-            const password = await requestPassword("Enter password to sign document:");
-            return await vaultService.sign(message, password);
-        }
-        throw new Error("PQC Provider not ready (Locked or Missing)");
-    };
+    const sign = withCustody(
+        (message) => window.trustkeys.sign(message),
+        (password, message) => vaultService.sign(message, password),
+        "Enter password to sign document:",
+    );
 
     // Sign a chat message (audit S1). Distinct from sign() so it can stay SILENT
     // per message: the extension auto-signs message-domain payloads, and the
     // local vault caches the signing key after a single unlock this session.
-    const signMessage = async (body) => {
-        if (isExtensionAvailable && window.trustkeys) {
-            // Older extensions without the silent path fall back to sign() (pops a
-            // popup per message, but stays functional).
-            if (window.trustkeys.signMessage) {
-                return await window.trustkeys.signMessage(body);
-            }
-            return await window.trustkeys.sign(body);
-        } else if (!vaultService.isLocked) {
-            if (vaultService.hasCachedSigningKey()) {
-                return await vaultService.signMessage(body);
-            }
-            const password = await requestPassword("Enter password to enable secure messaging:");
-            return await vaultService.signMessage(body, password);
+    const signMessage = withCustody(
+        (body) => window.trustkeys.signMessage
+            ? window.trustkeys.signMessage(body)
+            // Older extensions without the silent path fall back to sign(),
+            // which pops a popup per message but stays functional.
+            : window.trustkeys.sign(body),
+        (password, body) => vaultService.signMessage(body, password),
+        // Skipped once the key is cached, which is what keeps this silent.
+        () => vaultService.hasCachedSigningKey()
+            ? null
+            : "Enter password to enable secure messaging:",
+    );
+
+    const decrypt = withCustody(
+        (encryptedObject) => window.trustkeys.decrypt(encryptedObject),
+        (password, encryptedObject) => vaultService.decrypt(encryptedObject, password),
+        "Enter password to decrypt data:",
+    );
+
+    const decryptManyViaExtension = async (encryptedObjects) => {
+        // Batch API: ONE approval popup for the whole set (audit M-3 — encrypted
+        // titles need every item's key on list render).
+        if (window.trustkeys.decryptMany) {
+            const results = await window.trustkeys.decryptMany(encryptedObjects);
+            return results.map(r => r === null ? "Error: Decryption Failed" : r);
         }
-        throw new Error("PQC Provider not ready (Locked or Missing)");
+        // Older extension: sequential fallback, one popup per item. A single
+        // failure must not lose the rest of the list.
+        const results = [];
+        for (const obj of encryptedObjects) {
+            try {
+                results.push(await window.trustkeys.decrypt(obj));
+            } catch (e) {
+                console.error("Decrypt Error", e);
+                results.push("Error: Decryption Failed");
+            }
+        }
+        return results;
     };
 
-    const decrypt = async (encryptedObject) => {
-        if (isExtensionAvailable && window.trustkeys) {
-            return await window.trustkeys.decrypt(encryptedObject);
-        } else if (!vaultService.isLocked) {
-            const password = await requestPassword("Enter password to decrypt data:");
-            return await vaultService.decrypt(encryptedObject, password);
-        }
-        throw new Error("PQC Provider not ready (Locked or Missing)");
-    };
-
-    const decryptMany = async (encryptedObjects) => {
-        if (isExtensionAvailable && window.trustkeys) {
-            // Batch API: ONE approval popup for the whole set (audit M-3 —
-            // encrypted titles need every item's key on list render).
-            if (window.trustkeys.decryptMany) {
-                const results = await window.trustkeys.decryptMany(encryptedObjects);
-                return results.map(r => r === null ? "Error: Decryption Failed" : r);
-            }
-            // Older extension: sequential fallback (one popup per item).
-            const results = [];
-            for (const obj of encryptedObjects) {
-                try {
-                    results.push(await window.trustkeys.decrypt(obj));
-                } catch (e) {
-                    console.error("Decrypt Error", e);
-                    results.push("Error: Decryption Failed");
-                }
-            }
-            return results;
-        } else if (!vaultService.isLocked) {
-            const password = await requestPassword(`Enter password to decrypt ${encryptedObjects.length} messages:`);
-            return await vaultService.decryptMany(encryptedObjects, password);
-        }
-        throw new Error("PQC Provider not ready (Locked or Missing)");
-    };
+    const decryptMany = withCustody(
+        decryptManyViaExtension,
+        (password, encryptedObjects) => vaultService.decryptMany(encryptedObjects, password),
+        (encryptedObjects) => `Enter password to decrypt ${encryptedObjects.length} messages:`,
+    );
 
     const getVaultAccounts = () => vaultService.getAccounts();
 
