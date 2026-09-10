@@ -6,7 +6,7 @@ import { verifySignaturePQC, domainSeparate, SIGNING_CONTEXT } from '../../utils
 import API_ENDPOINTS from '../../config';
 import { toast } from '../../utils/toast';
 
-const SecretItem = ({ secret, decryptedContent, onDecrypt, onLock, onDelete, onShare, onViewDetails, authType, viewMode = 'grid', isSharedView }) => {
+const SecretItem = ({ secret, decryptedContent, onDecrypt, onLock, onDelete, onShare, onViewDetails, viewMode = 'grid', isSharedView }) => {
     const { theme } = useTheme();
     const { token } = useAuth();
     const [verificationResult, setVerificationResult] = useState(null);

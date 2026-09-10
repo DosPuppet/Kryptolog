@@ -71,7 +71,7 @@ export default function Dashboard({ view = 'secrets' }) {
         shareSecret,
         revokeGrant,
         fetchSharedSecrets
-    } = useSecrets(authType, encryptionPublicKey, currentDisplayAccount, { onProgress: updateProgress });
+    } = useSecrets(encryptionPublicKey, currentDisplayAccount, { onProgress: updateProgress });
 
     const {
         workflows,
@@ -231,7 +231,6 @@ export default function Dashboard({ view = 'secrets' }) {
                                 onShare={openShareModal}
                                 onViewDetails={handleViewDetails}
                                 loading={secretsLoading}
-                                authType={authType}
                                 onRevoke={revokeGrant}
                             />
                         </>

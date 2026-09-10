@@ -7,7 +7,7 @@ import { generateSymmetricKey, encryptSymmetric, decryptSymmetric, domainSeparat
 import { encryptSecretTitle, decryptSecretTitle, isEncryptedTitle, LOCKED_TITLE } from '../utils/titles';
 import { uploadChunkedFile, downloadChunkedFile, uploadMultipleChunkedFiles, downloadFileByRange, CHUNK_SIZE } from '../utils/fileChunks';
 
-export function useSecrets(authType, encryptionPublicKey, pqcAccount, options = {}) {
+export function useSecrets(encryptionPublicKey, pqcAccount, options = {}) {
     const { token } = useAuth();
     const { encrypt: encryptPQC, decrypt: decryptPQC, decryptMany: decryptManyPQC, sign: signPQC } = usePQC();
     const { onProgress } = options;
