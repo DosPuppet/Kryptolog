@@ -4,3 +4,4 @@
 -r requirements.txt
 pytest>=8        # test runner (TestClient needs httpx, already in requirements.txt)
 fakeredis>=2.23  # in-process Redis for the WS fan-out tests (real Redis used when TEST_REDIS_URL is set)
+ruff>=0.16       # blocking lint + format gate (config in backend/ruff.toml)

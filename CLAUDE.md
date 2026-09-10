@@ -27,6 +27,8 @@ These mirror `.github/workflows/ci.yml` — if you change one, change it there t
 # backend — needs the docker-compose Postgres running
 cd backend && pytest
 cd backend && alembic check      # blocking drift gate: models vs migrations
+cd backend && ruff check .       # blocking gate — lint is clean, keep it clean
+cd backend && ruff format .      # blocking gate (CI runs --check)
 
 # crypto-core
 cd packages/crypto-core && npm test

@@ -9,7 +9,7 @@ name: CI
 #   • extension   — TrustKeys MV3 build.
 #   • backend     — pytest, incl. the noble<->liboqs interop tests (liboqs is
 #     compiled from source, so the job installs cmake + a C toolchain).
-# Frontend and extension lint are both blocking gates.
+# Frontend, extension and backend lint are all blocking gates.
 #
 # A separate Security workflow (.github/workflows/security.yml) carries the
 # AppSec gate: pip-audit, npm audit, gitleaks and CodeQL.
@@ -150,6 +150,14 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y cmake gcc g++ libssl-dev ninja-build
       - name: Install Python dependencies (runtime + test)
         run: pip install -r requirements-dev.txt
+        working-directory: backend
+      - name: Lint and format check (blocking)
+        # The Python counterpart of the frontend/extension eslint gates. Runs
+        # before the database work so a style failure reports in seconds rather
+        # than after the migration chain and the suite.
+        run: |
+          ruff check .
+          ruff format --check .
         working-directory: backend
       - name: Create test database
         run: psql "postgresql://kryptolog:kryptolog@localhost:5432/kryptolog" -c "CREATE DATABASE kryptolog_test OWNER kryptolog;"
