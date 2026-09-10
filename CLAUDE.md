@@ -236,6 +236,38 @@ for the column object's truthiness and builds a different query.
 - **37 of 44 route handlers still have no docstring**, which is also the whole
   `/docs` surface, since FastAPI publishes them as the OpenAPI description.
 
+### Found by the manual pass — PQC envelope size bounds
+
+The end-to-end test caught three fields whose `max_length` had been set as if
+they held user text, when each holds a post-quantum envelope. Not introduced by
+the cleanup: the group-name cap has been wrong since `d916b91`.
+
+An address IS an ML-DSA-44 public key (2 624 hex chars), a detached signature is
+4 840, and a wrapped ML-KEM session key is ~2 330 — so a "name" or a "message"
+costs thousands of characters before any content:
+
+| Field | Was | Effect |
+|---|---|---|
+| `GroupChannelCreate.name` / `GroupUpdate.name` | 2 000 | **No group could be created at all.** One member's wrap alone is 4 954. Also broke rename and the re-wrap after every add-member. |
+| `GroupMessageCreate.content` | 50 000 | A group past **nine** members could not send, in a feature capped at fifty. |
+| `MessageBase.content` | 10 000 | The **first** message of a conversation (which mints a session, so it carries two wraps) was capped at ~160 characters. |
+
+`schemas.py` now spells the costs out and derives each bound from them, so the
+group bounds move with `MAX_GROUP_MEMBERS` instead of being guessed. Three
+places pin it: `tests/test_envelope_sizes.py` posts what the clients really
+send, `packages/crypto-core/test/envelope-size.test.js` measures the envelopes
+at the producing side, and a test compares the two files' constants — drift
+between the two languages is what caused this.
+
+**`apiFetch` now renders a 422 body.** FastAPI returns `detail` as a *list* of
+objects; passing it to `Error()` produced the `[object Object]` that made both
+of this branch's 422s undiagnosable from the browser. The rejected `input` is
+dropped from the message on purpose — it echoes the whole blob.
+
+Still open: the message composer has no `maxLength`, so text past
+`MAX_MESSAGE_TEXT_CHARS` (10 000) is refused by the server rather than by the
+textarea. Readable now, but better caught client-side.
+
 ### Still open from before, unchanged
 
 Everything under "Still open from the remediation" below still applies. The

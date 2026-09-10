@@ -17,10 +17,60 @@ from security.crypto_validation import is_hex
 # "strict on write, lenient on read" note in the audit doc).
 MAX_ADDRESS_LEN = 4096
 
-# Display names (groups, channels). Previously 500 000 — half a megabyte for a
-# label that renders in a sidebar. Group names may be encrypted blobs in some
-# clients, so this is generous rather than tight.
-MAX_DISPLAY_NAME_LEN = 2_000
+# Hard cap on group size, enforced by routers/groups.py on both create and
+# add-member. It also sizes the two group blobs below, which is why it lives
+# here rather than in the router: those bounds are one decision.
+MAX_GROUP_MEMBERS = 50
+
+# ── Post-quantum envelope sizing ────────────────────────────────────────────
+#
+# Several fields below hold PQC envelopes rather than user text, and each one
+# had been budgeted as if it held the text: a group NAME is a per-member
+# key-wrap map, and a message carries its own wrapped session key plus a
+# signature. Sized as labels and chat lines, all three rejected ordinary use —
+# no group could be created at all, no group past nine members could send, and
+# the first message of a conversation was capped at ~160 characters.
+#
+# So the costs are spelled out and the bounds derived from them. Every figure
+# is measured against crypto-core 1.7.0 and pinned on the producing side by
+# packages/crypto-core/test/envelope-size.test.js, which fails if a primitive
+# change outgrows what this file budgets.
+
+# The address IS the ML-DSA-44 public key (self-certifying), in hex — 2 624
+# chars, not the 42 an address usually suggests.
+ADDRESS_CHARS = 2_624
+# A detached ML-DSA-44 signature in hex. Every message carries one (audit S1).
+SIGNATURE_CHARS = 4_840
+# One ML-KEM-768-wrapped session key, JSON-encoded.
+WRAPPED_KEY_CHARS = 2_400  # measured 2 330
+# One entry in a key-wrap map: the member's address, their wrapped key, and the
+# JSON punctuation between them.
+KEY_WRAP_CHARS_PER_MEMBER = ADDRESS_CHARS + WRAPPED_KEY_CHARS  # 5 024
+# Plaintext a user may put in one message. AES-GCM ciphertext is base64 inside
+# a JSON envelope, which costs about two chars on the wire per plaintext char.
+MAX_MESSAGE_TEXT_CHARS = 10_000
+CIPHERTEXT_CHARS = 2 * MAX_MESSAGE_TEXT_CHARS
+# Slack for the ids, version tag and JSON structure around all of the above.
+ENVELOPE_SLACK_CHARS = 1_000
+
+# "encg1:" + JSON({ct, keys: {address: wrappedKey}}) — one wrap per member so
+# each can decrypt the name (audit M-3). Rebuilt on rename and on every
+# membership change, so create and update share the bound.
+MAX_GROUP_NAME_LEN = MAX_GROUP_MEMBERS * KEY_WRAP_CHARS_PER_MEMBER  # 251 200
+
+# A DM that mints a session carries two wraps (recipient and sender), keyed by
+# short literal names rather than by address.
+MAX_DM_CONTENT_LEN = (
+    SIGNATURE_CHARS + 2 * WRAPPED_KEY_CHARS + CIPHERTEXT_CHARS + ENVELOPE_SLACK_CHARS
+)
+
+# A group message that rotates the session key carries a wrap for every member,
+# addressed by address. That makes a full-group rekey genuinely large — the
+# same order as an inline secret — but it is the size the protocol produces,
+# and capping below it silently disables sending rather than trimming anything.
+MAX_GROUP_MESSAGE_CONTENT_LEN = (
+    SIGNATURE_CHARS + MAX_GROUP_NAME_LEN + CIPHERTEXT_CHARS + ENVELOPE_SLACK_CHARS
+)
 
 # Encrypted secret payload stored inline (large files go through FileChunks).
 MAX_SECRET_BLOB_LEN = 500_000
@@ -254,7 +304,9 @@ class MultisigSignatureRequest(BaseModel):
 
 class MessageBase(BaseModel):
     recipient_address: str = Field(..., max_length=MAX_ADDRESS_LEN)
-    content: str = Field(..., max_length=10_000)  # Encrypted Blob (Max 10KB)
+    # A signed, session-wrapped envelope — see MAX_DM_CONTENT_LEN, not a 10KB
+    # guess at how long a chat line is.
+    content: str = Field(..., max_length=MAX_DM_CONTENT_LEN)
 
 
 class MessageCreate(MessageBase):
@@ -305,9 +357,9 @@ class HistoryRequest(BaseModel):
 
 
 class GroupChannelCreate(BaseModel):
-    # Names are E2EE blobs (audit M-3): a per-member key-wrap map, so the cap
-    # scales with group size (~2.3KB/member) rather than title length.
-    name: str = Field(..., min_length=1, max_length=MAX_DISPLAY_NAME_LEN)
+    # An E2EE key-wrap map, not a title — see MAX_GROUP_NAME_LEN for why the
+    # cap scales with group size rather than with name length.
+    name: str = Field(..., min_length=1, max_length=MAX_GROUP_NAME_LEN)
     member_addresses: list[str] = Field(..., min_length=1)
 
 
@@ -331,7 +383,9 @@ class GroupChannelResponse(BaseModel):
 
 
 class GroupMessageCreate(BaseModel):
-    content: str = Field(..., max_length=50_000)
+    # The first message of each key epoch carries a wrap for every member, so
+    # the bound scales with the member cap — see MAX_GROUP_MESSAGE_CONTENT_LEN.
+    content: str = Field(..., max_length=MAX_GROUP_MESSAGE_CONTENT_LEN)
 
 
 class GroupMessageResponse(BaseModel):
@@ -367,8 +421,9 @@ class GroupMemberRoleUpdate(BaseModel):
 
 
 class GroupUpdate(BaseModel):
-    # E2EE name blob — same sizing rationale as GroupChannelCreate.name.
-    name: str = Field(..., max_length=MAX_DISPLAY_NAME_LEN)
+    # Rebuilt from scratch on every rename and membership change, so it is
+    # the same shape and the same size as GroupChannelCreate.name.
+    name: str = Field(..., max_length=MAX_GROUP_NAME_LEN)
 
 
 class Token(BaseModel):

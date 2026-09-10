@@ -16,9 +16,9 @@ from websocket_manager import manager
 router = APIRouter(prefix="/groups", tags=["groups"])
 
 # Page size for GET /groups (audit O-3). A channel row drags in its whole
-# member list (up to 50, each with its user) plus the last message, so an
-# account in many groups produced a response nobody bounded. Bounded at both
-# ends by FastAPI, matching GET /users.
+# member list (up to MAX_GROUP_MEMBERS, each with its user) plus the last
+# message, so an account in many groups produced a response nobody bounded.
+# Bounded at both ends by FastAPI, matching GET /users.
 GROUP_PAGE_MAX = 100
 GROUP_PAGE_DEFAULT = 50
 
@@ -58,8 +58,11 @@ async def create_group(
     current_user: models.User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    if len(data.member_addresses) > 50:
-        raise HTTPException(status_code=400, detail="Maximum 50 members per group")
+    if len(data.member_addresses) > schemas.MAX_GROUP_MEMBERS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Maximum {schemas.MAX_GROUP_MEMBERS} members per group",
+        )
 
     member_addrs = list({addr.lower() for addr in data.member_addresses})
     if current_user.address not in member_addrs:
@@ -357,8 +360,11 @@ async def add_member(
             status_code=400, detail="User is not Messenger-capable (Missing PQC key)"
         )
 
-    if len(channel.members) >= 50:
-        raise HTTPException(status_code=400, detail="Maximum 50 members per group")
+    if len(channel.members) >= schemas.MAX_GROUP_MEMBERS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Maximum {schemas.MAX_GROUP_MEMBERS} members per group",
+        )
 
     new_member = models.GroupMember(
         channel_id=channel_id,

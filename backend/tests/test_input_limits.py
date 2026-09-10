@@ -19,9 +19,33 @@ class TestBoundsAreSane:
         # ...but nothing like the old 20 000-char ceiling.
         assert schemas.MAX_ADDRESS_LEN < 20_000
 
-    def test_display_name_bound_is_not_absurd(self):
-        """Was 500 000 — half a megabyte for a sidebar label."""
-        assert schemas.MAX_DISPLAY_NAME_LEN <= 10_000
+    def test_envelope_bounds_admit_what_the_clients_produce(self):
+        """The three PQC-envelope fields, checked against measured costs.
+
+        Compared against the measured numbers rather than against the constants
+        derived from them: asserting that a derivation holds would pass for any
+        value at all, including the ones that shipped broken. The behaviour
+        those bounds gate is covered by test_envelope_sizes.py.
+        """
+        # A group name was once 500 000 (half a megabyte for what reads as a
+        # sidebar label), then 2 000 — which rejected every group ever created,
+        # because one member's wrap alone costs ~4 954 chars.
+        assert schemas.KEY_WRAP_CHARS_PER_MEMBER >= 4_954
+        assert schemas.MAX_GROUP_NAME_LEN >= schemas.MAX_GROUP_MEMBERS * 4_954
+
+        # A signature rides on every message and a session-minting one carries
+        # two wraps, before a single character of text.
+        assert schemas.SIGNATURE_CHARS >= 4_840
+        assert schemas.MAX_DM_CONTENT_LEN >= 4_840 + 4_700 + 2 * 1_000
+
+        # A group rekey wraps for every member at once.
+        assert schemas.MAX_GROUP_MESSAGE_CONTENT_LEN >= 4_840 + schemas.MAX_GROUP_MEMBERS * 4_954
+
+    def test_envelope_bounds_are_still_bounds(self):
+        """Generous enough for the protocol, not an open door."""
+        assert schemas.MAX_GROUP_NAME_LEN <= 500_000
+        assert schemas.MAX_DM_CONTENT_LEN <= 100_000
+        assert schemas.MAX_GROUP_MESSAGE_CONTENT_LEN <= 500_000
 
     def test_secret_blob_bound_is_unchanged(self):
         """The payload field keeps its own (large) bound — it is not a name."""
@@ -46,7 +70,7 @@ class TestOversizedInputRejected:
         r = client.post(
             "/groups",
             json={
-                "name": "x" * (schemas.MAX_DISPLAY_NAME_LEN + 1),
+                "name": "x" * (schemas.MAX_GROUP_NAME_LEN + 1),
                 "member_addresses": [member["address"]],
             },
             headers=auth_header(token),

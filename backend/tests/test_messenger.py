@@ -2,6 +2,8 @@
 
 from conftest import auth_header
 
+import schemas
+
 
 def _send_message(client, token, recipient_address, content="Hello encrypted"):
     return client.post(
@@ -44,7 +46,11 @@ class TestSendMessage:
     def test_message_too_long_rejected(self, client, user1, user2):
         token1, _ = user1
         _, u2 = user2
-        resp = _send_message(client, token1, u2["address"], "x" * 10001)
+        # Past the bound, not past a round number: `content` holds a signed PQC
+        # envelope, so most of MAX_DM_CONTENT_LEN is signature and wrapped key
+        # rather than text (see schemas.py, and test_envelope_sizes.py).
+        oversized = "x" * (schemas.MAX_DM_CONTENT_LEN + 1)
+        resp = _send_message(client, token1, u2["address"], oversized)
         assert resp.status_code == 422
 
 

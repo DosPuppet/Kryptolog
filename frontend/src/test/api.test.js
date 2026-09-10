@@ -80,6 +80,47 @@ describe('responses', () => {
         await expect(apiFetch('/x', 'tok')).rejects.toThrow('Recipient not found');
     });
 
+    it('renders a 422 validation detail instead of "[object Object]"', async () => {
+        // The real shape FastAPI returns, and the one that left two bugs on
+        // this branch showing a status code with no reason.
+        global.fetch.mockResolvedValue(
+            jsonResponse(
+                {
+                    detail: [
+                        {
+                            type: 'string_too_long',
+                            loc: ['body', 'name'],
+                            msg: 'String should have at most 2000 characters',
+                            input: 'encg1:' + 'x'.repeat(100000),
+                        },
+                    ],
+                },
+                { ok: false, status: 422 }
+            )
+        );
+        const err = await apiFetch('/groups', 'tok', { method: 'POST', body: {} }).catch((e) => e);
+        expect(err.message).toBe('name: String should have at most 2000 characters');
+        // The rejected value is not dragged into the message.
+        expect(err.message).not.toContain('encg1:');
+    });
+
+    it('joins several validation failures rather than showing only one', async () => {
+        global.fetch.mockResolvedValue(
+            jsonResponse(
+                {
+                    detail: [
+                        { loc: ['body', 'name'], msg: 'Field required' },
+                        { loc: ['body', 'member_addresses'], msg: 'Field required' },
+                    ],
+                },
+                { ok: false, status: 422 }
+            )
+        );
+        await expect(apiFetch('/groups', 'tok', { method: 'POST', body: {} })).rejects.toThrow(
+            'name: Field required; member_addresses: Field required'
+        );
+    });
+
     it('falls back to the status when there is no detail', async () => {
         global.fetch.mockResolvedValue({
             ok: false, status: 500, json: async () => { throw new Error('not json'); },
