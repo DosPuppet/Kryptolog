@@ -101,10 +101,20 @@ wire-format boundary) → WP8+WP10 → WP9.
 Record the commit SHA in the status column as each lands.
 
 **All eleven work packages are done.** The audit's Immediate + Short Term tiers are
-closed; structural debt (O-2…O-6, L-4, L-7, L-12) is untouched and still
-deferred. **L-14 is done** — `start_all.sh` and `backend/run_dev.sh` no longer
-`source` the env file; they parse it through `scripts/load_env.sh`, covered by
-`backend/tests/test_env_loader.py`.
+closed; structural debt (O-2…O-6, L-4, L-12) is untouched and still deferred.
+
+Two low-severity items have been picked off since:
+
+- **L-14 is done** — `start_all.sh` and `backend/run_dev.sh` no longer `source` the
+  env file; they parse it through `scripts/load_env.sh`, covered by
+  `backend/tests/test_env_loader.py`.
+- **L-7 is done** — shared-mode presence is one sorted set per address
+  (`kryptolog:ws:presence:{addr}`, member `{conn_id}:{state}` scored by expiry)
+  instead of one key per connection found with `SCAN`. The push path reads it by
+  key, so a presence lookup no longer walks the keyspace. Covered by
+  `backend/tests/test_ws_fanout.py`. **Rolling restarts:** old and new key layouts
+  do not overlap, so a mixed fleet mutually reads empty presence for 90s (worst
+  case: a push to a user who has the app in front of them).
 
 `roadmap/AUDIT-REMEDIATION.md` has been deleted now that every item in it
 landed — `AUDIT.md` section 0 carries the finding-by-finding status, and this table

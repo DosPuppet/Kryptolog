@@ -9,11 +9,12 @@ Two modes (audit P0 — lifting the single-process constraint):
 - **Shared** (``REDIS_URL`` set, enabled at app startup): every process
   subscribes to a Redis pub/sub channel and ``send_personal_message``
   *publishes* instead of delivering directly, so the event reaches the user's
-  sockets on whichever worker holds them. Presence lives in per-connection
-  Redis keys (``focused``/``blurred``) with a TTL refreshed by a heartbeat —
-  if a worker dies without cleaning up, its keys expire on their own. Combined
-  with Redis-backed rate limits (same ``REDIS_URL``, see dependencies.py),
-  this makes multiple workers/instances safe.
+  sockets on whichever worker holds them. Presence lives in ONE sorted set per
+  address, holding ``{conn_id}:{state}`` scored by the moment the entry goes
+  stale; a heartbeat pushes the score forward, so if a worker dies without
+  cleaning up its connections simply fall out of range. Combined with
+  Redis-backed rate limits (same ``REDIS_URL``, see dependencies.py), this
+  makes multiple workers/instances safe.
 
 If Redis is configured but unreachable, we log and stay in local mode rather
 than failing the boot — a single process keeps working, it just must stay single.
@@ -22,6 +23,7 @@ import asyncio
 import json
 import logging
 import os
+import time
 import uuid
 from typing import Dict, List, Optional, Set
 
@@ -30,9 +32,16 @@ from fastapi import WebSocket
 logger = logging.getLogger("kryptolog.ws")
 
 FANOUT_CHANNEL = "kryptolog:ws:fanout"
-# Presence keys: kryptolog:ws:presence:{address}:{conn_id} -> "focused"|"blurred"
+# Presence: ONE sorted set per address (audit L-7).
+#   key    kryptolog:ws:presence:{address}
+#   member "{conn_id}:{state}", state ∈ PRESENCE_STATES
+#   score  epoch second at which that connection goes stale
+# Scoring the members rather than giving each its own key is what lets a
+# presence lookup be a single keyed read instead of a keyspace walk, while
+# keeping per-connection (not per-user) expiry.
 PRESENCE_PREFIX = "kryptolog:ws:presence:"
-PRESENCE_TTL_SECONDS = 90        # key lifetime without a heartbeat (worker death)
+PRESENCE_STATES = ("focused", "blurred")
+PRESENCE_TTL_SECONDS = 90        # entry lifetime without a heartbeat (worker death)
 PRESENCE_HEARTBEAT_SECONDS = 30  # refresh cadence — keep well under the TTL
 
 
@@ -125,8 +134,8 @@ class ConnectionManager:
             logger.warning("WS fan-out listener stopped: %s", e)
 
     async def _heartbeat(self) -> None:
-        """Refresh the TTL of this worker's presence keys so they outlive the
-        heartbeat interval but expire if the worker dies."""
+        """Push the expiry score of this worker's connections forward so they
+        outlive the heartbeat interval but go stale if the worker dies."""
         try:
             while True:
                 await asyncio.sleep(PRESENCE_HEARTBEAT_SECONDS)
@@ -139,25 +148,68 @@ class ConnectionManager:
     # ---------- presence (shared mode helpers) ----------
 
     @staticmethod
-    def _presence_key(addr: str, conn_id: str) -> str:
-        return f"{PRESENCE_PREFIX}{addr}:{conn_id}"
+    def _presence_key(addr: str) -> str:
+        return f"{PRESENCE_PREFIX}{addr}"
+
+    @staticmethod
+    def _presence_member(conn_id: str, state: str) -> str:
+        """conn_id is a uuid4 hex, so it never contains the separator and the
+        state splits back off unambiguously."""
+        return f"{conn_id}:{state}"
+
+    @classmethod
+    def _presence_members(cls, conn_id: str) -> List[str]:
+        """Every spelling one connection can have in the set.
+
+        Its state is part of the member, so a focus change has to remove the
+        previous spelling — and the caller does not always know which one it
+        was (a heartbeat after a missed write, a reconnect).
+        """
+        return [cls._presence_member(conn_id, state) for state in PRESENCE_STATES]
 
     async def _presence_write(self, websocket: WebSocket, state: str) -> None:
         conn_id = self._conn_ids.get(websocket)
         addr = self._conn_addr.get(websocket)
         if not (self.shared and conn_id and addr):
             return
+        key = self._presence_key(addr)
+        now = time.time()
         try:
-            await self._redis.set(
-                self._presence_key(addr, conn_id), state, ex=PRESENCE_TTL_SECONDS
+            # One round trip: replace this connection's entry, drop the ones
+            # nobody is refreshing any more, and re-arm the whole-key backstop.
+            pipe = self._redis.pipeline()
+            pipe.zrem(key, *self._presence_members(conn_id))
+            pipe.zadd(
+                key,
+                {self._presence_member(conn_id, state): now + PRESENCE_TTL_SECONDS},
             )
+            # A worker that dies stops refreshing its scores; without this the
+            # set would keep every connection it ever held, since each new
+            # socket gets a fresh conn_id.
+            pipe.zremrangebyscore(key, "-inf", now)
+            # Reads already ignore stale members, so this only stops an
+            # abandoned address from occupying a key forever.
+            pipe.expire(key, PRESENCE_TTL_SECONDS)
+            await pipe.execute()
         except Exception as e:
             logger.warning("WS presence write failed: %s", e)
 
-    def _presence_keys(self, addr: str) -> list:
-        return list(
-            self._redis_sync.scan_iter(match=f"{PRESENCE_PREFIX}{addr}:*", count=100)
-        )
+    def _presence_states(self, addr: str) -> List[str]:
+        """The states of `addr`'s live connections, in ONE keyed read.
+
+        This was `scan_iter(match=f"{PRESENCE_PREFIX}{addr}:*")` — a walk of
+        the entire keyspace, run on every push and therefore once per
+        recipient of a group message (audit L-7). Now the address names the
+        key directly and the score range does the expiry filtering, so cost
+        depends on that one user's connection count, not on how much is in
+        Redis.
+        """
+        return [
+            member.rpartition(":")[2]
+            for member in self._redis_sync.zrangebyscore(
+                self._presence_key(addr), time.time(), "+inf"
+            )
+        ]
 
     # ---------- registry ----------
 
@@ -182,9 +234,11 @@ class ConnectionManager:
         addr = self._conn_addr.pop(websocket, None)
         if self.shared and conn_id and addr:
             try:
-                await self._redis.delete(self._presence_key(addr, conn_id))
+                await self._redis.zrem(
+                    self._presence_key(addr), *self._presence_members(conn_id)
+                )
             except Exception as e:
-                # The TTL reaps it if this fails.
+                # The score expiry reaps it if this fails.
                 logger.warning("WS presence delete failed: %s", e)
 
     async def set_focused(self, websocket: WebSocket):
@@ -202,7 +256,7 @@ class ConnectionManager:
         addr = user_address.lower()
         if self.shared:
             try:
-                return bool(self._presence_keys(addr))
+                return bool(self._presence_states(addr))
             except Exception as e:
                 logger.warning("WS presence read failed (%s) — using local state", e)
         return bool(self.active_connections.get(addr))
@@ -212,8 +266,7 @@ class ConnectionManager:
         addr = user_address.lower()
         if self.shared:
             try:
-                keys = self._presence_keys(addr)
-                return bool(keys) and "focused" in self._redis_sync.mget(keys)
+                return "focused" in self._presence_states(addr)
             except Exception as e:
                 logger.warning("WS presence read failed (%s) — using local state", e)
         connections = self.active_connections.get(addr, [])

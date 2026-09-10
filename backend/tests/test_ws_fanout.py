@@ -1,8 +1,9 @@
 """Shared WebSocket fan-out + presence (audit P0).
 
 Exercises ConnectionManager's Redis mode: delivery published through pub/sub
-(so any worker's sockets are reached), presence tracked in TTL'd Redis keys,
-and graceful fallback to in-process behavior when Redis is absent or fails.
+(so any worker's sockets are reached), presence tracked in one sorted set per
+address scored by expiry (audit L-7), and graceful fallback to in-process
+behavior when Redis is absent or fails.
 
 Runs against fakeredis by default; set TEST_REDIS_URL to use a real Redis
 (CI does, via its redis service container).
@@ -11,13 +12,14 @@ Runs against fakeredis by default; set TEST_REDIS_URL to use a real Redis
 import asyncio
 import os
 import sys
+import time
 import uuid
 
 import pytest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from websocket_manager import ConnectionManager, PRESENCE_PREFIX
+from websocket_manager import ConnectionManager
 
 
 @pytest.fixture
@@ -30,6 +32,30 @@ def addr():
 @pytest.fixture
 def anyio_backend():
     return "asyncio"
+
+
+class _CommandSpy:
+    """Records the Redis commands a call issues (audit L-7).
+
+    Wraps the sync client, the one the push path reads presence through, so
+    a test can assert on *how* a lookup was answered and not only on what it
+    answered — the scan it replaces returned the right result too.
+    """
+
+    def __init__(self, inner):
+        self._inner = inner
+        self.calls = []
+
+    def __getattr__(self, name):
+        attr = getattr(self._inner, name)
+        if not callable(attr):
+            return attr
+
+        def record(*args, **kwargs):
+            self.calls.append(name)
+            return attr(*args, **kwargs)
+
+        return record
 
 
 class FakeWebSocket:
@@ -122,8 +148,117 @@ async def test_presence_is_shared_through_redis(addr):
 
         await mgr.disconnect(ws, addr)
         assert mgr.is_connected(addr) is False
-        # No presence keys left behind.
-        assert mgr._presence_keys(addr) == []
+        # No presence entries left behind.
+        assert mgr._presence_states(addr) == []
+    finally:
+        await mgr.shutdown()
+
+
+@pytest.mark.anyio
+async def test_presence_lookup_does_not_walk_the_keyspace(addr):
+    """Audit L-7: the push path must not SCAN.
+
+    `is_focused` runs once per push, so once per recipient of a group
+    message. It used to scan the whole keyspace for `presence:{addr}:*`;
+    it must now be a single keyed read.
+    """
+    mgr = await _make_shared_manager()
+    try:
+        ws = FakeWebSocket()
+        await mgr.connect(ws, addr)
+        await mgr.set_focused(ws)
+
+        spy = _CommandSpy(mgr._redis_sync)
+        mgr._redis_sync = spy
+        assert mgr.is_focused(addr) is True
+
+        assert not [c for c in spy.calls if c in ("scan", "scan_iter", "keys")], \
+            f"presence lookup walked the keyspace: {spy.calls}"
+        assert len(spy.calls) == 1, f"expected one keyed read, got {spy.calls}"
+    finally:
+        await mgr.shutdown()
+
+
+@pytest.mark.anyio
+async def test_presence_lookup_cost_is_independent_of_other_users(addr):
+    """The scan was O(keyspace): every other user's presence slowed a push.
+
+    A thousand unrelated presence keys must be invisible to this address —
+    same single read, same answer.
+    """
+    mgr = await _make_shared_manager()
+    try:
+        ws = FakeWebSocket()
+        await mgr.connect(ws, addr)
+
+        # Noise gets a TTL: against a real Redis (TEST_REDIS_URL) this would
+        # otherwise be a thousand keys left behind on every run — and the next
+        # run of THIS test would be measuring them.
+        pipe = mgr._redis_sync.pipeline()
+        for i in range(1000):
+            key = mgr._presence_key(f"{addr}_noise_{i}")
+            pipe.zadd(key, {f"c{i}:focused": time.time() + 60})
+            pipe.expire(key, 60)
+        pipe.execute()
+
+        spy = _CommandSpy(mgr._redis_sync)
+        mgr._redis_sync = spy
+        assert mgr.is_connected(addr) is True
+        assert mgr.is_focused(addr) is False, "read another user's presence"
+        assert len(spy.calls) == 2, f"one read per query expected, got {spy.calls}"
+    finally:
+        await mgr.shutdown()
+
+
+@pytest.mark.anyio
+async def test_entry_from_a_dead_worker_is_not_present(addr):
+    """A worker that dies mid-connection stops refreshing its score.
+
+    With per-connection keys this was Redis's own TTL. The set has one
+    expiry for the whole key, so the score has to carry it instead —
+    otherwise a crashed worker would keep a user "focused" (and silently
+    swallow their push notifications) for as long as any other connection
+    of theirs kept the key alive.
+    """
+    mgr = await _make_shared_manager()
+    try:
+        key = mgr._presence_key(addr)
+        mgr._redis_sync.zadd(key, {"deadconn:focused": time.time() - 1})
+
+        assert mgr.is_connected(addr) is False
+        assert mgr.is_focused(addr) is False
+
+        # A live connection on the same address must not resurrect it.
+        ws = FakeWebSocket()
+        await mgr.connect(ws, addr)
+        assert mgr.is_connected(addr) is True
+        assert mgr.is_focused(addr) is False, "stale entry counted as focused"
+    finally:
+        await mgr.shutdown()
+
+
+@pytest.mark.anyio
+async def test_presence_tracks_each_connection_separately(addr):
+    """Two tabs: focus follows whichever one is in front, and closing one
+    does not mark the user gone."""
+    mgr = await _make_shared_manager()
+    try:
+        ws1, ws2 = FakeWebSocket(), FakeWebSocket()
+        await mgr.connect(ws1, addr)
+        await mgr.connect(ws2, addr)
+        assert sorted(mgr._presence_states(addr)) == ["blurred", "blurred"]
+
+        await mgr.set_focused(ws2)
+        assert mgr.is_focused(addr) is True
+        # The state replaces the entry, it does not add one.
+        assert sorted(mgr._presence_states(addr)) == ["blurred", "focused"]
+
+        await mgr.disconnect(ws2, addr)
+        assert mgr.is_connected(addr) is True
+        assert mgr.is_focused(addr) is False
+
+        await mgr.disconnect(ws1, addr)
+        assert mgr.is_connected(addr) is False
     finally:
         await mgr.shutdown()
 
