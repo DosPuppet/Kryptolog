@@ -1,11 +1,8 @@
-import { useState, useEffect } from 'react'
-
-// Default Configuration
-const DEFAULT_API_URL = 'http://localhost:8000';
+import { useState } from 'react'
 
 const SettingsModal = ({ onClose, onExport, onImport }) => {
   const [password, setPassword] = useState('');
-  const [mode, setMode] = useState('menu'); // menu, export, config, trusted-sites
+  const [mode, setMode] = useState('menu'); // menu, export, import, trusted-sites
   const [error, setError] = useState('');
 
   // Export format: 'encrypted' (.kvault, recommended) or 'plain' (JSON).
@@ -20,27 +17,10 @@ const SettingsModal = ({ onClose, onExport, onImport }) => {
   const [importIsEncrypted, setImportIsEncrypted] = useState(false);
   const [importPassphrase, setImportPassphrase] = useState('');
 
-  // Config State
-  const [apiUrl, setApiUrl] = useState(DEFAULT_API_URL);
-  const [showConfig, setShowConfig] = useState(false);
-
   // Trusted Sites State
   const [trustedSites, setTrustedSites] = useState([]);
   const [newSiteUrl, setNewSiteUrl] = useState('');
   const [sitesLoading, setSitesLoading] = useState(false);
-
-  useEffect(() => {
-    // Load stored config
-    chrome.storage.local.get(['apiUrl'], (res) => {
-      if (res.apiUrl) setApiUrl(res.apiUrl);
-    });
-  }, []);
-
-  const saveConfig = () => {
-    chrome.storage.local.set({ apiUrl }, () => {
-      setShowConfig(false);
-    });
-  };
 
   const fetchTrustedSites = () => {
     setSitesLoading(true);
@@ -163,7 +143,7 @@ const SettingsModal = ({ onClose, onExport, onImport }) => {
         <button className="close-btn" onClick={onClose}>×</button>
         <h3>Settings</h3>
 
-        {mode === 'menu' && !showConfig && (
+        {mode === 'menu' && (
           <div className="settings-menu">
             <button onClick={() => setMode('export')} className="primary-btn">Export / Back up Keys</button>
             <button
@@ -177,22 +157,6 @@ const SettingsModal = ({ onClose, onExport, onImport }) => {
             <button onClick={() => { setMode('trusted-sites'); fetchTrustedSites(); }} className="secondary-btn">
               Manage Trusted Sites
             </button>
-            <hr style={{ margin: '15px 0', borderColor: '#333' }} />
-            <button onClick={() => setShowConfig(true)} className="text-btn" style={{ fontSize: '0.8em', color: '#888' }}>
-              Config (API)
-            </button>
-          </div>
-        )}
-
-        {showConfig && (
-          <div className="config-form" style={{ textAlign: 'left' }}>
-            <h4>Configuration</h4>
-            <div style={{ marginBottom: '10px' }}>
-              <label style={{ fontSize: '0.8em', color: '#aaa' }}>API URL (Backend)</label>
-              <input type="text" value={apiUrl} onChange={e => setApiUrl(e.target.value)} style={{ width: '100%', padding: '6px' }} />
-            </div>
-            <button onClick={saveConfig} className="primary-btn">Save</button>
-            <button onClick={() => setShowConfig(false)} className="text-btn">Cancel</button>
           </div>
         )}
 

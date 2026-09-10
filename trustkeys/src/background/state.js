@@ -29,7 +29,3 @@ export const state = {
     popupWindowId: null,    // the unlock nudge
     approvalWindowId: null, // the window that shows pending approvals
 };
-
-export const setState = (newState) => {
-    Object.assign(state, newState);
-};

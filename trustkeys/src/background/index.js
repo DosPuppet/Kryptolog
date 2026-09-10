@@ -360,15 +360,6 @@ chrome.runtime.onMessageExternal.addListener((request, sender, sendResponse) => 
                 case 'CHECK_CONNECTION':
                     sendResponse({ success: true, connected: true, version: '1.0.0' });
                     break;
-                case 'IS_CONNECTED': {
-                    const origin = sender.origin;
-                    if (state.vault && state.vault.permissions) {
-                        sendResponse({ success: true, connected: !!state.vault.permissions[origin] });
-                    } else {
-                        sendResponse({ success: true, connected: false });
-                    }
-                    break;
-                }
                 default:
                     sendResponse({ success: false, error: 'Unknown external message type' });
             }
