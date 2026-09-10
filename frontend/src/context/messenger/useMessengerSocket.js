@@ -67,7 +67,6 @@ export const useMessengerSocket = ({ user, token, handlers }) => {
                 if (heartbeatInterval) clearInterval(heartbeatInterval);
                 heartbeatInterval = setInterval(() => {
                     if (ws.readyState === WebSocket.OPEN) {
-                        console.debug("WS Sending PING");
                         ws.send(JSON.stringify({ type: 'PING' }));
                     }
                 }, 30000);

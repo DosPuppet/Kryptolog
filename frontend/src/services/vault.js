@@ -143,8 +143,9 @@ class VaultService {
         localStorage.setItem('kryptolog_vault', JSON.stringify(encrypted));
     }
 
-    // Public save is removed/disabled because we don't save the in-memory (sanitized) vault
-    // Operations like add/delete handle saving internally via _save(fullVault)
+    // There is deliberately no public save(): the in-memory vault is sanitized
+    // (no private keys), so persisting it would erase them. Mutations go
+    // through _save(fullVault) internally.
 
     async setup(name, password) {
         if (this.hasVault()) throw new Error("Vault already exists");
@@ -315,45 +316,37 @@ class VaultService {
     async sign(message, password) {
         if (this.isLocked) throw new Error("Vault locked");
 
-        // 1. DECRYPT ON DEMAND
         const fullVault = await this._getFullVault(password);
         const account = fullVault.accounts.find(a => a.id === fullVault.activeAccountId);
 
         if (!account) throw new Error("Active account not found in vault");
 
-        // 2. USE KEY
         const signature = await signMessagePQC(message, account.mldsa.privateKey);
 
-        // 3. DISCARD (fullVault goes out of scope)
         return signature;
     }
 
     async decrypt(encryptedData, password) {
         if (this.isLocked) throw new Error("Vault locked");
 
-        // 1. DECRYPT ON DEMAND
         const fullVault = await this._getFullVault(password);
         const account = fullVault.accounts.find(a => a.id === fullVault.activeAccountId);
 
         if (!account) throw new Error("Active account not found in vault");
 
-        // 2. USE KEY
         const plaintext = await decryptMessagePQC(encryptedData, account.mlkem.privateKey);
 
-        // 3. DISCARD
         return plaintext;
     }
 
     async decryptMany(encryptedItems, password) {
         if (this.isLocked) throw new Error("Vault locked");
 
-        // 1. DECRYPT VAULT ONCE
         const fullVault = await this._getFullVault(password);
         const account = fullVault.accounts.find(a => a.id === fullVault.activeAccountId);
 
         if (!account) throw new Error("Active account not found in vault");
 
-        // 2. DECRYPT ALL MESSAGES
         // We catch errors per message so one failure doesn't break all
         return await Promise.all(encryptedItems.map(async (item) => {
             try {
@@ -368,38 +361,32 @@ class VaultService {
     // --- Session Key Support ---
 
     async generateSessionKey() {
-        // Stateless, but exposed for consistency
-        return await generateSessionKey();
+            return await generateSessionKey();
     }
 
     async wrapSessionKey(sessionKey, publicKey) {
-        // Stateless, but exposed for consistency
-        return await wrapSessionKey(sessionKey, publicKey);
+            return await wrapSessionKey(sessionKey, publicKey);
     }
 
     async unwrapSessionKey(wrappedKey, password) {
         if (this.isLocked) throw new Error("Vault locked");
 
-        // 1. Load Vault to get Private Key
         const fullVault = await this._getFullVault(password);
         const account = fullVault.accounts.find(a => a.id === fullVault.activeAccountId);
         if (!account) throw new Error("Active account not found");
 
-        // 2. Unwrap
         return await unwrapSessionKey(wrappedKey, account.mlkem.privateKey);
     }
 
     async unwrapManySessionKeys(wrappedKeys, password) {
         if (this.isLocked) throw new Error("Vault locked");
 
-        // 1. Load Vault to get Private Key (ONCE)
         const fullVault = await this._getFullVault(password);
         const account = fullVault.accounts.find(a => a.id === fullVault.activeAccountId);
         if (!account) throw new Error("Active account not found");
 
         const privKey = account.mlkem.privateKey;
 
-        // 2. Unwrap All
         // We run these in parallel since we have the key
         return await Promise.all(wrappedKeys.map(async (blob) => {
             try {

@@ -292,7 +292,7 @@ export function useSecrets(encryptionPublicKey, pqcAccount, options = {}) {
             // 1. Generate AES-256 Key
             const fileKey = await generateSymmetricKey();
 
-            // 3. Prepare Payload (Signed or Raw)
+            // 2. Prepare Payload (Signed or Raw)
             let payloadToEncrypt = rawContent;
             let secretType = type;
             let isChunkedFile = false;
@@ -381,7 +381,7 @@ export function useSecrets(encryptionPublicKey, pqcAccount, options = {}) {
                 secretType = 'signed_document';
             }
 
-            // 4. Encrypt Content with AES Key
+            // 3. Encrypt Content with AES Key
             reportProgress(40, 'Encrypting Content (AES)...');
             const encryptedContentIdx = await encryptSymmetric(payloadToEncrypt, fileKey);
             const encryptedDataStr = JSON.stringify(encryptedContentIdx);

@@ -52,13 +52,12 @@ export const biometricMethods = {
         if (!prefsString) throw new Error("No biometric preferences found.");
         const prefs = JSON.parse(prefsString);
 
-        // 1. Authenticate & Get Key (passes mode so correct path is used)
+        // mode selects the PRF or legacy-fallback path.
         const { getBiometricKey, decryptSymmetric } = await import('../utils/crypto');
 
         const mode = prefs.mode || 'prf'; // backward compat: old prefs without mode default to prf
         const key = await getBiometricKey(prefs.credentialId, prefs.prfSalt, mode);
 
-        // 2. Decrypt Password
         const password = await decryptSymmetric(prefs.encryptedPass, key);
         if (!password) throw new Error("Biometric decryption failed.");
 
@@ -67,7 +66,6 @@ export const biometricMethods = {
 
     async unlockWithBiometrics() {
         const password = await this.recoverPasswordWithBiometrics();
-        // 3. Unlock Vault
         return await this.unlock(password);
     },
 

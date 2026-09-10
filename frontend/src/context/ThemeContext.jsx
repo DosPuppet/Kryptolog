@@ -59,7 +59,7 @@ export const ThemeProvider = ({ children }) => {
 
     const triggerRetroMode = () => {
         if (isRetro) {
-            // Disable if already on? Or maybe re-crash? Let's toggle off for sanity if they spam again.
+            // Second trigger turns it off rather than replaying the animation.
             setIsRetro(false);
             return;
         }

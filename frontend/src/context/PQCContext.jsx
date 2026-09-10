@@ -4,6 +4,7 @@ import { useAuth } from './AuthContext';
 import { vaultService } from '../services/vault';
 import { domainSeparate, SIGNING_CONTEXT, encryptionKeyAttestationBody } from '../utils/crypto';
 import { toast } from '../utils/toast';
+import PasswordModal from '../components/PasswordModal';
 
 const PQCContext = createContext();
 
@@ -14,8 +15,6 @@ export const usePQC = () => {
     }
     return context;
 };
-
-import PasswordModal from '../components/PasswordModal';
 
 export const PQCProvider = ({ children }) => {
     const { login: authLogin, logout: authLogout } = useAuth();
@@ -46,7 +45,8 @@ export const PQCProvider = ({ children }) => {
         return () => clearTimeout(t);
     }, []);
 
-    // FIX: Clear state if authType changes away from trustkeys (Logout or Switch)
+    // Logging out or switching away from the extension must clear the cached
+    // identity, or the next session starts holding the previous one's keys.
     const { authType } = useAuth();
     useEffect(() => {
         if (authType !== 'trustkeys') {

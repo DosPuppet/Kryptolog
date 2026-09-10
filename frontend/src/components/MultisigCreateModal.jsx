@@ -123,7 +123,7 @@ export default function MultisigCreateModal({ isOpen, onClose, onCreated }) {
 
     const handleCreate = async () => {
         if (!name || (contentType === 'text' && !content) || (contentType === 'file' && selectedFiles.length === 0) || signers.length === 0) {
-            toast.error("Please complete all fields. Use must have at least one signer.");
+            toast.error("Please complete all fields. You must add at least one signer.");
             return;
         }
 
@@ -233,14 +233,8 @@ export default function MultisigCreateModal({ isOpen, onClose, onCreated }) {
                 signerKeys[s.address] = await secureEncrypt(fileKey, s.encryption_public_key);
             }
 
-            // 5. Encrypt AES Key for Recipients
-            // NOTE: Usually keys are deferred, but if we want them to have it immediately (which defeats the purpose of "release on completion"?)
-            // The backend logic for multisig release says: "Store Recipient Keys (Release Mechanism) if provided... in sign_multisig_workflow"
-            // Wait, create_multisig_workflow says:
-            // "recipient_entry = models.MultisigWorkflowRecipient(..., encrypted_key=key)"
-            // If we provide keys now, they get access now?
-            // "Access Logic: Owner/Signer always. Recipient ONLY if completed." - backend/routers/multisig.py
-            // So we CAN store them now, the API gates access.
+            // Recipient keys are wrapped up front. Storing them is safe because
+            // the server withholds them until the workflow completes.
             setProgress(60);
             const recipientKeys = {};
             for (const r of recipients) {

@@ -10,11 +10,10 @@ import { downloadChunkedFile, downloadFileByRange } from '../../utils/fileChunks
 // Locate MY wrapped fileKey on the workflow based on role.
 const resolveMyEncryptedKey = ({ workflow, user, isOwner, isSigner, isRecipient }) => {
     if (isOwner) {
-        // Check top-level owner key first (robust fix)
+        // Top-level first: the nested copy is what older responses carried.
         if (workflow.owner_encrypted_key) {
             return workflow.owner_encrypted_key;
         }
-        // Fallback to nested if top-level missing (legacy support)
         if (workflow.secret && workflow.secret.encrypted_key) {
             return workflow.secret.encrypted_key;
         }
@@ -37,7 +36,7 @@ export const decryptWorkflowSecret = async ({ workflow, user, isOwner, isSigner,
     }
 
     const myEncryptedKey = resolveMyEncryptedKey({ workflow, user, isOwner, isSigner, isRecipient });
-    if (!myEncryptedKey) throw new Error("Acccess Denied: No key found for your user.");
+    if (!myEncryptedKey) throw new Error("Access denied: no key found for your user.");
 
     const encryptedContentBlob = workflow.secret?.encrypted_data;
     if (!encryptedContentBlob) throw new Error("Secret content not found in workflow.");

@@ -46,9 +46,8 @@ export function useMultisig() {
                         const sAddr = s.user_address || (s.user && s.user.address);
                         return sAddr && sAddr.toLowerCase() === myAddr && !s.has_signed;
                     });
-                    // 2. Workflow is complete and I am a recipient (maybe notification needed? let's stick to signer actions for now for red dot)
-                    // Actually, if I created it and it's done?
-                    // Let's stick to "Blocking Actions": Need to sign.
+                    // Only blocking actions raise the dot: a signature this user
+                    // still owes. Being a recipient of a finished workflow does not.
                     return isSigner && wf.status === 'pending';
                 }).length;
                 setActionRequiredCount(count);

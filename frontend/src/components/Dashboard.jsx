@@ -9,8 +9,6 @@ import API_ENDPOINTS from '../config';
 
 // Components
 import GlobalProgressBar from './common/GlobalProgressBar';
-
-// Components
 import SecretList from './dashboard/SecretList';
 import CreateSecret from './dashboard/CreateSecret';
 import ShareModal from './dashboard/ShareModal';
@@ -128,7 +126,6 @@ export default function Dashboard({ view = 'secrets' }) {
         fetchWorkflows();
     };
 
-    // Memoize the refresh handler to verify stability
     const handleRefreshSecrets = React.useCallback(() => {
         fetchSharedSecrets();
         updateProgress(100, "New secret shared with you!");
