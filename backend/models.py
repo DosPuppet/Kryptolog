@@ -1,5 +1,3 @@
-from datetime import UTC, datetime
-
 from sqlalchemy import (
     Boolean,
     Column,
@@ -14,6 +12,8 @@ from sqlalchemy import (
 )
 from sqlalchemy.orm import declarative_base, relationship
 
+from utils.clock import utcnow_naive
+
 Base = declarative_base()
 
 
@@ -22,7 +22,7 @@ class Nonce(Base):
 
     address = Column(String, primary_key=True, index=True)  # Address associated with nonce
     nonce = Column(String, nullable=False)
-    created_at = Column(DateTime, default=lambda: datetime.now(UTC))
+    created_at = Column(DateTime, default=utcnow_naive)
     expires_at = Column(DateTime, nullable=False)
 
 
@@ -47,7 +47,7 @@ class User(Base):
     # Bumped on logout / revoke-all; JWTs carry the version they were minted with
     # and are rejected once it no longer matches (token revocation).
     token_version = Column(Integer, nullable=False, default=0, server_default="0")
-    created_at = Column(DateTime, default=lambda: datetime.now(UTC))
+    created_at = Column(DateTime, default=utcnow_naive)
 
     # Usernames are unique case-INSENSITIVELY: a plain unique index is
     # case-sensitive on PostgreSQL, which would let "alice" and "Alice" exist as
@@ -79,7 +79,7 @@ class Secret(Base):
     name = Column(String, index=True)
     type = Column(String, default="standard")  # 'standard' | 'file' | 'signed_document'
     encrypted_data = Column(Text)  # AES-encrypted content or file metadata JSON
-    created_at = Column(DateTime, default=lambda: datetime.now(UTC))
+    created_at = Column(DateTime, default=utcnow_naive)
 
     owner = relationship("User", back_populates="secrets")
     access_grants = relationship("AccessGrant", back_populates="secret")
@@ -93,7 +93,7 @@ class AccessGrant(Base):
     secret_id = Column(Integer, ForeignKey("secrets.id"))
     grantee_address = Column(String, ForeignKey("users.address"))
     encrypted_key = Column(Text)  # The secret's key, encrypted for the grantee's public key
-    created_at = Column(DateTime, default=lambda: datetime.now(UTC))
+    created_at = Column(DateTime, default=utcnow_naive)
     expires_at = Column(DateTime, nullable=True)
 
     secret = relationship("Secret", back_populates="access_grants")
@@ -111,7 +111,7 @@ class MultisigWorkflow(Base):
     threshold = Column(Integer, nullable=True)  # N in N-of-M; NULL ⇒ N-of-N (= len(signers))
     rejected_by = Column(String, nullable=True)  # address of the signer who rejected
     rejected_at = Column(DateTime, nullable=True)
-    created_at = Column(DateTime, default=lambda: datetime.now(UTC))
+    created_at = Column(DateTime, default=utcnow_naive)
 
     owner = relationship("User", back_populates="workflows")
     secret = relationship("Secret")
@@ -162,7 +162,7 @@ class Message(Base):
     recipient_address = Column(String, ForeignKey("users.address"), index=True)
     content = Column(Text)  # Encrypted Blob
     is_read = Column(Boolean, default=False, index=True)
-    created_at = Column(DateTime, default=lambda: datetime.now(UTC), index=True)
+    created_at = Column(DateTime, default=utcnow_naive, index=True)
 
     sender = relationship("User", foreign_keys=[sender_address], back_populates="sent_messages")
     recipient = relationship(
@@ -195,7 +195,7 @@ class FileChunk(Base):
     chunk_index = Column(Integer)  # 0-based ordering
     encrypted_data = Column(Text)  # AES-GCM encrypted chunk (hex)
     iv = Column(String)  # Per-chunk IV (hex)
-    created_at = Column(DateTime, default=lambda: datetime.now(UTC))
+    created_at = Column(DateTime, default=utcnow_naive)
 
     secret = relationship("Secret", back_populates="chunks")
 
@@ -209,7 +209,7 @@ class GroupChannel(Base):
     id = Column(String, primary_key=True)  # UUID (generated client-side)
     name = Column(String, nullable=False)
     owner_address = Column(String, ForeignKey("users.address"))
-    created_at = Column(DateTime, default=lambda: datetime.now(UTC))
+    created_at = Column(DateTime, default=utcnow_naive)
 
     owner = relationship("User")
     members = relationship("GroupMember", back_populates="channel", cascade="all, delete-orphan")
@@ -232,7 +232,7 @@ class GroupMember(Base):
     channel_id = Column(String, ForeignKey("group_channels.id"), index=True)
     user_address = Column(String, ForeignKey("users.address"))
     role = Column(String, default="member")  # "owner" | "admin" | "member"
-    joined_at = Column(DateTime, default=lambda: datetime.now(UTC))
+    joined_at = Column(DateTime, default=utcnow_naive)
 
     channel = relationship("GroupChannel", back_populates="members")
     user = relationship("User")
@@ -245,7 +245,7 @@ class GroupMessage(Base):
     channel_id = Column(String, ForeignKey("group_channels.id"), index=True)
     sender_address = Column(String, ForeignKey("users.address"), index=True)
     content = Column(Text)  # Encrypted blob (v2 payload)
-    created_at = Column(DateTime, default=lambda: datetime.now(UTC), index=True)
+    created_at = Column(DateTime, default=utcnow_naive, index=True)
 
     channel = relationship("GroupChannel", back_populates="messages")
     sender = relationship("User")
@@ -264,7 +264,7 @@ class InviteCode(Base):
     # NULL when admin-seeded (e.g. via generate_invites.py); otherwise the address
     # of the existing user who minted it (enrollment / referral).
     created_by = Column(String, ForeignKey("users.address"), nullable=True)
-    created_at = Column(DateTime, default=lambda: datetime.now(UTC))
+    created_at = Column(DateTime, default=utcnow_naive)
     # Optional expiry (naive UTC, matching how the rest of the app stores/reads).
     expires_at = Column(DateTime, nullable=True)
     # Usage accounting. max_uses=1 ⇒ single-use (the safe default).
@@ -288,7 +288,7 @@ class KeyTransfer(Base):
 
     id = Column(String, primary_key=True, index=True)  # random pickup id
     ciphertext = Column(Text, nullable=False)  # encrypted vault blob (JSON)
-    created_at = Column(DateTime, default=lambda: datetime.now(UTC))
+    created_at = Column(DateTime, default=utcnow_naive)
     expires_at = Column(DateTime, nullable=False)
 
 
@@ -300,7 +300,7 @@ class PushSubscription(Base):
     endpoint = Column(Text, nullable=False)
     p256dh = Column(String, nullable=False)
     auth = Column(String, nullable=False)
-    created_at = Column(DateTime, default=lambda: datetime.now(UTC))
+    created_at = Column(DateTime, default=utcnow_naive)
 
     user = relationship("User", back_populates="push_subscriptions")
 

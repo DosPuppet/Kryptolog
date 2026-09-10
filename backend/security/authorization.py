@@ -23,31 +23,18 @@ an aware value (see `share_secret`), so comparisons here normalise to naive UTC
 rather than assuming either form.
 """
 
-from datetime import UTC, datetime
+from datetime import datetime
 
 from sqlalchemy import and_, or_
 from sqlalchemy.orm import Session
 
 import models
+from utils.clock import utcnow_naive
 
 
 def normalize_address(address: str | None) -> str | None:
     """Lowercase an address for comparison against stored values."""
     return address.lower() if address is not None else None
-
-
-def utcnow_naive() -> datetime:
-    """Current UTC as a naive datetime, matching the DateTime columns."""
-    return datetime.now(UTC).replace(tzinfo=None)
-
-
-def as_naive_utc(value: datetime | None) -> datetime | None:
-    """Normalise a possibly-aware datetime to naive UTC for comparison."""
-    if value is None:
-        return None
-    if value.tzinfo is None:
-        return value
-    return value.astimezone(UTC).replace(tzinfo=None)
 
 
 def _live_grant_filter(now: datetime):

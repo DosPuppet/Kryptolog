@@ -7,18 +7,13 @@ DateTime columns elsewhere, which are declared without timezone=True.
 """
 
 import secrets
-from datetime import UTC, datetime, timedelta
+from datetime import timedelta
 
 from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
 import models
-
-
-def _utcnow() -> datetime:
-    # Naive UTC, consistent with the other datetime columns as read back from
-    # the database (avoids mixing aware/naive in the expiry comparison).
-    return datetime.now(UTC).replace(tzinfo=None)
+from utils.clock import utcnow_naive
 
 
 def generate_code() -> str:
@@ -37,7 +32,7 @@ def consume_invite(db: Session, code: str, used_by: str | None) -> bool:
     if not code:
         return False
 
-    now = _utcnow()
+    now = utcnow_naive()
     affected = (
         db.query(models.InviteCode)
         .filter(
@@ -71,7 +66,7 @@ def create_invites(
     """Mint `count` invite codes and persist them. Returns the raw codes."""
     expires_at = None
     if expires_in_days is not None:
-        expires_at = _utcnow() + timedelta(days=expires_in_days)
+        expires_at = utcnow_naive() + timedelta(days=expires_in_days)
 
     codes = []
     for _ in range(count):

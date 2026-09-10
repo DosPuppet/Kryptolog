@@ -1,4 +1,4 @@
-from datetime import UTC, datetime, timedelta
+from datetime import timedelta
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from sqlalchemy import func
@@ -11,6 +11,7 @@ import schemas
 from database import get_db
 from dependencies import get_current_user, limiter
 from security import authorization
+from utils.clock import utcnow_naive
 from utils.push import notify_user_push_async
 from websocket_manager import manager
 
@@ -233,7 +234,7 @@ async def share_secret(
 
     expires_at = None
     if grant.expires_in:
-        expires_at = datetime.now(UTC) + timedelta(seconds=grant.expires_in)
+        expires_at = utcnow_naive() + timedelta(seconds=grant.expires_in)
 
     new_grant = models.AccessGrant(
         secret_id=grant.secret_id,
@@ -319,7 +320,7 @@ def get_secret_access(
     if not authorization.can_manage_secret(db, secret, current_user.address):
         raise HTTPException(status_code=403, detail="Not authorized")
 
-    now = datetime.now(UTC)
+    now = utcnow_naive()
     db.query(models.AccessGrant).filter(
         models.AccessGrant.secret_id == secret_id,
         models.AccessGrant.expires_at.isnot(None),
@@ -346,7 +347,7 @@ def get_shared_secrets(
     current_user: models.User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    now = datetime.now(UTC)
+    now = utcnow_naive()
 
     db.query(models.AccessGrant).filter(
         models.AccessGrant.grantee_address == current_user.address,

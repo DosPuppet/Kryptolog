@@ -12,7 +12,7 @@ GET  /transfers/{id}  — unauthenticated (the target device has no identity yet
 """
 
 import secrets as _secrets
-from datetime import UTC, datetime, timedelta
+from datetime import timedelta
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy.orm import Session
@@ -22,20 +22,9 @@ import models
 import schemas
 from database import get_db
 from dependencies import get_current_user, limiter
+from utils.clock import as_naive_utc, utcnow_naive
 
 router = APIRouter(prefix="/transfers", tags=["transfers"])
-
-
-def _now() -> datetime:
-    return datetime.now(UTC)
-
-
-def _as_naive(value: datetime) -> datetime:
-    """Normalise to naive UTC. `expires_at` is DateTime (no timezone), so rows
-    read back are naive while freshly-built values may still be aware."""
-    if value.tzinfo is None:
-        return value
-    return value.astimezone(UTC).replace(tzinfo=None)
 
 
 @router.post("", response_model=schemas.KeyTransferCreateResponse)
@@ -48,12 +37,10 @@ def create_transfer(
 ):
     # Opportunistically purge expired rows so the table can't accumulate.
     # Naive UTC comparison to match the (timezone-less) column.
-    db.query(models.KeyTransfer).filter(
-        models.KeyTransfer.expires_at <= _now().replace(tzinfo=None)
-    ).delete()
+    db.query(models.KeyTransfer).filter(models.KeyTransfer.expires_at <= utcnow_naive()).delete()
 
     transfer_id = _secrets.token_urlsafe(9)  # ~12 chars, unguessable
-    expires_at = _as_naive(_now() + timedelta(minutes=config.KEY_TRANSFER_TTL_MINUTES))
+    expires_at = utcnow_naive() + timedelta(minutes=config.KEY_TRANSFER_TTL_MINUTES)
     db.add(models.KeyTransfer(id=transfer_id, ciphertext=body.ciphertext, expires_at=expires_at))
     db.commit()
 
@@ -87,7 +74,7 @@ def claim_transfer(request: Request, transfer_id: str, db: Session = Depends(get
     # Expiry is evaluated inside the DELETE predicate, so an expired row is
     # never claimable even if it was still live at SELECT time. Naive UTC to
     # match the column convention.
-    now_naive = _now().replace(tzinfo=None)
+    now_naive = utcnow_naive()
     deleted = (
         db.query(models.KeyTransfer)
         .filter(
@@ -101,7 +88,7 @@ def claim_transfer(request: Request, transfer_id: str, db: Session = Depends(get
     if deleted != 1:
         # Either another request consumed it first, or it had expired. Both
         # answer the same way — no oracle distinguishing the two.
-        if expires_at is not None and _as_naive(expires_at) <= now_naive:
+        if expires_at is not None and as_naive_utc(expires_at) <= now_naive:
             # Expired row: clear it out so the table cannot accumulate.
             db.query(models.KeyTransfer).filter(models.KeyTransfer.id == transfer_id).delete(
                 synchronize_session=False

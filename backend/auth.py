@@ -167,6 +167,8 @@ ACCESS_TOKEN_EXPIRE_MINUTES = 30
 
 def create_access_token(data: dict, expires_delta: timedelta | None = None):
     to_encode = data.copy()
+    # Aware on purpose, unlike every DB write: `exp` is a JWT claim, not a
+    # naive DateTime column, and PyJWT converts this to a UNIX timestamp.
     expire = datetime.now(UTC) + (expires_delta or timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES))
     to_encode["exp"] = expire  # PyJWT serializes datetime -> numeric exp claim
     try:

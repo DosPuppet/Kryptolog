@@ -1,5 +1,4 @@
 import hashlib
-from datetime import UTC, datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from sqlalchemy.orm import Session, joinedload, selectinload
@@ -10,6 +9,7 @@ import schemas
 from database import get_db
 from dependencies import get_current_user, limiter
 from security import authorization
+from utils.clock import utcnow_naive
 from utils.push import notify_user_push
 
 router = APIRouter(prefix="/multisig", tags=["multisig"])
@@ -381,7 +381,7 @@ def sign_multisig_workflow(
 
     signer.has_signed = True
     signer.signature = sig_req.signature
-    signer.signed_at = datetime.now(UTC)
+    signer.signed_at = utcnow_naive()
 
     # Store Recipient Keys (Release Mechanism) — only on the completing signature.
     if is_completing:
@@ -459,7 +459,7 @@ def reject_multisig_workflow(
     # the owner can then delete the blocked workflow.
     wf.status = "rejected"
     wf.rejected_by = current_user.address.lower()
-    wf.rejected_at = datetime.now(UTC)
+    wf.rejected_at = utcnow_naive()
     db.commit()
 
     sender_name = current_user.username or f"{current_user.address[:8]}..."
