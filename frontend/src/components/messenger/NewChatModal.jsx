@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback } from 'react';
 import { X, Search, Loader2 } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
 import API_ENDPOINTS from '../../config';
+import { apiFetch } from '../../services/api';
 
 const NewChatModal = ({ isOpen, onClose, onStartChat }) => {
     const { user, token } = useAuth();
@@ -12,10 +13,9 @@ const NewChatModal = ({ isOpen, onClose, onStartChat }) => {
     const searchUsers = useCallback(async (query) => {
         setSearching(true);
         try {
-            const res = await fetch(`${API_ENDPOINTS.USERS.LIST}?search=${encodeURIComponent(query)}&only_pqc=true&limit=10`, {
-                headers: { 'Authorization': `Bearer ${token}` }
-            });
-            const data = await res.json();
+            const data = await apiFetch(
+                `${API_ENDPOINTS.USERS.LIST}?search=${encodeURIComponent(query)}&only_pqc=true&limit=10`, token
+            );
             setSearchResults(data.filter(u => u.address !== user.address));
         } catch (e) {
             console.error("Search failed", e);

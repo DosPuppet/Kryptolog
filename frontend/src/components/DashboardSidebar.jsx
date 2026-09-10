@@ -7,6 +7,7 @@ import { useNotifications } from '../context/NotificationContext';
 import { vaultService } from '../services/vault';
 import { API_ENDPOINTS } from '../config';
 import { toast } from '../utils/toast';
+import { apiFetch } from '../services/api';
 
 // Persisted set of shared-secret ids the user has already opened, so the "unread"
 // badge stays cleared once read (instead of reappearing every time secrets re-lock).
@@ -192,11 +193,9 @@ export default function DashboardSidebar({
                             <button
                                 onClick={async () => {
                                     try {
-                                        const res = await fetch(API_ENDPOINTS.NOTIFICATIONS.TEST, {
-                                            method: 'POST',
-                                            headers: { 'Authorization': `Bearer ${token}` }
-                                        });
-                                        const data = await res.json();
+                                        const data = await apiFetch(
+                                            API_ENDPOINTS.NOTIFICATIONS.TEST, token, { method: 'POST' }
+                                        );
                                         if (data.status === 'no_subscriptions') toast.info(data.message);
                                     } catch (e) { console.error('Test push failed:', e); }
                                 }}

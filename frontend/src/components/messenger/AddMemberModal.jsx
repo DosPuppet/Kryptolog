@@ -3,6 +3,7 @@ import { X, Search, Loader2, UserPlus, Check } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
 import API_ENDPOINTS from '../../config';
 import { toast } from '../../utils/toast';
+import { apiFetch } from '../../services/api';
 
 const AddMemberModal = ({ isOpen, onClose, onAdd, currentMembers = [] }) => {
     const { user, token } = useAuth();
@@ -15,10 +16,9 @@ const AddMemberModal = ({ isOpen, onClose, onAdd, currentMembers = [] }) => {
     const searchUsers = useCallback(async (query) => {
         setSearching(true);
         try {
-            const res = await fetch(`${API_ENDPOINTS.USERS.LIST}?search=${encodeURIComponent(query)}&only_pqc=true&limit=10`, {
-                headers: { 'Authorization': `Bearer ${token}` }
-            });
-            const data = await res.json();
+            const data = await apiFetch(
+                `${API_ENDPOINTS.USERS.LIST}?search=${encodeURIComponent(query)}&only_pqc=true&limit=10`, token
+            );
             // Filter out self and existing members
             const filtered = data.filter(u =>
                 u.address !== user.address &&

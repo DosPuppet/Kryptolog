@@ -13,6 +13,7 @@ import { useMessageSessions } from './messenger/useMessageSessions';
 import { sessionKeyId, groupConversationId } from './messenger/sessionScope';
 import { useGroupNames } from './messenger/useGroupNames';
 import { createGroupEventHandlers } from './messenger/groupEvents';
+import { apiFetch } from '../services/api';
 
 // Re-exported for existing importers (tests); the implementation lives in
 // messenger/verifyMessage.js.
@@ -81,22 +82,8 @@ export const MessengerProvider = ({ children }) => {
 
     // ── Shared Helpers ─────────────────────────────────────────────
 
-    /** Authenticated API call — handles headers, JSON parsing, and error throwing. */
-    const api = async (url, options = {}) => {
-        const res = await fetch(url, {
-            ...options,
-            headers: {
-                'Content-Type': 'application/json',
-                'Authorization': `Bearer ${token}`,
-                ...options.headers,
-            },
-        });
-        if (!res.ok) {
-            const err = await res.json().catch(() => ({}));
-            throw new Error(err.detail || `Request failed: ${res.status}`);
-        }
-        return res.json();
-    };
+    /** Authenticated API call, bound to this session's token. */
+    const api = (url, options = {}) => apiFetch(url, token, options);
 
     /**
      * Attestation gate for a group's member set (audit M-1): the members we are
@@ -327,9 +314,8 @@ export const MessengerProvider = ({ children }) => {
         ));
 
         try {
-            await fetch(`${API_ENDPOINTS.BASE}/messages/mark-read/${partnerAddr}`, {
+            await apiFetch(`${API_ENDPOINTS.BASE}/messages/mark-read/${partnerAddr}`, token, {
                 method: 'POST',
-                headers: { 'Authorization': `Bearer ${token}` }
             });
         } catch (e) { console.error("Mark read failed", e); }
     };

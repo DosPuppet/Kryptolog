@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react';
 import { useAuth } from '../context/AuthContext';
 import API_ENDPOINTS from '../config';
 import { fetchAllPages, pageUrl } from '../utils/paging';
+import { apiFetch } from '../services/api';
 
 export function useMultisig() {
     const { token, user } = useAuth();
@@ -27,14 +28,9 @@ export function useMultisig() {
         try {
             // Paged (audit O-3): a workflow awaiting my signature must not be
             // invisible because it sits past the first page.
-            const data = await fetchAllPages(async (page) => {
-                const res = await fetch(
-                    pageUrl(API_ENDPOINTS.SECRETS.LIST + '/../multisig/workflows', page),
-                    { headers: { 'Authorization': `Bearer ${token}` } }
-                );
-                if (!res.ok) throw new Error(`Request failed: ${res.status}`);
-                return res.json();
-            });
+            const data = await fetchAllPages((page) =>
+                apiFetch(pageUrl(API_ENDPOINTS.MULTISIG.WORKFLOWS, page), token)
+            );
             setWorkflows(data);
 
             // Calculate Action Required

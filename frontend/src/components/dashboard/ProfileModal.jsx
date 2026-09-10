@@ -5,6 +5,7 @@ import { usePQC } from '../../context/PQCContext';
 import API_ENDPOINTS from '../../config';
 import DisplayField from '../common/DisplayField';
 import { safetyNumber } from '../../utils/fingerprint';
+import { apiFetch } from '../../services/api';
 
 const ProfileModal = ({ isOpen, onClose }) => {
     const { user, setUser, token } = useAuth();
@@ -39,15 +40,10 @@ const ProfileModal = ({ isOpen, onClose }) => {
         setUpdating(true);
         setError('');
         try {
-            const res = await fetch(API_ENDPOINTS.USERS.UPDATE(user.address), {
+            const res = await apiFetch(API_ENDPOINTS.USERS.UPDATE(user.address), token, {
                 method: 'PUT',
-                headers: {
-                    'Content-Type': 'application/json',
-                    'Authorization': `Bearer ${token}`
-                },
-                body: JSON.stringify({
-                    username: username
-                })
+                raw: true,
+                body: { username },
             });
 
             if (res.ok) {

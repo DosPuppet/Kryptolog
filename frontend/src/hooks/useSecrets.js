@@ -6,6 +6,7 @@ import { fetchAllPages, pageUrl } from '../utils/paging';
 import { generateSymmetricKey, encryptSymmetric, decryptSymmetric, domainSeparate, SIGNING_CONTEXT } from '../utils/crypto';
 import { encryptSecretTitle, decryptSecretTitle, isEncryptedTitle, LOCKED_TITLE } from '../utils/titles';
 import { uploadChunkedFile, downloadChunkedFile, uploadMultipleChunkedFiles, downloadFileByRange, CHUNK_SIZE } from '../utils/fileChunks';
+import { apiFetch } from '../services/api';
 
 export function useSecrets(encryptionPublicKey, pqcAccount, options = {}) {
     const { token } = useAuth();
@@ -74,11 +75,7 @@ export function useSecrets(encryptionPublicKey, pqcAccount, options = {}) {
     // of it: stopping at the first page would hide the user's own secrets with
     // nothing on screen to say so.
     const fetchList = (url) => fetchAllPages(async (page) => {
-        const res = await fetch(pageUrl(url, page), {
-            headers: { 'Authorization': `Bearer ${token}` }
-        });
-        if (!res.ok) throw new Error(`Request failed: ${res.status}`);
-        return res.json();
+        return apiFetch(pageUrl(url, page), token);
     });
 
     const fetchSecrets = async () => {
@@ -135,13 +132,9 @@ export function useSecrets(encryptionPublicKey, pqcAccount, options = {}) {
             // is the only place that fetches it.
             reportProgress(50, 'Fetching Content...');
             const secretId = isShared ? item.secret.id : item.id;
-            const res = await fetch(API_ENDPOINTS.SECRETS.GET(secretId), {
-                headers: { 'Authorization': `Bearer ${token}` }
-            });
-            if (!res.ok) {
-                throw new Error(`Could not load secret content (${res.status})`);
-            }
-            const { encrypted_data: encryptedDataHex } = await res.json();
+            const { encrypted_data: encryptedDataHex } = await apiFetch(
+                API_ENDPOINTS.SECRETS.GET(secretId), token
+            );
 
             reportProgress(60, 'Decrypting Content...');
             const encDataObj = JSON.parse(encryptedDataHex);
@@ -396,22 +389,15 @@ export function useSecrets(encryptionPublicKey, pqcAccount, options = {}) {
             //    under the item's own key (audit M-3) — the server never sees it,
             //    and anyone with access to the item (grantees) can decrypt it.
             reportProgress(60, 'Creating secret...');
-            const res = await fetch(API_ENDPOINTS.SECRETS.CREATE, {
+            const createdSecret = await apiFetch(API_ENDPOINTS.SECRETS.CREATE, token, {
                 method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                    'Authorization': `Bearer ${token}`
-                },
-                body: JSON.stringify({
+                body: {
                     name: await encryptSecretTitle(name, fileKey),
                     type: secretType,
                     encrypted_data: encryptedDataStr,
-                    encrypted_key: encryptedKeyForMe
-                })
+                    encrypted_key: encryptedKeyForMe,
+                },
             });
-
-            if (!res.ok) throw new Error(await res.text());
-            const createdSecret = await res.json();
 
             // 6. Upload chunks
             if (isChunkedFile) {
@@ -448,9 +434,9 @@ export function useSecrets(encryptionPublicKey, pqcAccount, options = {}) {
     };
 
     const deleteSecret = async (id) => {
-        const res = await fetch(API_ENDPOINTS.SECRETS.DELETE(id), {
+        const res = await apiFetch(API_ENDPOINTS.SECRETS.DELETE(id), token, {
             method: 'DELETE',
-            headers: { 'Authorization': `Bearer ${token}` }
+            raw: true,
         });
         if (res.ok) {
             setSecrets(prev => prev.filter(s => s.id !== id));
@@ -469,34 +455,30 @@ export function useSecrets(encryptionPublicKey, pqcAccount, options = {}) {
         const reEncryptedKey = await secureEncrypt(fileKey, recipientPublicKey);
 
         // 3. API Call
-        const res = await fetch(API_ENDPOINTS.SECRETS.SHARE, {
+        const res = await apiFetch(API_ENDPOINTS.SECRETS.SHARE, token, {
             method: 'POST',
-            headers: {
-                'Content-Type': 'application/json',
-                'Authorization': `Bearer ${token}`
-            },
-            body: JSON.stringify({
+            raw: true,
+            body: {
                 secret_id: secretId,
                 grantee_address: recipientAddress,
                 encrypted_key: reEncryptedKey,
-                expires_in: expiry > 0 ? expiry : null
-            })
+                expires_in: expiry > 0 ? expiry : null,
+            },
         });
 
         return res.ok;
     };
 
     const revokeGrant = async (grantId, isSharedView = false) => {
-        const res = await fetch(API_ENDPOINTS.SECRETS.REVOKE(grantId), {
+        const res = await apiFetch(API_ENDPOINTS.SECRETS.REVOKE(grantId), token, {
             method: 'DELETE',
-            headers: { 'Authorization': `Bearer ${token}` }
+            raw: true,
         });
 
         if (res.ok) {
             if (isSharedView) {
                 setSharedSecrets(prev => prev.filter(g => g.id !== grantId));
             }
-            // If viewing access list, caller handles update
         }
         return res.ok;
     };

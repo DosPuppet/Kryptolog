@@ -5,6 +5,7 @@ import { useAuth } from '../../context/AuthContext';
 import { verifySignaturePQC, domainSeparate, SIGNING_CONTEXT } from '../../utils/crypto';
 import API_ENDPOINTS from '../../config';
 import { toast } from '../../utils/toast';
+import { apiFetch } from '../../services/api';
 
 const SecretItem = ({ secret, decryptedContent, onDecrypt, onLock, onDelete, onShare, onViewDetails, viewMode = 'grid', isSharedView }) => {
     const { theme } = useTheme();
@@ -32,15 +33,10 @@ const SecretItem = ({ secret, decryptedContent, onDecrypt, onLock, onDelete, onS
             // Resolve User (Optional)
             let signerInfo = null;
             try {
-                const res = await fetch(API_ENDPOINTS.USERS.RESOLVE, {
+                signerInfo = await apiFetch(API_ENDPOINTS.USERS.RESOLVE, token, {
                     method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json',
-                        'Authorization': `Bearer ${token}`
-                    },
-                    body: JSON.stringify({ address: docData.signerPublicKey })
+                    body: { address: docData.signerPublicKey },
                 });
-                if (res.ok) signerInfo = await res.json();
             } catch { /* best-effort: failure is non-fatal */ }
 
             setVerificationResult({

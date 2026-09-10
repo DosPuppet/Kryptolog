@@ -2,6 +2,7 @@ import API_ENDPOINTS from '../../config';
 import { fetchAllPages, pageUrl } from '../../utils/paging';
 import { sha256Hex, multisigApprovalMessage, decryptSymmetric } from '../../utils/crypto';
 import { assertSafeRecipient } from '../../services/trustedKeys';
+import { apiFetch } from '../../services/api';
 
 // The signer-side approval pipeline (M1): decrypt the secret so the signer can
 // review what they're approving, then sign sha256(stored ciphertext) bound to
@@ -23,13 +24,9 @@ export const signMultisigWorkflow = async ({ workflow, user, token, decryptPQC, 
             // Paged (audit O-3) and this is a lookup, not a listing: the grant
             // we want may be on any page, and not finding it aborts the
             // signature.
-            const shared = await fetchAllPages(async (page) => {
-                const res = await fetch(pageUrl(API_ENDPOINTS.SECRETS.SHARED_WITH, page), {
-                    headers: { 'Authorization': `Bearer ${token}` }
-                });
-                if (!res.ok) throw new Error(`Request failed: ${res.status}`);
-                return res.json();
-            });
+            const shared = await fetchAllPages((page) =>
+                apiFetch(pageUrl(API_ENDPOINTS.SECRETS.SHARED_WITH, page), token)
+            );
             const myShare = shared.find(s => s.secret_id === workflow.secret_id);
             if (myShare) {
                 encryptedKey = myShare.encrypted_key;
@@ -114,21 +111,8 @@ export const signMultisigWorkflow = async ({ workflow, user, token, decryptPQC, 
 
     onProgress(85, "Submitting...");
 
-    const signRes = await fetch(`${API_ENDPOINTS.SECRETS.LIST}/../multisig/workflow/${workflow.id}/sign`, {
+    return apiFetch(API_ENDPOINTS.MULTISIG.SIGN(workflow.id), token, {
         method: 'POST',
-        headers: {
-            'Content-Type': 'application/json',
-            'Authorization': `Bearer ${token}`
-        },
-        body: JSON.stringify({
-            signature,
-            recipient_keys: recipientKeys
-        })
+        body: { signature, recipient_keys: recipientKeys },
     });
-
-    if (!signRes.ok) {
-        const err = await signRes.json();
-        throw new Error(err.detail || "Failed to submit signature");
-    }
-    return signRes.json();
 };

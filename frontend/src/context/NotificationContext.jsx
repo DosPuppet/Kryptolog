@@ -1,6 +1,7 @@
 import { createContext, useContext, useEffect, useState, useCallback, useRef } from 'react';
 import { useAuth } from './AuthContext';
 import { API_ENDPOINTS } from '../config';
+import { apiFetch } from '../services/api';
 
 const NotificationContext = createContext();
 
@@ -90,29 +91,21 @@ export const NotificationProvider = ({ children }) => {
 
             // Send to backend
             const subData = newSub.toJSON();
-            const res = await fetch(API_ENDPOINTS.NOTIFICATIONS.SUBSCRIBE, {
+            await apiFetch(API_ENDPOINTS.NOTIFICATIONS.SUBSCRIBE, authToken, {
                 method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                    'Authorization': `Bearer ${authToken}`
-                },
-                body: JSON.stringify({
+                body: {
                     endpoint: subData.endpoint,
                     p256dh: subData.keys.p256dh,
-                    auth: subData.keys.auth
-                })
+                    auth: subData.keys.auth,
+                },
             });
-
-            if (!res.ok) {
-                throw new Error(`Server returned ${res.status} when saving subscription.`);
-            }
 
             // Drop the previous endpoint server-side so we never accumulate stale
             // subscriptions for this device (which would deliver duplicate pushes).
             if (oldEndpoint && oldEndpoint !== subData.endpoint) {
-                fetch(`${API_ENDPOINTS.NOTIFICATIONS.UNSUBSCRIBE}?endpoint=${encodeURIComponent(oldEndpoint)}`, {
+                apiFetch(`${API_ENDPOINTS.NOTIFICATIONS.UNSUBSCRIBE}?endpoint=${encodeURIComponent(oldEndpoint)}`, authToken, {
                     method: 'POST',
-                    headers: { 'Authorization': `Bearer ${authToken}` }
+                    raw: true,
                 }).catch(() => { /* best effort */ });
             }
 
@@ -163,12 +156,11 @@ export const NotificationProvider = ({ children }) => {
         try {
             // Unsubscribe from backend first
             const authToken = token;  // never persisted — see the note in subscribe (audit L-8)
-            await fetch(`${API_ENDPOINTS.NOTIFICATIONS.UNSUBSCRIBE}?endpoint=${encodeURIComponent(subscription.endpoint)}`, {
-                method: 'POST',
-                headers: {
-                    'Authorization': `Bearer ${authToken}`
-                }
-            });
+            await apiFetch(
+                `${API_ENDPOINTS.NOTIFICATIONS.UNSUBSCRIBE}?endpoint=${encodeURIComponent(subscription.endpoint)}`,
+                authToken,
+                { method: 'POST', raw: true }
+            );
 
             // Unsubscribe from browser
             await subscription.unsubscribe();

@@ -5,6 +5,7 @@ import { fetchAllPages, pageUrl } from '../../utils/paging';
 import { useAuth } from '../../context/AuthContext';
 import { toast } from '../../utils/toast';
 import { confirmDialog } from '../../utils/confirm';
+import { apiFetch } from '../../services/api';
 
 const SecretDetailsModal = ({ isOpen, onClose, secret }) => {
     const { token } = useAuth();
@@ -18,13 +19,9 @@ const SecretDetailsModal = ({ isOpen, onClose, secret }) => {
         try {
             // Paged (audit O-3): this panel is where access gets revoked, so a
             // grantee missing from it is a grantee nobody can revoke.
-            const data = await fetchAllPages(async (page) => {
-                const res = await fetch(pageUrl(API_ENDPOINTS.SECRETS.ACCESS(secret.id), page), {
-                    headers: { 'Authorization': `Bearer ${token}` }
-                });
-                if (!res.ok) throw new Error("Failed to load access details");
-                return res.json();
-            });
+            const data = await fetchAllPages((page) =>
+                apiFetch(pageUrl(API_ENDPOINTS.SECRETS.ACCESS(secret.id), page), token)
+            );
             setGrants(data);
         } catch (err) {
             console.error(err);
@@ -52,9 +49,9 @@ const SecretDetailsModal = ({ isOpen, onClose, secret }) => {
         if (!ok) return;
 
         try {
-            const res = await fetch(API_ENDPOINTS.SECRETS.REVOKE(grantId), {
+            const res = await apiFetch(API_ENDPOINTS.SECRETS.REVOKE(grantId), token, {
                 method: 'DELETE',
-                headers: { 'Authorization': `Bearer ${token}` }
+                raw: true,
             });
             if (res.ok) {
                 setGrants(grants.filter(g => g.id !== grantId));

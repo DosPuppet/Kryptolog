@@ -43,6 +43,15 @@ export const API_ENDPOINTS = {
         DETAILS: (channelId) => `${API_BASE_URL}/groups/${channelId}`,
         MARK_READ: (channelId) => `${API_BASE_URL}/groups/${channelId}/mark-read`,
     },
+    MULTISIG: {
+        // Note the singular/plural split, which mirrors the server: the
+        // collection is /workflows, every single-workflow route is /workflow.
+        CREATE: `${API_BASE_URL}/multisig/workflow`,
+        WORKFLOWS: `${API_BASE_URL}/multisig/workflows`,
+        WORKFLOW: (id) => `${API_BASE_URL}/multisig/workflow/${id}`,
+        SIGN: (id) => `${API_BASE_URL}/multisig/workflow/${id}/sign`,
+        REJECT: (id) => `${API_BASE_URL}/multisig/workflow/${id}/reject`,
+    },
     NOTIFICATIONS: {
         SUBSCRIBE: `${API_BASE_URL}/notifications/subscribe`,
         UNSUBSCRIBE: `${API_BASE_URL}/notifications/unsubscribe`,

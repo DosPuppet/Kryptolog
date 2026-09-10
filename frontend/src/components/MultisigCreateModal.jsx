@@ -8,6 +8,7 @@ import { encryptSecretTitle } from '../utils/titles';
 import API_ENDPOINTS from '../config';
 import { uploadChunkedFile, uploadMultipleChunkedFiles, CHUNK_SIZE } from '../utils/fileChunks';
 import { toast } from '../utils/toast';
+import { apiFetch } from '../services/api';
 
 export default function MultisigCreateModal({ isOpen, onClose, onCreated }) {
     const { user, token } = useAuth();
@@ -85,10 +86,9 @@ export default function MultisigCreateModal({ isOpen, onClose, onCreated }) {
     const handleSearch = async (query) => {
         if (!query) return;
         try {
-            const res = await fetch(`${API_ENDPOINTS.USERS.LIST}?search=${encodeURIComponent(query)}&limit=5`, {
-                headers: { 'Authorization': `Bearer ${token}` }
-            });
-            const data = await res.json();
+            const data = await apiFetch(
+                `${API_ENDPOINTS.USERS.LIST}?search=${encodeURIComponent(query)}&limit=5`, token
+            );
             // Filter out self and already added
             const added = step === 1 ? signers : recipients;
             setSearchResults(data.filter(u => u.address !== user.address && !added.find(a => a.address === u.address)));
@@ -263,49 +263,26 @@ export default function MultisigCreateModal({ isOpen, onClose, onCreated }) {
                 threshold: Math.min(Math.max(threshold, 1), signers.length)
             };
 
-            const res = await fetch(`${API_ENDPOINTS.SECRETS.LIST}/../multisig/workflow`, {
+            const workflowRes = await apiFetch(API_ENDPOINTS.MULTISIG.CREATE, token, {
                 method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                    'Authorization': `Bearer ${token}`
-                },
-                body: JSON.stringify(payload)
+                body: payload,
             });
 
-            if (res.ok) {
-                const workflowRes = await res.json();
-
-                if (isChunkedFile) {
-                    setProgress(90);
-                    if (selectedFiles.length === 1) {
-                        await uploadChunkedFile(
-                            selectedFiles[0],
-                            workflowRes.secret_id,
-                            fileKey,
-                            token,
-                            API_ENDPOINTS.BASE,
-                            (pct, msg) => setProgress(90 + Math.round(pct * 0.10))
-                        );
-                    } else {
-                        await uploadMultipleChunkedFiles(
-                            selectedFiles,
-                            workflowRes.secret_id,
-                            fileKey,
-                            token,
-                            API_ENDPOINTS.BASE,
-                            (pct, msg) => setProgress(90 + Math.round(pct * 0.10))
-                        );
-                    }
-                }
-
-                setProgress(100);
-                setTimeout(() => {
-                    onCreated();
-                    onClose();
-                }, 500);
-            } else {
-                toast.error("Failed to create workflow");
+            if (isChunkedFile) {
+                setProgress(90);
+                const upload = selectedFiles.length === 1
+                    ? uploadChunkedFile(selectedFiles[0], workflowRes.secret_id, fileKey, token,
+                        API_ENDPOINTS.BASE, (pct) => setProgress(90 + Math.round(pct * 0.10)))
+                    : uploadMultipleChunkedFiles(selectedFiles, workflowRes.secret_id, fileKey, token,
+                        API_ENDPOINTS.BASE, (pct) => setProgress(90 + Math.round(pct * 0.10)));
+                await upload;
             }
+
+            setProgress(100);
+            setTimeout(() => {
+                onCreated();
+                onClose();
+            }, 500);
 
         } catch (e) {
             console.error("Creation failed", e);

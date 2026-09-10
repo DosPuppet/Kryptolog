@@ -21,6 +21,7 @@ import ProfileModal from './dashboard/ProfileModal';
 import Messenger from './Messenger';
 import ProofAudit from './ProofAudit';
 import DashboardSidebar from './DashboardSidebar';
+import { apiFetch } from '../services/api';
 
 export default function Dashboard({ view = 'secrets' }) {
     const { user, authType, logout, token } = useAuth();
@@ -45,10 +46,7 @@ export default function Dashboard({ view = 'secrets' }) {
         // be reused even if it was exfiltrated), then clear client state regardless.
         try {
             if (token) {
-                await fetch(API_ENDPOINTS.AUTH.LOGOUT, {
-                    method: 'POST',
-                    headers: { 'Authorization': `Bearer ${token}` }
-                });
+                await apiFetch(API_ENDPOINTS.AUTH.LOGOUT, token, { method: 'POST' });
             }
         } catch (e) {
             console.error("Logout revocation failed", e);

@@ -4,6 +4,7 @@
  * and uploads/downloads them via the /secrets/chunks API.
  */
 import { encryptChunk, decryptChunk, chunkAad } from './crypto';
+import { apiFetch } from '../services/api';
 
 export const CHUNK_SIZE = 512 * 1024; // 512KB per chunk
 
@@ -45,18 +46,10 @@ export async function uploadChunkedFile(file, secretId, fileKey, token, apiBaseU
         const { iv, ciphertext } = await encryptChunk(chunkData, fileKey, chunkAad(secretId, i));
 
         // Upload
-        const res = await fetch(`${apiBaseUrl}/secrets/chunks`, {
+        const res = await apiFetch(`${apiBaseUrl}/secrets/chunks`, token, {
             method: 'POST',
-            headers: {
-                'Content-Type': 'application/json',
-                'Authorization': `Bearer ${token}`
-            },
-            body: JSON.stringify({
-                secret_id: secretId,
-                chunk_index: i,
-                iv: iv,
-                encrypted_data: ciphertext
-            })
+            raw: true,
+            body: { secret_id: secretId, chunk_index: i, iv, encrypted_data: ciphertext },
         });
 
         if (!res.ok) {
@@ -89,9 +82,9 @@ export async function downloadChunkedFile(secretId, fileKey, token, apiBaseUrl, 
     const decryptedChunks = [];
 
     for (let i = 0; i < totalChunks; i++) {
-        const res = await fetch(`${apiBaseUrl}/secrets/${secretId}/chunks/${i}`, {
-            headers: { 'Authorization': `Bearer ${token}` }
-        });
+        const res = await apiFetch(
+            `${apiBaseUrl}/secrets/${secretId}/chunks/${i}`, token, { raw: true }
+        );
 
         if (!res.ok) {
             throw new Error(`Chunk ${i} download failed: ${res.status}`);
@@ -159,18 +152,15 @@ export async function uploadMultipleChunkedFiles(files, secretId, fileKey, token
             // binding the per-file index here would never match (audit M-2).
             const { iv, ciphertext } = await encryptChunk(chunkData, fileKey, chunkAad(secretId, globalChunkIndex));
 
-            const res = await fetch(`${apiBaseUrl}/secrets/chunks`, {
+            const res = await apiFetch(`${apiBaseUrl}/secrets/chunks`, token, {
                 method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                    'Authorization': `Bearer ${token}`
-                },
-                body: JSON.stringify({
+                raw: true,
+                body: {
                     secret_id: secretId,
                     chunk_index: globalChunkIndex,
-                    iv: iv,
-                    encrypted_data: ciphertext
-                })
+                    iv,
+                    encrypted_data: ciphertext,
+                },
             });
 
             if (!res.ok) {
@@ -209,9 +199,9 @@ export async function downloadFileByRange(secretId, fileKey, token, apiBaseUrl, 
 
     for (let i = 0; i < totalChunks; i++) {
         const chunkIndex = chunkOffset + i;
-        const res = await fetch(`${apiBaseUrl}/secrets/${secretId}/chunks/${chunkIndex}`, {
-            headers: { 'Authorization': `Bearer ${token}` }
-        });
+        const res = await apiFetch(
+            `${apiBaseUrl}/secrets/${secretId}/chunks/${chunkIndex}`, token, { raw: true }
+        );
 
         if (!res.ok) {
             throw new Error(`Chunk ${chunkIndex} download failed: ${res.status}`);

@@ -5,6 +5,7 @@ import { useAuth } from '../../context/AuthContext';
 import { checkContactKey, trustContactKey, attestationVerdict } from '../../services/trustedKeys';
 import { safetyNumber } from '../../utils/fingerprint';
 import { confirmDialog } from '../../utils/confirm';
+import { apiFetch } from '../../services/api';
 
 const ShareModal = ({ isOpen, onClose, secret, onShare }) => {
     const { token, user } = useAuth();
@@ -32,10 +33,7 @@ const ShareModal = ({ isOpen, onClose, secret, onShare }) => {
             const url = query
                 ? `${API_ENDPOINTS.USERS.LIST}?search=${encodeURIComponent(query)}&limit=${limit}`
                 : `${API_ENDPOINTS.USERS.LIST}?limit=${limit}`;
-            const res = await fetch(url, {
-                headers: { 'Authorization': `Bearer ${token}` }
-            });
-            const data = await res.json();
+            const data = await apiFetch(url, token);
             setSearchResults(data.filter(u => u.address !== user.address));
         } catch (error) {
             console.error("Search failed", error);

@@ -9,6 +9,7 @@ import { downloadMultisigProof } from './multisig/proof';
 import { SignersList, RecipientsList } from './multisig/WorkflowLists';
 import DecryptedContentPanel from './multisig/DecryptedContentPanel';
 import { confirmDialog } from '../utils/confirm';
+import { apiFetch } from '../services/api';
 
 export default function MultisigWorkflow({ workflow: listWorkflow, onClose, onUpdate, onDelete, setUploadProgress, setStatusMessage }) {
     const { user, token } = useAuth();
@@ -43,12 +44,9 @@ export default function MultisigWorkflow({ workflow: listWorkflow, onClose, onUp
         setDetailError('');
         (async () => {
             try {
-                const res = await fetch(
-                    `${API_ENDPOINTS.SECRETS.LIST}/../multisig/workflow/${listWorkflow.id}`,
-                    { headers: { 'Authorization': `Bearer ${token}` } }
+                const full = await apiFetch(
+                    API_ENDPOINTS.MULTISIG.WORKFLOW(listWorkflow.id), token
                 );
-                if (!res.ok) throw new Error(`Could not load workflow (${res.status})`);
-                const full = await res.json();
                 if (!cancelled) setDetail(full);
             } catch (e) {
                 console.error("Workflow detail fetch failed", e);
@@ -169,19 +167,11 @@ export default function MultisigWorkflow({ workflow: listWorkflow, onClose, onUp
         setError('');
         setIsRejecting(true);
         try {
-            const res = await fetch(`${API_ENDPOINTS.SECRETS.LIST}/../multisig/workflow/${workflow.id}/reject`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
-                body: JSON.stringify({})
-            });
-            if (res.ok) {
-                const updatedWf = await res.json();
-                onUpdate(updatedWf);
-                setDetail(updatedWf);
-            } else {
-                const err = await res.json();
-                throw new Error(err.detail || "Failed to reject workflow");
-            }
+            const updatedWf = await apiFetch(
+                API_ENDPOINTS.MULTISIG.REJECT(workflow.id), token, { method: 'POST', body: {} }
+            );
+            onUpdate(updatedWf);
+            setDetail(updatedWf);
         } catch (e) {
             console.error("Reject failed", e);
             setError(e.message);
@@ -201,16 +191,10 @@ export default function MultisigWorkflow({ workflow: listWorkflow, onClose, onUp
         setError('');
         setIsDeleting(true);
         try {
-            const res = await fetch(`${API_ENDPOINTS.SECRETS.LIST}/../multisig/workflow/${workflow.id}`, {
+            await apiFetch(API_ENDPOINTS.MULTISIG.WORKFLOW(workflow.id), token, {
                 method: 'DELETE',
-                headers: { 'Authorization': `Bearer ${token}` }
             });
-            if (res.status === 204) {
-                onDelete ? onDelete(workflow.id) : onClose();
-            } else {
-                const err = await res.json();
-                throw new Error(err.detail || "Failed to delete workflow");
-            }
+            onDelete ? onDelete(workflow.id) : onClose();
         } catch (e) {
             console.error("Delete failed", e);
             setError(e.message);

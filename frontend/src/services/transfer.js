@@ -5,22 +5,14 @@
 // server. The passphrase is carried out of band (QR / typed code) and never
 // touches the network, so the relay stays zero-knowledge.
 import API_ENDPOINTS from '../config';
+import { apiFetch } from './api';
 
 // Upload an encrypted vault blob; returns { id, expires_at }. Requires a session.
 export const uploadTransfer = async (ciphertext, token) => {
-    const res = await fetch(API_ENDPOINTS.TRANSFERS.CREATE, {
+    return apiFetch(API_ENDPOINTS.TRANSFERS.CREATE, token, {
         method: 'POST',
-        headers: {
-            'Content-Type': 'application/json',
-            'Authorization': `Bearer ${token}`,
-        },
-        body: JSON.stringify({ ciphertext }),
+        body: { ciphertext },
     });
-    if (!res.ok) {
-        const data = await res.json().catch(() => null);
-        throw new Error(data?.detail || `Upload failed (${res.status})`);
-    }
-    return res.json();
 };
 
 // Claim (single-use) an encrypted vault blob by id. No auth — the target device
