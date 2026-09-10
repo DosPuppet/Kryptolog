@@ -147,12 +147,10 @@ export const syncDynamicScripts = async () => {
 
     const origins = Object.keys(state.vault.permissions);
 
-    // Register scripts for all permitted origins
     for (const origin of origins) {
         await registerOriginScripts(origin);
     }
 
-    // Clean up stale registrations
     try {
         const allRegistered = await chrome.scripting.getRegisteredContentScripts();
         for (const script of allRegistered) {

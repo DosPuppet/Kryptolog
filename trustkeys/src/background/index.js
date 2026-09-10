@@ -22,7 +22,6 @@ const initializeStorage = async () => {
         await conn.syncDynamicScripts();
     }
 };
-// Initialize storage and capture promise
 let initPromise = initializeStorage();
 
 // Idle auto-lock (audit M-4). The old check ran ONLY inside initializeStorage,
@@ -46,7 +45,7 @@ chrome.windows.onRemoved.addListener(handleWindowClosed);
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     (async () => {
         try {
-            await initPromise; // Wait for initialization to complete
+            await initPromise;
 
             // Only the extension's own pages count as USER activity (audit M-4).
             // This used to run for EVERY message, so any connected page could
@@ -102,7 +101,6 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
                         break;
                     }
                     await conn.handleConnectAsync(origin, sendResponse);
-                    // Async handler handles sendResponse
                     break;
                 }
 

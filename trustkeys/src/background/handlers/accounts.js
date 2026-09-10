@@ -156,10 +156,9 @@ export const deleteAccount = async (id) => {
     const index = state.vault.accounts.findIndex(a => a.id === id);
     if (index === -1) throw new Error("Account not found");
 
-    // Remove the account
     state.vault.accounts.splice(index, 1);
 
-    // If we deleted the active account, pick another one
+    // The vault must never be left pointing at an account that is gone.
     if (state.vault.activeAccountId === id) {
         if (state.vault.accounts.length > 0) {
             state.vault.activeAccountId = state.vault.accounts[0].id;

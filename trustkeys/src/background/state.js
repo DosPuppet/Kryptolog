@@ -1,4 +1,3 @@
-// State Management
 export const state = {
     isLocked: true,
     hasPassword: false,

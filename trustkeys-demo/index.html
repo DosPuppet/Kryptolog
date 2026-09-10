@@ -487,8 +487,8 @@
                 }
                 document.getElementById('accountInfo').style.display = 'block';
                 document.getElementById('accountName').textContent = account.name;
-                const mlkem = account.mlkemPublicKey || account.kyberPublicKey;
-                const mldsa = account.mldsaPublicKey || account.dilithiumPublicKey;
+                const mlkem = account.mlkemPublicKey;
+                const mldsa = account.mldsaPublicKey;
                 document.getElementById('mlkemKey').textContent = mlkem;
                 document.getElementById('mldsaKey').textContent = mldsa;
                 log(`getAccount() OK — name: "${account.name}", ML-DSA key: ${(mldsa || '').slice(0, 32)}...`, 'success');

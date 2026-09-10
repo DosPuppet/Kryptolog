@@ -15,7 +15,6 @@
         // channel.
         const id = crypto.randomUUID();
         const listener = (event) => {
-            // Check source precisely
             if (event.source !== window) return;
 
             if (event.data.id === id && event.data.source === 'TRUSTKEYS_CONTENT') {

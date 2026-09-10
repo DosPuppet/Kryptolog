@@ -101,11 +101,17 @@ TrustKeys enforces a strict "user consent, least-privilege" model similar to a w
 
 Alternatively, add sites manually from **Settings > Manage Trusted Sites**.
 
-### Configuration
-You can configure the backend API URL in the Settings menu:
-1. Open Extension > Settings.
-2. Click **Config (API)**.
-3. **API URL**: The backend server URL (Default: `http://localhost:8000`).
+### Demo page
+`trustkeys-demo/index.html` is a dependency-free manual test harness that
+exercises every method on `window.trustkeys`. Serve it from a port the
+extension trusts and open it in the browser:
+
+```bash
+python3 -m http.server 5173 --directory trustkeys-demo
+```
+
+It is the only end-to-end exercise of the connect and authorize flow, which
+has no automated coverage.
 
 ---
 

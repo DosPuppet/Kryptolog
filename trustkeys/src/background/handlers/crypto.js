@@ -129,7 +129,6 @@ export const handleGenerateSessionKey = async () => {
 };
 
 export const handleWrapSessionKey = async (request) => {
-    // wrapSessionKey(sessionKeyHex, publicKeyHex)
     if (!request.sessionKey || !request.publicKey) {
         throw new Error("Missing sessionKey or publicKey");
     }

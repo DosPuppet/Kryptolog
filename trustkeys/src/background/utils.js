@@ -67,15 +67,13 @@ export const launchPopup = async (route, params = {}) => {
     let left, top;
 
     try {
-        // Attempt to position in top-right of current window
         const lastWin = await chrome.windows.getLastFocused();
         if (lastWin && lastWin.left !== undefined && lastWin.width !== undefined) {
-            // Position: Right side with 20px padding, Top with 80px padding (account for toolbar)
+            // Below the toolbar, inset from the right edge.
             left = lastWin.left + lastWin.width - width - 20;
             top = lastWin.top + 80;
         }
     } catch (e) {
-        // Fallback to OS default if we can't get window info
         console.warn("Failed to calculate popup position", e);
     }
 

@@ -21,8 +21,6 @@ const callBackground = (type, payload) => {
 
 
 
-// No script injection needed anymore, managed by Manifest V3 "world" property.
-
 // Listen for messages from the page
 window.addEventListener('message', async (event) => {
     if (event.source !== window || event.data.source !== 'TRUSTKEYS_PAGE') return;
