@@ -30,3 +30,15 @@ ADDITIVE — no wire or storage format change. deriveVaultKeyBits() / importVaul
 ## 1.6.0
 
 ADDITIVE/hardening — no wire or storage format change. fromHex() now THROWS on malformed input (audit L-9) instead of decoding non-hex to zero bytes and truncating odd-length strings, which turned a corrupted key into a valid-looking different one.
+
+## 1.7.0
+
+WIRE-FORMAT BREAK. unwrapSessionKey no longer accepts the pre-standardization
+`ct` field name for the wrapped key; it reads `encKey` only. wrapSessionKey has
+written `encKey` since that name was standardized, and neither app writes `ct`,
+so this affects only wrapped keys stored by a client older than that change —
+those no longer unwrap.
+
+Removed because it is the downgrade path the clean-cutover stance exists to
+avoid, and this file states that rule a few functions above where it was being
+broken.

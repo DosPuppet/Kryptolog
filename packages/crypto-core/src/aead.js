@@ -72,7 +72,7 @@ export const wrapSessionKey = async (sessionKeyHex, publicKeyHex) => {
 };
 
 export const unwrapSessionKey = async (wrappedKey, privateKeyHex) => {
-    // wrappedKey: { kem, iv, encKey } — 'ct' is the pre-standardization name.
+    // wrappedKey: { kem, iv, encKey }
     const privateKey = fromHex(privateKeyHex);
     const ct = fromHex(wrappedKey.kem);
 
@@ -81,8 +81,7 @@ export const unwrapSessionKey = async (wrappedKey, privateKeyHex) => {
 
     // 2. Decrypt Session Key
     const iv = fromHex(wrappedKey.iv);
-    // Support 'encKey' (new standard) or 'ct' (legacy/frontend-local)
-    const encryptedKey = fromHex(wrappedKey.encKey || wrappedKey.ct);
+    const encryptedKey = fromHex(wrappedKey.encKey);
 
     const kek = await kemAesKey(new Uint8Array(ss), ["decrypt"]); // HKDF (audit S5)
 

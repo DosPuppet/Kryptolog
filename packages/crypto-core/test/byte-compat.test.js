@@ -142,12 +142,16 @@ describe('randomized envelope round-trips', () => {
         expect(await core.decryptWithSessionKey(ct, sessionKey)).toBe('hello');
     });
 
-    it('unwrapSessionKey still accepts the legacy {ct} field name', async () => {
+    it('unwrapSessionKey REFUSES the legacy {ct} field name (v1.7.0 cutover)', async () => {
+        // The fallback that accepted this was the downgrade path the
+        // clean-cutover stance exists to avoid. Pinned as a refusal so it
+        // cannot come back as a kindness to old data.
         const { publicKey, privateKey } = await core.generateMlKemKeyPair();
         const sessionKey = await core.generateSessionKey();
         const { kem, iv, encKey } = await core.wrapSessionKey(sessionKey, publicKey);
-        const legacy = { kem, iv, ct: encKey }; // pre-standardization shape
-        expect(await core.unwrapSessionKey(legacy, privateKey)).toBe(sessionKey);
+        await expect(
+            core.unwrapSessionKey({ kem, iv, ct: encKey }, privateKey)
+        ).rejects.toThrow();
     });
 
     it('symmetric envelope: encrypt -> decrypt', async () => {
@@ -334,6 +338,6 @@ describe('encryption-key attestation (audit M-1, v1.3.0)', () => {
 
 describe('single-source / version guard', () => {
     it('exports a version both app builds can assert against', () => {
-        expect(core.CRYPTO_CORE_VERSION).toBe('1.6.0');
+        expect(core.CRYPTO_CORE_VERSION).toBe('1.7.0');
     });
 });
