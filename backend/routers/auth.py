@@ -43,41 +43,38 @@ def get_nonce(request: Request, address: str, db: Session = Depends(get_db)):
     return {"nonce": nonce_val}
 
 
-@router.post("/login", response_model=schemas.Token)
-@limiter.limit("5/minute")
-def login(request: Request, login_req: schemas.LoginRequest, db: Session = Depends(get_db)):
-    address = login_req.address.lower()
+def _claim_nonce(db: Session, address: str, nonce: str) -> bool:
+    """Consume the login nonce atomically, returning whether this caller won it.
 
-    # Consume the nonce atomically BEFORE verifying the signature (KRY-004).
-    #
-    # The old flow was SELECT -> verify -> DELETE, and ML-DSA verification is
-    # slow enough that the window between read and delete was comfortably wide:
-    # concurrent requests could each observe the same live nonce and each go on
-    # to mint a token, so "one-time" was not actually one-time. Making the
-    # DELETE itself the guard means exactly one caller can ever claim a given
-    # nonce — whoever's statement reports rowcount == 1 — and the expensive
-    # crypto happens after the claim is already settled.
-    #
-    # Naive UTC to match the (timezone-less) expires_at column.
-    now_naive = utcnow_naive()
+    The claim happens BEFORE signature verification (KRY-004). The old flow was
+    SELECT then verify then DELETE, and ML-DSA verification is slow enough that
+    the window between read and delete was comfortably wide: concurrent
+    requests could each observe the same live nonce and each go on to mint a
+    token, so "one-time" was not one-time. Making the DELETE itself the guard
+    means exactly one caller can ever claim a given nonce — whoever's statement
+    reports rowcount == 1 — and the expensive crypto happens after the claim is
+    already settled.
+    """
     claimed = (
         db.query(models.Nonce)
         .filter(
             models.Nonce.address == address,
-            models.Nonce.nonce == login_req.nonce,
-            models.Nonce.expires_at > now_naive,
+            models.Nonce.nonce == nonce,
+            models.Nonce.expires_at > utcnow_naive(),
         )
         .delete(synchronize_session=False)
     )
     db.commit()
+    return claimed == 1
 
-    if claimed != 1:
-        # Missing, mismatched, expired, or already consumed — one generic
-        # answer, so this can't be used to probe which nonces exist.
-        raise HTTPException(status_code=400, detail="Invalid or expired nonce.")
 
-    # From here the nonce is spent: every failure below must leave it spent,
-    # otherwise a failed attempt would hand back a replayable challenge.
+def _verify_login_payload(login_req: schemas.LoginRequest, address: str) -> None:
+    """Check the signature, the submitted key's format, and the attestation.
+
+    Called only after the nonce is spent, so every failure here must leave it
+    spent: handing back a replayable challenge on a failed attempt is exactly
+    what consuming it first prevents.
+    """
     if not auth.verify_signature(
         address, login_req.nonce, login_req.signature, login_req.encryption_public_key
     ):
@@ -106,53 +103,64 @@ def login(request: Request, login_req: schemas.LoginRequest, db: Session = Depen
         if not auth.verify_message_signature(address, att_msg, attestation):
             raise HTTPException(status_code=400, detail="Invalid encryption key attestation")
 
-    # (Nonce already consumed atomically above — nothing to clean up here.)
 
-    # Find or create user
-    user = db.query(models.User).filter(models.User.address == address).first()
-    if not user:
-        # Default username logic: Use provided username OR first 7 chars of address
-        try:
-            default_username = normalize_username(login_req.username) or address[:7]
-        except InvalidUsername as exc:
-            raise HTTPException(status_code=400, detail=str(exc))
-        # Check username uniqueness (case-insensitive, so the directory can't
-        # hold "alice" and "Alice" as two identities) before consuming any
-        # invite, so a name clash doesn't burn the code.
-        if username_taken(db, default_username):
-            raise HTTPException(
-                status_code=409,
-                detail=f"Username '{default_username}' is already taken. Please choose a different one.",
-            )
+def _register_user(
+    db: Session, login_req: schemas.LoginRequest, address: str, attestation: str | None
+) -> models.User:
+    """Create a brand-new identity, consuming an invite if the server needs one."""
+    try:
+        default_username = normalize_username(login_req.username) or address[:7]
+    except InvalidUsername as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
-        user = models.User(
-            address=address,
-            encryption_public_key=login_req.encryption_public_key,
-            encryption_key_attestation=attestation,
-            username=default_username,
+    # Uniqueness is case-insensitive, so the directory can't hold "alice" and
+    # "Alice" as two identities. Checked before consuming any invite, so a name
+    # clash doesn't burn the code.
+    if username_taken(db, default_username):
+        raise HTTPException(
+            status_code=409,
+            detail=f"Username '{default_username}' is already taken. Please choose a different one.",
         )
-        db.add(user)
-        # Flush (don't commit) so the invite's used_by FK can see the new user
-        # while keeping user creation + invite consumption a single atomic
-        # transaction: a failed consume rolls the user back, and a crash can't
-        # burn a code without creating the user.
-        db.flush()
 
-        # Access filter (audit §5): a brand-new identity may only be created with a
-        # valid invite code when invites are required. Consumed atomically so the
-        # same code can't be over-spent. Existing users never reach this branch.
-        # Generic 403 on failure — no distinction between missing/expired/used, to
-        # avoid turning this into an invite-code oracle.
-        if config.invites_required():
-            if not invites.consume_invite(db, login_req.invite_code, used_by=address):
-                db.rollback()
-                raise HTTPException(
-                    status_code=403, detail="A valid invite code is required to register."
-                )
+    user = models.User(
+        address=address,
+        encryption_public_key=login_req.encryption_public_key,
+        encryption_key_attestation=attestation,
+        username=default_username,
+    )
+    db.add(user)
+    # Flush (don't commit) so the invite's used_by FK can see the new user while
+    # keeping user creation + invite consumption a single atomic transaction: a
+    # failed consume rolls the user back, and a crash can't burn a code without
+    # creating the user.
+    db.flush()
 
-        db.commit()
-        db.refresh(user)
-    elif (
+    # Access filter (audit §5): a brand-new identity may only be created with a
+    # valid invite code when invites are required. Consumed atomically so the
+    # same code can't be over-spent. Existing users never reach this branch.
+    # Generic 403 on failure — no distinction between missing/expired/used, to
+    # avoid turning this into an invite-code oracle.
+    if config.invites_required() and not invites.consume_invite(
+        db, login_req.invite_code, used_by=address
+    ):
+        db.rollback()
+        raise HTTPException(status_code=403, detail="A valid invite code is required to register.")
+
+    db.commit()
+    db.refresh(user)
+    return user
+
+
+def _upsert_identity(
+    db: Session, login_req: schemas.LoginRequest, address: str, attestation: str | None
+) -> models.User:
+    """Return the identity behind this login, creating or updating it as needed."""
+    user = db.query(models.User).filter(models.User.address == address).first()
+
+    if not user:
+        return _register_user(db, login_req, address, attestation)
+
+    if (
         login_req.encryption_public_key
         and user.encryption_public_key != login_req.encryption_public_key
     ):
@@ -167,20 +175,38 @@ def login(request: Request, login_req: schemas.LoginRequest, db: Session = Depen
         # The old attestation signed the old key — never leave a stale one.
         user.encryption_key_attestation = attestation
         db.commit()
-        db.refresh(user)
-    else:
+    elif attestation and not user.encryption_key_attestation:
         # Backfill: an account that predates attestations (or whose earlier
         # client didn't send one) starts attesting its unchanged key.
-        if attestation and not user.encryption_key_attestation:
-            user.encryption_key_attestation = attestation
-            db.commit()
-        # Ensure we refresh even if no changes to get latest state
-        db.refresh(user)
+        user.encryption_key_attestation = attestation
+        db.commit()
 
-    access_token_expires = timedelta(minutes=auth.ACCESS_TOKEN_EXPIRE_MINUTES)
+    db.refresh(user)
+    return user
+
+
+@router.post("/login", response_model=schemas.Token)
+@limiter.limit("5/minute")
+def login(request: Request, login_req: schemas.LoginRequest, db: Session = Depends(get_db)):
+    """Exchange a signed nonce for an access token, registering on first sight.
+
+    Four phases, in this order for a reason: claim the nonce, verify the
+    payload, upsert the identity, mint the token. The claim comes first so a
+    failed verification cannot hand back a replayable challenge (KRY-004).
+    """
+    address = login_req.address.lower()
+
+    if not _claim_nonce(db, address, login_req.nonce):
+        # Missing, mismatched, expired, or already consumed — one generic
+        # answer, so this can't be used to probe which nonces exist.
+        raise HTTPException(status_code=400, detail="Invalid or expired nonce.")
+
+    _verify_login_payload(login_req, address)
+    user = _upsert_identity(db, login_req, address, login_req.encryption_key_attestation)
+
     access_token = auth.create_access_token(
         data={"sub": user.address, "tv": user.token_version or 0},
-        expires_delta=access_token_expires,
+        expires_delta=timedelta(minutes=auth.ACCESS_TOKEN_EXPIRE_MINUTES),
     )
     if access_token is None:
         raise HTTPException(

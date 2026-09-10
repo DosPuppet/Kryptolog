@@ -300,6 +300,69 @@ def _release_recipient_keys(db: Session, wf, supplied):
         )
 
 
+def _verify_approval(db, wf, signer_address: str, signature: str) -> None:
+    """Check that `signer_address` really approved this workflow's ciphertext.
+
+    The server is zero-knowledge, so a signer signs the SHA-256 of the STORED
+    CIPHERTEXT bound to this workflow and secret (audit M1). The server can
+    recompute that hash, which is what makes `has_signed` cryptographically
+    meaningful: only the holder of the signing key can advance the workflow, not
+    merely someone holding a valid session token.
+    """
+    secret = db.query(models.Secret).filter(models.Secret.id == wf.secret_id).first()
+    if not secret:
+        raise HTTPException(status_code=404, detail="Workflow secret not found")
+
+    ct_hash = hashlib.sha256((secret.encrypted_data or "").encode("utf-8")).hexdigest()
+    approval_msg = auth.multisig_approval_message(wf.id, wf.secret_id, ct_hash)
+    if not auth.verify_message_signature(signer_address, approval_msg, signature):
+        raise HTTPException(status_code=400, detail="Invalid approval signature")
+
+
+def _is_completing_signature(db, wf) -> bool:
+    """Whether the signature about to be recorded reaches the quorum.
+
+    N-of-M: the workflow completes as soon as `threshold` signatures land, not
+    only when everyone has signed. The caller's `has_signed` is still False
+    here, so the `+ 1` counts the signature being recorded. A NULL threshold
+    (legacy rows) falls back to N-of-N.
+    """
+    all_signers = (
+        db.query(models.MultisigWorkflowSigner)
+        .filter(models.MultisigWorkflowSigner.workflow_id == wf.id)
+        .all()
+    )
+    quorum = wf.threshold or len(all_signers)
+    already_signed = sum(1 for s in all_signers if s.has_signed)
+    return (already_signed + 1) >= quorum
+
+
+def _notify_signature(db, wf, sender_name: str, signer_address: str, is_completing: bool) -> None:
+    """Announce a signature, and a release if it completed the workflow.
+
+    Best-effort and deliberately called AFTER the commit: a push failure must
+    never roll back a recorded signature.
+    """
+    if wf.owner_address != signer_address:
+        notify_user_push(
+            db,
+            wf.owner_address,
+            title="Workflow Signed",
+            body=f"{sender_name} signed your workflow: {wf.name}",
+            data={"type": "multisig_signed", "workflow_id": wf.id},
+        )
+
+    if is_completing:
+        for recipient in wf.recipients:
+            notify_user_push(
+                db,
+                recipient.user_address,
+                title="Secret Released",
+                body=f"Multisig workflow '{wf.name}' is complete. You now have access to the secret.",
+                data={"type": "multisig_completed", "workflow_id": wf.id},
+            )
+
+
 @router.post("/workflow/{workflow_id}/sign", response_model=schemas.MultisigWorkflowResponse)
 @limiter.limit("20/minute")
 def sign_multisig_workflow(
@@ -334,37 +397,11 @@ def sign_multisig_workflow(
     if signer.has_signed:
         raise HTTPException(status_code=400, detail="Already signed")
 
-    # --- M1: verify the approval signature server-side ---
-    # The server is zero-knowledge, so the signer signs the SHA-256 of the
-    # STORED CIPHERTEXT (bound to this workflow + secret), which the server can
-    # recompute and verify against the signer's identity key. This makes
-    # `has_signed` cryptographically meaningful — only the holder of the signing
-    # key (not merely a valid session JWT) can advance the workflow.
-    secret = db.query(models.Secret).filter(models.Secret.id == wf.secret_id).first()
-    if not secret:
-        raise HTTPException(status_code=404, detail="Workflow secret not found")
-    ct_hash = hashlib.sha256((secret.encrypted_data or "").encode("utf-8")).hexdigest()
-    approval_msg = auth.multisig_approval_message(wf.id, wf.secret_id, ct_hash)
-    if not auth.verify_message_signature(current_user.address, approval_msg, sig_req.signature):
-        raise HTTPException(status_code=400, detail="Invalid approval signature")
+    _verify_approval(db, wf, current_user.address, sig_req.signature)
 
-    # --- M1: recipient keys may only be released by the COMPLETING signer ---
-    # Pre-fix, any signer could overwrite recipient keys (with garbage) at any
-    # step. The release is the completing signer's job, so reject recipient_keys
-    # on any sign that doesn't reach the threshold.
-    #
-    # N-of-M: the workflow completes as soon as `threshold` signatures land, not
-    # only when everyone has signed. `signer.has_signed` is still False here, so
-    # `+ 1` counts the signature we're about to record. A NULL threshold (legacy
-    # rows) falls back to N-of-N (= number of signers).
-    all_signers = (
-        db.query(models.MultisigWorkflowSigner)
-        .filter(models.MultisigWorkflowSigner.workflow_id == wf.id)
-        .all()
-    )
-    quorum = wf.threshold or len(all_signers)
-    already_signed = sum(1 for s in all_signers if s.has_signed)
-    is_completing = (already_signed + 1) >= quorum
+    # Recipient keys may only be released by the COMPLETING signer (audit M1).
+    # Pre-fix, any signer could overwrite them (with garbage) at any step.
+    is_completing = _is_completing_signature(db, wf)
     if sig_req.recipient_keys and not is_completing:
         raise HTTPException(
             status_code=400,
@@ -375,43 +412,19 @@ def sign_multisig_workflow(
     signer.signature = sig_req.signature
     signer.signed_at = utcnow_naive()
 
-    # Store Recipient Keys (Release Mechanism) — only on the completing signature.
     if is_completing:
         _release_recipient_keys(db, wf, sig_req.recipient_keys)
-
-    # Status transition happens in the SAME transaction as the signature.
-    # Previously the signature was committed first and `status = "completed"`
-    # second: a crash between the two left a fully-signed workflow stuck in
-    # `pending` forever, with the secret never released and no recovery path.
-    if is_completing:
+        # The status transition rides the SAME transaction as the signature.
+        # Previously the signature was committed first and the status second: a
+        # crash between the two left a fully-signed workflow stuck in `pending`
+        # forever, with the secret never released and no recovery path.
         wf.status = "completed"
 
-    # One commit: signature, recipient keys, and status land together or not
-    # at all. This also releases the FOR UPDATE lock taken above.
+    # One commit: signature, recipient keys and status land together or not at
+    # all. This also releases the FOR UPDATE lock taken above.
     db.commit()
 
-    sender_name = display_name(current_user)
-
-    # Notifications are best-effort and deliberately AFTER the commit — a push
-    # failure must never roll back a recorded signature.
-    if wf.owner_address != current_user.address:
-        notify_user_push(
-            db,
-            wf.owner_address,
-            title="Workflow Signed",
-            body=f"{sender_name} signed your workflow: {wf.name}",
-            data={"type": "multisig_signed", "workflow_id": wf.id},
-        )
-
-    if is_completing:
-        for recipient in wf.recipients:
-            notify_user_push(
-                db,
-                recipient.user_address,
-                title="Secret Released",
-                body=f"Multisig workflow '{wf.name}' is complete. You now have access to the secret.",
-                data={"type": "multisig_completed", "workflow_id": wf.id},
-            )
+    _notify_signature(db, wf, display_name(current_user), current_user.address, is_completing)
 
     db.refresh(wf)
     return wf

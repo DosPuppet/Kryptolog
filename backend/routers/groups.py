@@ -390,87 +390,50 @@ async def add_member(
     return new_member
 
 
-# ── Remove Member / Leave Group ─────────────────────────────────
+def _succeed_owner(db, channel, caller_member, remaining, is_self):
+    """Hand the group over when its owner leaves, or tear it down.
+
+    A channel with no owner is unadministrable (the Q-1 bug), so the departure
+    of an owner must always end with either a new owner or no channel.
+    Successor order: the admin doing the removing, else any existing admin,
+    else the earliest-joined remaining member.
+
+    Returns (new_owner_info, group_deleted). The dict is built here, while the
+    rows are still live, because reading attributes off a deleted or expired
+    instance afterwards is the Q-2 bug.
+    """
+    if not remaining:
+        # Cascades to members and messages.
+        db.delete(channel)
+        return None, True
+
+    if not is_self and caller_member.role == "admin":
+        successor = caller_member
+    else:
+        successor = next((m for m in remaining if m.role == "admin"), None) or min(
+            remaining, key=lambda m: m.joined_at
+        )
+
+    successor.role = "owner"
+    channel.owner_address = successor.user_address
+    db.add(successor)
+    db.add(channel)
+    return {
+        "user_address": successor.user_address,
+        "role": "owner",
+        "username": successor.user.username if successor.user else None,
+        "joined_at": successor.joined_at.isoformat(),
+    }, False
 
 
-@router.delete("/{channel_id}/members/{member_address}")
-@limiter.limit("10/minute")
-async def remove_member(
-    request: Request,
-    channel_id: str,
-    member_address: str,
-    current_user: models.User = Depends(get_current_user),
-    db: Session = Depends(get_db),
+async def _broadcast_removal(
+    channel_id, target_addr, removed_by, remaining_addrs, new_owner_info, is_self
 ):
-    channel = _load_channel_or_404(db, channel_id, with_users=True)
+    """Tell the group who left, and who owns it now.
 
-    target_addr = member_address.lower()
-    caller_member = authorization.find_group_member(db, channel_id, current_user.address)
-
-    if not caller_member:
-        raise HTTPException(status_code=403, detail="Not a member of this group")
-
-    target_member = authorization.find_group_member(db, channel_id, target_addr)
-    if not target_member:
-        raise HTTPException(status_code=404, detail="Member not found in group")
-
-    is_self = target_addr == current_user.address
-    if not authorization.can_remove_group_member(caller_member, target_addr):
-        raise HTTPException(status_code=403, detail="Only owners/admins can remove members")
-
-    # Capture everything we need BEFORE any delete/commit — reading attributes off a
-    # deleted/expired instance afterward is the Q-2 bug.
-    target_was_owner = target_member.role == "owner"
-    remaining = [m for m in channel.members if m.user_address != target_addr]
-    remaining_addrs = [m.user_address for m in remaining]
-
-    # When the owner leaves, hand ownership off (or tear the group down) so we never
-    # leave an ownerless, unadministrable channel — the Q-1 bug.
-    new_owner_info = None
-    group_deleted = False
-
-    if target_was_owner:
-        if not remaining:
-            # Owner was the last member → delete the group (cascades to members + messages).
-            db.delete(channel)
-            group_deleted = True
-        else:
-            # Successor: the admin who removed the owner, else an existing admin,
-            # else the earliest-joined remaining member.
-            if not is_self and caller_member.role == "admin":
-                successor = caller_member
-            else:
-                successor = next((m for m in remaining if m.role == "admin"), None) or min(
-                    remaining, key=lambda m: m.joined_at
-                )
-            successor.role = "owner"
-            channel.owner_address = successor.user_address
-            db.add(successor)
-            db.add(channel)
-            new_owner_info = {
-                "user_address": successor.user_address,
-                "role": "owner",
-                "username": successor.user.username if successor.user else None,
-                "joined_at": successor.joined_at.isoformat(),
-            }
-
-    if not group_deleted:
-        # Delete by predicate, not by instance: `target_member` is only the FIRST
-        # matching row, so removing the instance left any duplicate behind and the
-        # "removed" member kept access (audit M-1). The unique constraint added in
-        # migration e5f6a7b8c9d4 makes duplicates impossible going forward; this
-        # stays a bulk delete so the removal is correct regardless.
-        db.query(models.GroupMember).filter(
-            models.GroupMember.channel_id == channel_id,
-            models.GroupMember.user_address == target_addr,
-        ).delete(synchronize_session="fetch")
-    db.commit()
-
-    # If the group is gone there's no one left to notify.
-    if group_deleted:
-        return {"status": "ok", "group_deleted": True}
-
-    # Broadcast the ownership change first (if any), then the removal.
+    Ownership first: a client that applies the removal before the succession
+    briefly renders an ownerless group.
+    """
     if new_owner_info:
         owner_event = {
             "type": "GROUP_MEMBER_UPDATED",
@@ -484,15 +447,79 @@ async def remove_member(
         "type": "GROUP_MEMBER_REMOVED",
         "channel_id": channel_id,
         "removed_address": target_addr,
-        "removed_by": current_user.address,
+        "removed_by": removed_by,
     }
     for addr in remaining_addrs:
         await manager.send_personal_message(event, addr)
 
-    # Also notify the removed user (unless they removed themselves).
+    # The removed user also needs to know, unless they did it themselves.
     if not is_self:
         await manager.send_personal_message(event, target_addr)
 
+
+# ── Remove Member / Leave Group ─────────────────────────────────
+
+
+@router.delete("/{channel_id}/members/{member_address}")
+@limiter.limit("10/minute")
+async def remove_member(
+    request: Request,
+    channel_id: str,
+    member_address: str,
+    current_user: models.User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Remove a member, or leave the group yourself.
+
+    If the departing member is the owner, the group is handed to a successor or
+    deleted outright; it is never left ownerless.
+    """
+    channel = _load_channel_or_404(db, channel_id, with_users=True)
+
+    target_addr = member_address.lower()
+    caller_member = authorization.find_group_member(db, channel_id, current_user.address)
+    if not caller_member:
+        raise HTTPException(status_code=403, detail="Not a member of this group")
+
+    target_member = authorization.find_group_member(db, channel_id, target_addr)
+    if not target_member:
+        raise HTTPException(status_code=404, detail="Member not found in group")
+
+    is_self = target_addr == current_user.address
+    if not authorization.can_remove_group_member(caller_member, target_addr):
+        raise HTTPException(status_code=403, detail="Only owners/admins can remove members")
+
+    # Capture everything needed BEFORE any delete or commit — reading attributes
+    # off a deleted/expired instance afterwards is the Q-2 bug.
+    target_was_owner = target_member.role == "owner"
+    remaining = [m for m in channel.members if m.user_address != target_addr]
+    remaining_addrs = [m.user_address for m in remaining]
+
+    new_owner_info, group_deleted = None, False
+    if target_was_owner:
+        new_owner_info, group_deleted = _succeed_owner(
+            db, channel, caller_member, remaining, is_self
+        )
+
+    if not group_deleted:
+        # Delete by predicate, not by instance: `target_member` is only the FIRST
+        # matching row, so removing the instance left any duplicate behind and the
+        # "removed" member kept access (audit M-1). The unique constraint added in
+        # migration e5f6a7b8c9d4 makes duplicates impossible going forward; this
+        # stays a bulk delete so the removal is correct regardless.
+        db.query(models.GroupMember).filter(
+            models.GroupMember.channel_id == channel_id,
+            models.GroupMember.user_address == target_addr,
+        ).delete(synchronize_session="fetch")
+    db.commit()
+
+    # If the group is gone there is no one left to notify.
+    if group_deleted:
+        return {"status": "ok", "group_deleted": True}
+
+    await _broadcast_removal(
+        channel_id, target_addr, current_user.address, remaining_addrs, new_owner_info, is_self
+    )
     return {"status": "ok"}
 
 
