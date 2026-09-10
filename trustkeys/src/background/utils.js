@@ -47,17 +47,26 @@ export const saveVaultWithSessionKey = async () => {
 };
 
 /**
- * Open the extension popup (not an approval — see approvals.js for those).
- * Reuses the tracked window so a locked site calling CONNECT in a loop focuses
- * one window instead of spawning an OS window per call (audit M-6).
+ * Open one of the extension's tracked windows, or focus it if already open.
+ *
+ * `slot` names the state field holding its window id. There are two, and they
+ * must not share one: the "please unlock" nudge stays open showing the
+ * dashboard after the user unlocks, so if it shared a slot with the approval
+ * window then a later signature request would focus THAT window — which is
+ * showing the dashboard, not the request — and the request would sit
+ * unanswered until it timed out (audit M-6).
+ *
+ * Returns whether a window is now up. Reusing the tracked one is what stops a
+ * site calling CONNECT in a loop from stacking an OS window per call.
  */
-export const launchPopup = async (route, params = {}) => {
-    if (state.popupWindowId !== null) {
+export const openTrackedWindow = async (slot, route, params = {}) => {
+    if (state[slot] !== null) {
         try {
-            await chrome.windows.update(state.popupWindowId, { focused: true });
-            return;
+            await chrome.windows.update(state[slot], { focused: true });
+            return true;
         } catch {
-            state.popupWindowId = null;
+            // The window is gone and we never saw onRemoved (worker restarted).
+            state[slot] = null;
         }
     }
 
@@ -85,13 +94,19 @@ export const launchPopup = async (route, params = {}) => {
             height,
             left,
             top,
-            focused: true
+            focused: true,
         });
-        state.popupWindowId = win?.id ?? null;
+        state[slot] = win?.id ?? null;
+        return true;
     } catch (e) {
-        console.warn("Failed to open popup", e);
+        console.warn("Failed to open window", e);
+        return false;
     }
 };
+
+/** The extension popup — the unlock nudge, not an approval. */
+export const launchPopup = (route, params = {}) =>
+    openTrackedWindow('popupWindowId', route, params);
 
 // --- Sender trust (audit M4) ---
 // Authorization decisions MUST use the origin Chrome attaches to the message

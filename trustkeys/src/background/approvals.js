@@ -17,6 +17,7 @@
 // first — that is what stops a page promise hanging forever.
 
 import { state } from './state.js';
+import { openTrackedWindow } from './utils.js';
 
 export const MAX_PENDING_PER_ORIGIN = 3;
 // A global ceiling as well: the per-origin cap alone still lets N connected
@@ -34,44 +35,9 @@ const pendingForOrigin = (origin) => {
     return n;
 };
 
-/** Open the approval window, or focus the one already open. */
-const openOrFocusWindow = async (route, params) => {
-    if (state.approvalWindowId !== null) {
-        try {
-            await chrome.windows.update(state.approvalWindowId, { focused: true });
-            return true;
-        } catch {
-            // Window is gone and we never saw onRemoved (e.g. worker restarted).
-            state.approvalWindowId = null;
-        }
-    }
-
-    const queryString = new URLSearchParams({ route, ...params }).toString();
-    const width = 360;
-    const height = 600;
-    let left, top;
-    try {
-        const lastWin = await chrome.windows.getLastFocused();
-        if (lastWin && lastWin.left !== undefined && lastWin.width !== undefined) {
-            left = lastWin.left + lastWin.width - width - 20;
-            top = lastWin.top + 80;
-        }
-    } catch (e) {
-        console.warn("Failed to calculate popup position", e);
-    }
-
-    try {
-        const win = await chrome.windows.create({
-            url: `index.html?${queryString}`,
-            type: 'popup', width, height, left, top, focused: true,
-        });
-        state.approvalWindowId = win?.id ?? null;
-        return true;
-    } catch (e) {
-        console.warn("Failed to open approval window", e);
-        return false;
-    }
-};
+/** The approval window, tracked separately from the unlock nudge. */
+const openOrFocusWindow = (route, params) =>
+    openTrackedWindow('approvalWindowId', route, params);
 
 /**
  * Register an approval request and surface it to the user.

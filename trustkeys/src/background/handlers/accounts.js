@@ -1,9 +1,9 @@
 import { generateAccount, decryptVault, encryptVault, normalizeAccount } from '../../utils/crypto.js';
-import { state } from '../state.js';
+import { state, requireUnlocked, requireActiveAccount } from '../state.js';
 import { saveVault, saveVaultWithSessionKey } from '../utils.js';
 
 export const createAccount = async (name) => {
-    if (state.isLocked) throw new Error("Locked");
+    requireUnlocked();
 
     const account = await generateAccount(name);
     state.vault.accounts.push(account);
@@ -14,7 +14,7 @@ export const createAccount = async (name) => {
 };
 
 export const getAccounts = () => {
-    if (state.isLocked) throw new Error("Locked");
+    requireUnlocked();
 
     return state.vault.accounts.map(a => ({
         id: a.id,
@@ -24,13 +24,13 @@ export const getAccounts = () => {
 };
 
 export const setActiveAccount = async (id) => {
-    if (state.isLocked) throw new Error("Locked");
+    requireUnlocked();
     state.vault.activeAccountId = id;
     await saveVaultWithSessionKey();
 };
 
 export const getActiveAccount = (checkOrigin) => {
-    if (state.isLocked) throw new Error("Locked");
+    requireUnlocked();
 
     // checkOrigin is null only for the internal dashboard (trusted). For external
     // callers it's the authoritative sender.origin, which must be connected.
@@ -38,8 +38,7 @@ export const getActiveAccount = (checkOrigin) => {
         throw new Error("Not Connected");
     }
 
-    const account = state.vault.accounts.find(a => a.id === state.vault.activeAccountId);
-    if (!account) throw new Error("No active account");
+    const account = requireActiveAccount();
 
     return {
         name: account.name,
@@ -53,7 +52,10 @@ export const getActiveAccount = (checkOrigin) => {
 // multi-account export loses the active selection when imported elsewhere (ids
 // get remapped to the ML-DSA public key and the old activeAccountId no longer
 // matches). Exporting just the active key keeps the imported identity unambiguous.
-const requireActiveAccount = () => {
+// Deliberately not state.requireActiveAccount: this one falls back to the
+// first account and says "to export", because a vault whose active selection
+// was somehow lost should still be recoverable through a backup.
+const accountForExport = () => {
     const active = state.vault.accounts.find(a => a.id === state.vault.activeAccountId)
         || state.vault.accounts[0];
     if (!active) throw new Error("No active account to export");
@@ -66,7 +68,7 @@ const requireActiveAccount = () => {
 // using the SAME format the web app produces (encryptVault -> {salt, iv, data}),
 // so it round-trips between extension and SPA.
 export const exportEncryptedVault = async (password, passphrase) => {
-    if (state.isLocked) throw new Error("Locked");
+    requireUnlocked();
     if (!passphrase) throw new Error("Backup passphrase required");
 
     // Confirm the vault password (same gate as the plaintext export).
@@ -74,7 +76,7 @@ export const exportEncryptedVault = async (password, passphrase) => {
     if (!vaultData) throw new Error("No vault found");
     await decryptVault(vaultData, password); // throws on wrong password
 
-    const active = requireActiveAccount();
+    const active = accountForExport();
     const portable = { accounts: [active], activeAccountId: active.id };
     const encrypted = await encryptVault(portable, passphrase);
     return JSON.stringify(encrypted);
@@ -83,11 +85,11 @@ export const exportEncryptedVault = async (password, passphrase) => {
 // The active account only (with key material), password-gated. Backs the plain
 // JSON export.
 export const exportActiveAccount = async (password) => {
-    if (state.isLocked) throw new Error("Locked");
+    requireUnlocked();
     const { vaultData } = await chrome.storage.local.get('vaultData');
     if (!vaultData) throw new Error("No vault found");
     await decryptVault(vaultData, password); // verify
-    return requireActiveAccount();
+    return accountForExport();
 };
 
 // Import plaintext JSON ({accounts:[...]}) or an encrypted .kvault backup
@@ -151,7 +153,7 @@ export const importVault = async (vaultObj, password, passphrase) => {
 };
 
 export const deleteAccount = async (id) => {
-    if (state.isLocked) throw new Error("Locked");
+    requireUnlocked();
 
     const index = state.vault.accounts.findIndex(a => a.id === id);
     if (index === -1) throw new Error("Account not found");

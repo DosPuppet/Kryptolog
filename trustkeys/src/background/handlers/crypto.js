@@ -1,16 +1,15 @@
 import { signMessage, encryptMessage, decryptMessage, verifySignature, generateSessionKey, wrapSessionKey, unwrapSessionKey, attestEncryptionKey, MESSAGE_SIGNING_PREFIX } from '../../utils/crypto.js';
-import { state } from '../state.js';
+import { state, requireUnlocked, requireActiveAccount, activeAccount, requireConnectedOrigin } from '../state.js';
 import { isInternalSender, getSenderOrigin, isDevOrigin } from '../utils.js';
 import { requestApproval } from '../approvals.js';
 
 export const handleSignAsync = async (request, sender, sendResponse) => {
-    if (state.isLocked) throw new Error("Locked");
+    requireUnlocked();
 
     // Check Internal vs External
     if (isInternalSender(sender)) {
         // Internal Dashboard
-        const account = state.vault.accounts.find(a => a.id === state.vault.activeAccountId);
-        if (!account) throw new Error("No active account");
+        const account = requireActiveAccount();
 
         const signature = await signMessage(request.message, account.mldsa.privateKey);
         sendResponse({ success: true, signature });
@@ -19,9 +18,7 @@ export const handleSignAsync = async (request, sender, sendResponse) => {
 
     // External — authorize on Chrome's sender.origin only (audit M4).
     const checkOrigin = getSenderOrigin(sender);
-    if (!checkOrigin || !state.vault.permissions[checkOrigin]) {
-        throw new Error("Site not connected");
-    }
+    requireConnectedOrigin(checkOrigin);
 
     await requestApproval({
         type: 'SIGN',
@@ -29,7 +26,7 @@ export const handleSignAsync = async (request, sender, sendResponse) => {
         data: { origin: checkOrigin, message: request.message },
         route: 'sign',
         onApprove: async () => {
-            const account = state.vault.accounts.find(a => a.id === state.vault.activeAccountId);
+            const account = activeAccount();
             if (!account) return sendResponse({ success: false, error: "No active account" });
             const signature = await signMessage(request.message, account.mldsa.privateKey);
             sendResponse({ success: true, signature });
@@ -48,7 +45,7 @@ export const handleSignAsync = async (request, sender, sendResponse) => {
 //      connected sites we fall back to a per-message approval popup, so trusting
 //      a site for connection alone does NOT grant silent signing-as-you.
 export const handleSignMessage = async (request, sender, sendResponse) => {
-    if (state.isLocked) throw new Error("Locked");
+    requireUnlocked();
 
     const message = request.message;
     if (typeof message !== 'string' || !message.startsWith(MESSAGE_SIGNING_PREFIX)) {
@@ -76,7 +73,7 @@ export const handleSignMessage = async (request, sender, sendResponse) => {
         return handleSignAsync(request, sender, sendResponse);
     }
 
-    const account = state.vault.accounts.find(a => a.id === state.vault.activeAccountId);
+    const account = activeAccount();
     if (!account) return sendResponse({ success: false, error: "No active account" });
 
     const signature = await signMessage(message, account.mldsa.privateKey);
@@ -90,13 +87,10 @@ export const handleSignMessage = async (request, sender, sendResponse) => {
 // only ever bind this account's own keys together. Requires unlock + (for
 // external callers) a connected origin, same gate as getActiveAccount.
 export const handleGetKeyAttestation = async (request, sender, isInternal, senderOrigin) => {
-    if (state.isLocked) throw new Error("Locked");
-    if (!isInternal && (!senderOrigin || !state.vault.permissions[senderOrigin])) {
-        throw new Error("Site not connected");
-    }
+    requireUnlocked();
+    if (!isInternal) requireConnectedOrigin(senderOrigin);
 
-    const account = state.vault.accounts.find(a => a.id === state.vault.activeAccountId);
-    if (!account) throw new Error("No active account");
+    const account = requireActiveAccount();
 
     const attestation = await attestEncryptionKey(account.mlkem.publicKey, account.mldsa.privateKey);
     return { success: true, attestation };
@@ -114,9 +108,8 @@ export const handleVerify = async (request) => {
 export const handleEncrypt = async (request) => {
     let pubKey = request.publicKey;
     if (!pubKey) {
-        if (state.isLocked) throw new Error("Locked");
-        const account = state.vault.accounts.find(a => a.id === state.vault.activeAccountId);
-        if (!account) throw new Error("No active account");
+        requireUnlocked();
+        const account = requireActiveAccount();
         pubKey = account.mlkem.publicKey;
     }
     const result = await encryptMessage(request.message, pubKey);
@@ -137,9 +130,9 @@ export const handleWrapSessionKey = async (request) => {
 };
 
 export const handleDecryptAsync = async (request, sender, sendResponse) => {
-    if (state.isLocked) throw new Error("Locked");
+    requireUnlocked();
     const checkOrigin = getSenderOrigin(sender);
-    if (!checkOrigin || !state.vault.permissions[checkOrigin]) throw new Error("Site not connected");
+    requireConnectedOrigin(checkOrigin);
 
     await requestApproval({
         type: 'DECRYPT',
@@ -147,7 +140,7 @@ export const handleDecryptAsync = async (request, sender, sendResponse) => {
         data: { origin: checkOrigin },
         route: 'decrypt',
         onApprove: async () => {
-            const account = state.vault.accounts.find(a => a.id === state.vault.activeAccountId);
+            const account = activeAccount();
             if (!account) return sendResponse({ success: false, error: "No active account" });
             const decrypted = await decryptMessage(request.data, account.mlkem.privateKey);
             sendResponse({ success: true, decrypted });
@@ -157,9 +150,9 @@ export const handleDecryptAsync = async (request, sender, sendResponse) => {
 };
 
 export const handleUnwrapSessionKeyAsync = async (request, sender, sendResponse) => {
-    if (state.isLocked) throw new Error("Locked");
+    requireUnlocked();
     const checkOrigin = getSenderOrigin(sender);
-    if (!checkOrigin || !state.vault.permissions[checkOrigin]) throw new Error("Site not connected");
+    requireConnectedOrigin(checkOrigin);
 
     await requestApproval({
         type: 'DECRYPT',
@@ -167,7 +160,7 @@ export const handleUnwrapSessionKeyAsync = async (request, sender, sendResponse)
         data: { origin: checkOrigin },
         route: 'decrypt',
         onApprove: async () => {
-            const account = state.vault.accounts.find(a => a.id === state.vault.activeAccountId);
+            const account = activeAccount();
             if (!account) return sendResponse({ success: false, error: "No active account" });
 
             try {
@@ -187,9 +180,9 @@ export const handleUnwrapSessionKeyAsync = async (request, sender, sendResponse)
 // (audit M-3): the dashboard needs every item's wrapped key decrypted to show
 // names, which would otherwise cost N popups per visit.
 export const handleDecryptManyAsync = async (request, sender, sendResponse) => {
-    if (state.isLocked) throw new Error("Locked");
+    requireUnlocked();
     const checkOrigin = getSenderOrigin(sender);
-    if (!checkOrigin || !state.vault.permissions[checkOrigin]) throw new Error("Site not connected");
+    requireConnectedOrigin(checkOrigin);
 
     await requestApproval({
         type: 'DECRYPT',
@@ -197,7 +190,7 @@ export const handleDecryptManyAsync = async (request, sender, sendResponse) => {
         data: { origin: checkOrigin, count: request.items?.length },
         route: 'decrypt',
         onApprove: async () => {
-            const account = state.vault.accounts.find(a => a.id === state.vault.activeAccountId);
+            const account = activeAccount();
             if (!account) return sendResponse({ success: false, error: "No active account" });
 
             try {
@@ -222,9 +215,9 @@ export const handleDecryptManyAsync = async (request, sender, sendResponse) => {
 
 // Batch Unwrap
 export const handleUnwrapManySessionKeysAsync = async (request, sender, sendResponse) => {
-    if (state.isLocked) throw new Error("Locked");
+    requireUnlocked();
     const checkOrigin = getSenderOrigin(sender);
-    if (!checkOrigin || !state.vault.permissions[checkOrigin]) throw new Error("Site not connected");
+    requireConnectedOrigin(checkOrigin);
 
     await requestApproval({
         type: 'DECRYPT',
@@ -232,7 +225,7 @@ export const handleUnwrapManySessionKeysAsync = async (request, sender, sendResp
         data: { origin: checkOrigin, count: request.wrappedKeys?.length },
         route: 'decrypt',
         onApprove: async () => {
-            const account = state.vault.accounts.find(a => a.id === state.vault.activeAccountId);
+            const account = activeAccount();
             if (!account) return sendResponse({ success: false, error: "No active account" });
 
             try {

@@ -2,9 +2,6 @@ import { state } from '../state.js';
 import { saveVaultWithSessionKey, launchPopup, isDevOrigin, isAllowedTrustedOrigin } from '../utils.js';
 import { requestApproval } from '../approvals.js';
 
-// Dev-only origins hardcoded in manifest — cannot be removed
-const DEV_ORIGINS = ['http://localhost', 'http://127.0.0.1'];
-
 // Whether the extension currently holds the optional host permission for an
 // origin (production origins are granted per-site under a popup user gesture).
 const hasHostPermission = async (origin) => {
@@ -70,7 +67,7 @@ const originToScriptId = (origin) => {
 
 export const registerOriginScripts = async (origin) => {
     // Skip dev origins — they're in the static manifest
-    if (DEV_ORIGINS.some(d => origin.startsWith(d))) return;
+    if (isDevOrigin(origin)) return;
 
     // Need the optional host permission (granted per-site via the popup) to
     // inject here. If it's missing (e.g. revoked at chrome://extensions), skip.
@@ -136,7 +133,7 @@ export const syncDynamicScripts = async () => {
     // dropped from the trust list, so "trusted" never outlives the grant.
     let changed = false;
     for (const origin of Object.keys(state.vault.permissions)) {
-        if (DEV_ORIGINS.some(d => origin.startsWith(d))) continue;
+        if (isDevOrigin(origin)) continue;
         if (!await hasHostPermission(origin)) {
             delete state.vault.permissions[origin];
             if (state.vault.autoSignSites) delete state.vault.autoSignSites[origin];
@@ -171,7 +168,7 @@ export const getTrustedSites = () => {
     const permissions = state.vault?.permissions || {};
     const autoSign = state.vault?.autoSignSites || {};
     return Object.keys(permissions).map(origin => {
-        const isDefault = DEV_ORIGINS.some(d => origin.startsWith(d));
+        const isDefault = isDevOrigin(origin);
         return {
             origin,
             isDefault,
@@ -210,7 +207,7 @@ export const handleRemoveTrustedSite = async (origin) => {
     if (!origin) return { success: false, error: "Origin required" };
     if (state.isLocked) return { success: false, error: "Vault is locked" };
 
-    if (DEV_ORIGINS.some(d => origin.startsWith(d))) {
+    if (isDevOrigin(origin)) {
         return { success: false, error: "Cannot remove dev default origins" };
     }
 

@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { isAllowedTrustedOrigin, isDevOrigin } from '../background/utils.js';
 
 const SettingsModal = ({ onClose, onExport, onImport }) => {
   const [password, setPassword] = useState('');
@@ -30,8 +31,6 @@ const SettingsModal = ({ onClose, onExport, onImport }) => {
     });
   };
 
-  const isDevOrigin = (o) => o.startsWith('http://localhost') || o.startsWith('http://127.0.0.1');
-
   const addTrustedSite = async () => {
     let origin = newSiteUrl.trim();
     if (!origin) return setError('Enter a URL');
@@ -43,8 +42,9 @@ const SettingsModal = ({ onClose, onExport, onImport }) => {
     } catch {
       return setError('Invalid URL format');
     }
-    // HTTPS-only for real sites (a plain-http origin can be tampered in transit).
-    if (!isDevOrigin(origin) && !origin.startsWith('https://')) {
+    // HTTPS-only for real sites (a plain-http origin can be tampered in
+    // transit). Same rule the background enforces — imported, not restated.
+    if (!isAllowedTrustedOrigin(origin)) {
       return setError('Only HTTPS sites can be trusted.');
     }
     setSitesLoading(true);

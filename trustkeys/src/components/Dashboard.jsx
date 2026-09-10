@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react'
 import SettingsModal from './SettingsModal'
+import { isAllowedTrustedOrigin, isDevOrigin } from '../background/utils.js';
 
 // Main unlocked popup view: active account, per-tab authorization, account
 // list/create/delete, and the settings modal (export/import/trusted sites).
@@ -101,8 +102,8 @@ const Dashboard = () => {
 
   const authorizeCurrentTab = async () => {
     const origin = currentTabOrigin;
-    const isDev = !!origin && (origin.startsWith('http://localhost') || origin.startsWith('http://127.0.0.1'));
-    if (!isDev && !(origin && origin.startsWith('https://'))) {
+    // Same rule the background enforces — imported, not restated.
+    if (!isAllowedTrustedOrigin(origin)) {
       alert('Only HTTPS sites can be authorized (this site uses an insecure connection).');
       return;
     }
@@ -114,7 +115,7 @@ const Dashboard = () => {
     setLoading(true);
     try {
       // Request the per-site host permission under this user gesture.
-      if (!isDev) {
+      if (!isDevOrigin(origin)) {
         const granted = await chrome.permissions.request({ origins: [`${origin}/*`] });
         if (!granted) { setLoading(false); alert('Permission denied — site not authorized.'); return; }
       }

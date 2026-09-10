@@ -28,3 +28,48 @@ export const state = {
     popupWindowId: null,    // the unlock nudge
     approvalWindowId: null, // the window that shows pending approvals
 };
+
+
+// --- Accessors ---
+//
+// These three questions were asked inline throughout handlers/: is the vault
+// unlocked (15 times), which account is active (11), and may this origin use it
+// (7). Each phrasing was identical, which is how one of them ends up edited
+// alone. Their error strings are asserted by the tests, so they are part of the
+// contract, not incidental text.
+
+/** Throw unless the vault is unlocked. */
+export const requireUnlocked = () => {
+    if (state.isLocked) throw new Error("Locked");
+};
+
+/** The active account, or null. Assumes the vault is already unlocked. */
+export const activeAccount = () =>
+    state.vault.accounts.find(a => a.id === state.vault.activeAccountId) || null;
+
+/**
+ * The active account, or throw.
+ *
+ * The non-throwing form exists for the approval callbacks: they run after the
+ * request has been handed to the user, so the dispatcher's try/catch is no
+ * longer above them and they must answer sendResponse themselves.
+ */
+export const requireActiveAccount = () => {
+    const account = activeAccount();
+    if (!account) throw new Error("No active account");
+    return account;
+};
+
+/**
+ * Throw unless `origin` is a site the user has connected.
+ *
+ * `origin` must be Chrome's authoritative sender.origin (audit M4), never a
+ * value the caller supplied — a page that names its own origin authorizes
+ * itself. A null origin fails, rather than being treated as "no restriction".
+ */
+export const requireConnectedOrigin = (origin) => {
+    if (!origin || !state.vault.permissions[origin]) {
+        throw new Error("Site not connected");
+    }
+    return origin;
+};
