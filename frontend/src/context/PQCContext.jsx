@@ -2,7 +2,7 @@ import { createContext, useContext, useState, useEffect } from 'react';
 import API_ENDPOINTS from '../config';
 import { useAuth } from './AuthContext';
 import { vaultService } from '../services/vault';
-import { domainSeparate, SIGNING_CONTEXT, encryptionKeyAttestationBody } from '../utils/crypto';
+import { loginChallengeBody, encryptionKeyAttestationBody } from '../utils/crypto';
 import { toast } from '../utils/toast';
 import PasswordModal from '../components/PasswordModal';
 
@@ -115,10 +115,10 @@ export const PQCProvider = ({ children }) => {
         // 2. Sign Nonce — bind the encryption (ML-KEM) key into the challenge so
         //    the identity's signature authorizes it (M-2). The challenge is
         //    domain-separated under the `login` context (H1) so a content-signing
-        //    operation can never produce these bytes. Must match the server.
-        const body = `Sign in to Kryptolog with nonce: ${nonce}` +
-            (encryptionKey ? `\nEncryption key: ${encryptionKey}` : '');
-        const message = domainSeparate(SIGNING_CONTEXT.LOGIN, body);
+        //    operation can never produce these bytes. Built by crypto-core, not
+        //    spelled out here: this is the one string the server must agree with
+        //    byte for byte, and a second copy of it cannot be kept honest.
+        const message = loginChallengeBody(nonce, encryptionKey);
         const signature = await signFn(message);
 
         // 2b. Key attestation (audit M-1): self-sign our own ML-KEM key so peers

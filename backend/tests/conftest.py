@@ -144,13 +144,31 @@ def _reset_rate_limiter():
     yield
 
 
+def pytest_configure(config):
+    config.addinivalue_line(
+        "markers",
+        "real_signatures: run with the genuine ML-DSA verifiers instead of the "
+        "autouse stubs (see the _mock_pqc fixture).",
+    )
+
+
 @pytest.fixture(autouse=True)
-def _mock_pqc():
+def _mock_pqc(request):
     """Accept the placeholder client signatures used across the endpoint tests:
     the login challenge (`verify_signature`) and the multisig approval
-    (`verify_message_signature`). Tests that need the *real* verifier override
-    these (see test_multisig signature-gate test / the unit tests in test_pqc).
-    Server-side token issue/verify is left untouched (HS256, audit §2/§3)."""
+    (`verify_message_signature`). Server-side token issue/verify is left
+    untouched (HS256, audit §2/§3).
+
+    Opt out with `@pytest.mark.real_signatures` when a test needs the real
+    thing. Before that marker existed the only escape was re-patching over the
+    top of this fixture, which meant hand-rolling a copy of the verifier — and a
+    copy is exactly what stops detecting a change to the original, as happened
+    when production signatures moved to base64 (audit L-12) and
+    test_key_attestation's private copy kept decoding hex, passing all the
+    while."""
+    if request.node.get_closest_marker("real_signatures"):
+        yield
+        return
     with (
         patch("auth.verify_signature", return_value=True),
         patch("auth.verify_message_signature", return_value=True),

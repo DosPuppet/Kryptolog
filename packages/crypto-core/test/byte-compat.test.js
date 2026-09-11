@@ -15,6 +15,7 @@
 import { describe, it, expect } from 'vitest';
 import { ml_dsa44 } from '@noble/post-quantum/ml-dsa.js';
 import { createHash } from 'node:crypto';
+import { readFileSync } from 'node:fs';
 import * as core from '../src/index.js';
 
 const enc = (s) => new TextEncoder().encode(s);
@@ -435,5 +436,50 @@ describe('encryption-key attestation (audit M-1, v1.3.0)', () => {
 describe('single-source / version guard', () => {
     it('exports a version both app builds can assert against', () => {
         expect(core.CRYPTO_CORE_VERSION).toBe('2.0.0');
+    });
+});
+
+// The other half of backend/tests/test_signed_bodies.py: the SAME fixture file,
+// asserted from the producing side. A signature is over a string, so if the two
+// languages spell it differently every signature of that kind fails — and a
+// wrong message is indistinguishable from a forgery to a verifier.
+//
+// Reading a shared file rather than re-declaring the expected strings here is
+// the point. Two copies of a golden vector agree until someone updates one.
+describe('signed bodies match the server, byte for byte', () => {
+    const vectors = JSON.parse(
+        readFileSync(new URL('../../../tests/fixtures/signed_bodies.json', import.meta.url), 'utf8')
+    );
+
+    it('login challenge', () => {
+        expect(core.loginChallengeBody(vectors.nonce)).toBe(vectors.bodies.login);
+    });
+
+    it('login challenge with the encryption key bound in (M-2)', () => {
+        expect(core.loginChallengeBody(vectors.nonce, vectors.mlkem_public_key))
+            .toBe(vectors.bodies.login_with_encryption_key);
+    });
+
+    it('key attestation', () => {
+        expect(core.encryptionKeyAttestationBody(vectors.mlkem_public_key))
+            .toBe(vectors.bodies.key_attestation);
+    });
+
+    it('multisig approval', () => {
+        expect(core.multisigApprovalMessage(
+            vectors.workflow_id, vectors.secret_id, vectors.ciphertext_sha256
+        )).toBe(vectors.bodies.multisig_approval);
+    });
+
+    it('a login signature verifies against the body the server would rebuild', async () => {
+        // End to end on this side: sign the shared body, verify it back. The
+        // server half needs liboqs, so it lives in backend/tests/test_pqc.py.
+        const { publicKey, privateKey } = await core.generateMlDsaKeyPair();
+        const sig = await core.signMessage(vectors.bodies.login_with_encryption_key, privateKey);
+        expect(await core.verifySignature(
+            core.loginChallengeBody(vectors.nonce, vectors.mlkem_public_key), sig, publicKey
+        )).toBe(true);
+        // ...and not against the challenge without the key bound in.
+        expect(await core.verifySignature(vectors.bodies.login, sig, publicKey)).toBe(false);
     });
 });

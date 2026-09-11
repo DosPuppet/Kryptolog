@@ -70,6 +70,26 @@ export const messageSigningBody = async ({ from, conv, sid, ct, gid = '', keys =
         `from=${from}\nconv=${conv}\ngid=${gid ?? ''}\nsid=${sid}` +
         `\nkeysh=${await sha256Hex(canonicalJson(keys ?? null))}\nct=${canonicalCiphertext(ct)}`);
 
+// --- Login challenge ---
+// The bytes a client signs to prove it holds the identity key, domain-separated
+// under `login` (audit H1) so a content or message signature can never be
+// replayed as one. When an ML-KEM key is supplied it is folded in, so the
+// identity's signature authorizes that key and a network attacker cannot
+// substitute their own at login (audit M-2).
+//
+// This lived inline in the SPA until now, while every other signed body was
+// already here. That made it the one string both sides must agree on byte for
+// byte with no shared source, no cross-language fixture, and no test that could
+// fail on a mismatch — backend/tests/conftest.py stubs the verifier, so a typo
+// in either copy would have passed the whole suite and broken every login.
+// Must stay byte-identical to backend/auth.py `_login_message`.
+export const loginChallengeBody = (nonce, encryptionPublicKeyHex = null) =>
+    domainSeparate(
+        SIGNING_CONTEXT.LOGIN,
+        `Sign in to Kryptolog with nonce: ${nonce}` +
+        (encryptionPublicKeyHex ? `\nEncryption key: ${encryptionPublicKeyHex}` : '')
+    );
+
 // --- Encryption-key attestation (audit M-1) ---
 // The address IS the ML-DSA public key (self-certifying), but the ML-KEM
 // encryption key is a separate directory field the server could lie about. An
