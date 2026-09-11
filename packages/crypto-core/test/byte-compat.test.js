@@ -18,7 +18,6 @@ import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import * as core from '../src/index.js';
 
-const enc = (s) => new TextEncoder().encode(s);
 
 describe('golden constants (wire/storage format contract)', () => {
     it('domain-separation header + message prefix are byte-exact', () => {

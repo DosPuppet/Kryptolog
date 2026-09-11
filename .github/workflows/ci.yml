@@ -42,6 +42,12 @@ jobs:
         working-directory: packages/crypto-core
       - run: npm test
         working-directory: packages/crypto-core
+      # Blocking, matching the other three packages. The package that is the
+      # single source of truth for every wire primitive was the only one without
+      # a lint gate, which is how a module calling toHex/fromHex without
+      # importing them shipped and broke every biometric path silently.
+      - run: npx eslint .
+        working-directory: packages/crypto-core
 
   frontend:
     name: frontend (tests + build)

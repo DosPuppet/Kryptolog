@@ -18,7 +18,7 @@ export const checkPrfSupport = async () => {
         // We can't reliably detect PRF support before attempting credential creation.
         // The actual check happens during registration by inspecting extension results.
         return true;
-    } catch (e) {
+    } catch {
         return false;
     }
 };

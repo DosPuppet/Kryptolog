@@ -32,6 +32,7 @@ cd backend && ruff format .      # blocking gate (CI runs --check)
 
 # crypto-core
 cd packages/crypto-core && npm test
+cd packages/crypto-core && npm run lint   # blocking gate — added 2026-09-11
 
 # frontend
 cd frontend && npx vitest run
@@ -332,6 +333,7 @@ and put the manual recipe somewhere it can actually be followed.
 | Login challenge single-sourced + real signature tests | mixed | done — `7afe9da` |
 | Chunked-file round-trip coverage | frontend | done — `47085e1` |
 | `E2E-RECIPE.md`, stack wiped and re-seeded | repo | done |
+| crypto-core lint gate + live nginx M-10 test + biometric coverage | mixed | done |
 
 **L-12 is done, and the scope line matters.** Everything opaque moved to base64;
 everything that identifies something stayed hex. Base64 is case-sensitive, and
@@ -389,6 +391,33 @@ sudo) and the `/api/` block carries the M-10 upgrade headers. That a
 `wss://host/api/ws` handshake really upgrades through a running nginx is still
 unverified; `E2E-RECIPE.md` §6 says so explicitly.
 
+**All four packages have a blocking lint gate now.** `packages/crypto-core`
+was the only one without one — and without an eslint config at all — which is
+precisely how a module calling `toHex`/`fromHex` without importing them shipped.
+`no-undef` is the rule that earns its place: removing the import again reports
+four errors. Four real findings came out of turning it on (three unused `catch`
+bindings and a dead test helper), all fixed.
+
+**M-10 is closed for real, not just syntax-checked.** `nginx.conf.example` is
+run in an `nginx:alpine` container against an SPA built with
+`VITE_API_BASE_URL=.../api`, and `ws://localhost:8080/api/ws` answers **101
+Switching Protocols**. Mutation-tested: deleting the two `proxy_set_header`
+lines from the `/api/` block turns that into a **404** — the handshake forwarded
+as plain HTTP to a path with no plain-HTTP route, which is the audit's failure
+description exactly. `E2E-RECIPE.md` §6 carries the procedure, verified verbatim.
+TLS is still only syntax-checked: the test terminates plain HTTP on 8080.
+
+**Biometric unlock has coverage now** —
+`frontend/src/test/biometrics.test.js`, eight tests against a mocked PRF
+authenticator (jsdom supplies `window`/`navigator`, which is what kept this
+module outside both suites). It covers the registration options, the
+re-derivation of the key from the stored salt, the password round-trip, the
+refusal of a device without hardware PRF, and the hex/base64 split where they
+meet. Mutation-tested against both the shipped bug and a plausible L-12 slip
+(encoding `prfKey` as base64). The hardware assumption — that a real
+authenticator returns a stable PRF output across ceremonies — is still a manual
+step, now `E2E-RECIPE.md` §5b.
+
 **Two gotchas worth keeping:**
 - `start_all.sh` calls `python3 -m pip` with whatever `python3` is on PATH, so
   **the venv must be active before running it** or it fails at the dependency
@@ -433,13 +462,6 @@ unverified; `E2E-RECIPE.md` §6 says so explicitly.
   `UPDATE` pass, not a warning.
 
 ### Known issues, not yet scoped
-
-- **crypto-core has no lint gate.** The other three packages have a blocking
-  `eslint` step in CI; the package that exists to be the single source of truth
-  for every wire primitive does not, and has no eslint config at all. That is
-  why a module referencing `toHex` without importing it shipped and broke every
-  biometric path silently (see the 2026-09-11 pass). Adding the config and the
-  CI step is small; it was left out of that pass to keep its scope honest.
 
 - **Port 5432 may be held by a native PostgreSQL** that lacks the `kryptolog` role, in
   which case `docker compose up -d postgres` fails to bind. Workaround: run the test

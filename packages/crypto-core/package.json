@@ -13,12 +13,16 @@
     "src"
   ],
   "scripts": {
-    "test": "vitest run"
+    "test": "vitest run",
+    "lint": "eslint ."
   },
   "dependencies": {
     "@noble/post-quantum": "^0.6.1"
   },
   "devDependencies": {
+    "@eslint/js": "^9.39.5",
+    "eslint": "^9.39.5",
+    "globals": "^16.5.0",
     "vitest": "^4.0.18"
   }
 }

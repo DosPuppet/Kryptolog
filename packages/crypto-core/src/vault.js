@@ -89,7 +89,7 @@ export const decryptVault = async (encryptedVault, password) => {
             data
         );
         return JSON.parse(DEC.decode(decryptedContent));
-    } catch (e) {
+    } catch {
         throw new Error("Incorrect password or corrupted data");
     }
 };
@@ -126,7 +126,7 @@ export const decryptVaultWithKey = async (encryptedVault, key) => {
             data
         );
         return JSON.parse(DEC.decode(decryptedContent));
-    } catch (e) {
+    } catch {
         throw new Error("Decryption failed with cached key");
     }
 };
