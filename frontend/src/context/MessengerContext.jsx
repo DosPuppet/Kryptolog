@@ -12,6 +12,7 @@ import { useMessengerSocket } from './messenger/useMessengerSocket';
 import { useMessageSessions } from './messenger/useMessageSessions';
 import { sessionKeyId, groupConversationId } from './messenger/sessionScope';
 import { useGroupNames } from './messenger/useGroupNames';
+import { usePartnerDirectory } from './messenger/usePartnerDirectory';
 import { createGroupEventHandlers } from './messenger/groupEvents';
 import { apiFetch } from '../services/api';
 
@@ -84,6 +85,36 @@ export const MessengerProvider = ({ children }) => {
 
     /** Authenticated API call, bound to this session's token. */
     const api = (url, options = {}) => apiFetch(url, token, options);
+
+    // Names for partners the sidebar has never seen (messenger/usePartnerDirectory.js)
+    const { resolvePartner } = usePartnerDirectory({ token });
+
+    /**
+     * Merge a directory record into the sidebar row and the open chat.
+     *
+     * Both hold their own copy of the partner, and a name shown in one panel
+     * but not the other is how this looked in the first place. Returns the
+     * previous state untouched when nothing changes, so a resolve that
+     * confirms what is already on screen costs no re-render.
+     */
+    const applyPartner = (partner) => {
+        if (!partner?.address) return;
+        const addr = partner.address.toLowerCase();
+        const merge = (prevUser) => ({ ...prevUser, ...partner });
+
+        setConversations(prev => {
+            const i = prev.findIndex(c => c.user.address.toLowerCase() === addr);
+            if (i === -1 || prev[i].user.username === partner.username) return prev;
+            const next = [...prev];
+            next[i] = { ...next[i], user: merge(next[i].user) };
+            return next;
+        });
+        setActiveConversation(prev => {
+            if (!prev || prev.user.address.toLowerCase() !== addr) return prev;
+            if (prev.user.username === partner.username) return prev;
+            return { ...prev, user: merge(prev.user) };
+        });
+    };
 
     /**
      * Attestation gate for a group's member set (audit M-1): the members we are
@@ -179,8 +210,13 @@ export const MessengerProvider = ({ children }) => {
             const existing = prev.find(c => c.user.address.toLowerCase() === partnerAddr);
             const otherConvos = prev.filter(c => c.user.address.toLowerCase() !== partnerAddr);
 
+            // No username here on purpose. This used to read "New Message",
+            // which is not a name — every unknown partner got the same one, so
+            // the sidebar could not say who a message was from, and it masked
+            // `displayName`'s short-address fallback, which at least identifies
+            // the sender. The real name arrives from the directory below.
             let newConvo = existing ? { ...existing } : {
-                user: { address: partnerAddr, username: "New Message" },
+                user: { address: partnerAddr },
                 last_message: msg,
                 unread_count: 0
             };
@@ -196,6 +232,14 @@ export const MessengerProvider = ({ children }) => {
 
             return [newConvo, ...otherConvos];
         });
+
+        // Name the partner from the directory. Deliberately unconditional and
+        // not awaited: the lookup is cached per address, so this is one request
+        // per partner per session, and it also picks up a rename. Public data,
+        // so the name lands even while the body is still undecryptable — which
+        // is the case that matters, since a message you cannot read yet is
+        // exactly when you most need to know who sent it.
+        resolvePartner(partnerAddr).then(applyPartner);
     };
 
     const fetchConversations = async () => {
@@ -215,6 +259,10 @@ export const MessengerProvider = ({ children }) => {
         if (!fullUser.encryption_public_key) {
             try {
                 fullUser = await api(`${API_ENDPOINTS.BASE}/users/${partnerUser.address}`);
+                // This fetch already has the name; feed it back to the sidebar
+                // row so opening an unnamed conversation names it there too,
+                // even if the resolve at receive time failed.
+                applyPartner(fullUser);
             } catch { /* best-effort: failure is non-fatal */ }
         }
 
@@ -295,8 +343,15 @@ export const MessengerProvider = ({ children }) => {
             setConversations(prev => {
                 const partnerAddr = partnerUser.address.toLowerCase();
                 const existing = prev.find(c => c.user.address.toLowerCase() === partnerAddr);
+                // `partnerUser` wins over whatever is already in the row. The
+                // server echoes NEW_MESSAGE back to the sender for device sync,
+                // and that echo can land while this POST is still in flight —
+                // so `existing` is often the nameless placeholder that
+                // handleIncomingMessage just created, and spreading it over the
+                // full directory object the composer is holding is what left
+                // the sender's own sidebar unnamed until a reload.
                 const updated = existing
-                    ? { ...existing, last_message: newMsg }
+                    ? { ...existing, user: { ...existing.user, ...partnerUser }, last_message: newMsg }
                     : { user: partnerUser, last_message: newMsg, unread_count: 0 };
                 return [updated, ...prev.filter(c => c.user.address.toLowerCase() !== partnerAddr)];
             });
