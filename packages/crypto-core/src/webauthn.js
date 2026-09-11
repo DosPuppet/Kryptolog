@@ -3,6 +3,13 @@
 // The only module here that needs `window`. It is used by the SPA alone; the
 // extension's service worker imports the package root and never reaches these.
 
+// These were in scope for free while this file was part of the old single
+// module; the split left the call sites behind without the import, so every
+// biometric path died on `ReferenceError: fromHex is not defined`. Nothing
+// caught it: this module needs `window`, so it has no tests, and crypto-core is
+// the one package with no lint gate to flag an undefined reference.
+import { toHex, fromHex } from './encoding.js';
+
 // --- WebAuthn PRF (Biometric Vault) ---
 
 export const checkPrfSupport = async () => {
