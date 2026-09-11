@@ -183,8 +183,8 @@ at any point.
 
 **Merged to `main` on 2026-09-10** (fast-forward, `b8f444a`..`a5f7e62`), with all
 four suites, both builds and all four lint/format/drift gates green at `a5f7e62`.
-Neither merge is pushed — `origin/main` is 43 commits behind, and both branches
-are still around at the merged commit.
+Both merges have since been pushed — `origin/main` reached `079d008` on
+2026-09-11 — and both branches are still around at the merged commit.
 
 **A backend lint gate now exists.** `ruff check .` and `ruff format --check .`
 are blocking CI steps, matching the two eslint gates. Config in
@@ -333,7 +333,12 @@ and put the manual recipe somewhere it can actually be followed.
 | Login challenge single-sourced + real signature tests | mixed | done — `7afe9da` |
 | Chunked-file round-trip coverage | frontend | done — `47085e1` |
 | `E2E-RECIPE.md`, stack wiped and re-seeded | repo | done |
-| crypto-core lint gate + live nginx M-10 test + biometric coverage | mixed | done |
+| crypto-core lint gate + live nginx M-10 test + biometric coverage | mixed | done — `ad7046e` |
+| DM partner named on arrival, not after a reload | frontend | done — `6a32bb3` |
+
+**Merged to `main` on 2026-09-11** (fast-forward, `b7241f7`..`6a32bb3`), with all
+four suites (463 / 163 / 50 / 96), both builds and all five lint/format/drift
+gates green at `6a32bb3`. Not pushed — `origin/main` is 8 commits behind.
 
 **L-12 is done, and the scope line matters.** Everything opaque moved to base64;
 everything that identifies something stayed hex. Base64 is case-sensitive, and
@@ -417,6 +422,25 @@ meet. Mutation-tested against both the shipped bug and a plausible L-12 slip
 (encoding `prfKey` as base64). The hardware assumption — that a real
 authenticator returns a stable PRF output across ceremonies — is still a manual
 step, now `E2E-RECIPE.md` §5b.
+
+**The recipe found its first bug before it was finished.** Walking step 2, a DM
+from an unknown partner showed the literal **"New Message"** as their name until
+a reload — the same string for every unknown partner, so the one thing an
+undecryptable message needs to convey, who sent it, was the one thing missing.
+Two independent causes: `routers/messenger.py` hand-builds the `NEW_MESSAGE`
+frame and carries addresses only, and the server echoes that frame back to the
+*sender* for device sync, where it can land while the POST it came from is still
+in flight — so `sendMessage` found the placeholder row and spread it over the
+full directory object the composer was already holding. **A username is public
+directory data, not part of the ciphertext**, so it resolves the moment the frame
+lands; `context/messenger/usePartnerDirectory.js` fetches it, cached per address
+and shared in flight, and does not cache a failure. The placeholder now carries
+no username at all, which restores `displayName`'s short-address fallback — not a
+name, but a label that differs between people. Six tests in
+`frontend/src/test/partnerNames.test.jsx` drive real frames through the
+provider's socket, since the bug was in the ordering between socket and request
+rather than in either alone; mutation-tested both ways. **DMs only** — group
+names go through the M-3 encrypted-name path, which is a different mechanism.
 
 **Two gotchas worth keeping:**
 - `start_all.sh` calls `python3 -m pip` with whatever `python3` is on PATH, so
