@@ -66,7 +66,14 @@ const blobBytes = (blob) =>
         reader.readAsArrayBuffer(blob);
     });
 
-describe('chunked file round-trip', () => {
+// Slow by design, like the extension's vault tests. CHUNK_SIZE is 512KB and
+// belongs to the module under test, so a multi-chunk file cannot be made
+// smaller without testing something other than chunking: the multi-file case
+// pushes 3MB through FileReader, AES-GCM and base64 twice over. That costs ~3s
+// here and ~6s on a GitHub runner, which overran the 5s default and failed CI
+// on timing alone. The headroom is deliberate — a real regression here throws,
+// it does not hang, so a generous limit costs nothing.
+describe('chunked file round-trip', { timeout: 30_000 }, () => {
     beforeEach(() => {
         vi.clearAllMocks();
     });

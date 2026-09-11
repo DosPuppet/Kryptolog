@@ -462,6 +462,27 @@ the four fixes was mutation-tested separately and each kills only its own gate;
 turning the in-flight share into a permanent cache fails the two tests that
 exist to say the password is not retained.
 
+**Two CI failures that were not code defects.** Both appeared on the first push
+after the merge:
+
+- **`js-yaml` 4.3.1 (high) blocked the `npm audit` gate** in `frontend` and
+  `trustkeys`. Transitive, dev-only — `eslint` → `@eslint/eslintrc` → `js-yaml` —
+  and already fixed upstream in 4.3.2, which `packages/crypto-core` had because
+  its lockfile was written later. `npm audit fix` in all three; **lockfiles only,
+  no `package.json` change**, and it also cleared the `@vitest/mocker` moderate
+  (vitest 4.1.8/4.1.9 → 4.1.11 everywhere, which keeps the three packages on one
+  runner — they share crypto-core through a symlink). One advisory is left
+  everywhere by choice: **`esbuild` low**, reachable only by a dev server on
+  Windows, and clearing it needs a vite major.
+- **`fileChunks.test.js` timed out at 5s on the runner**, not here. Not
+  flakiness: `CHUNK_SIZE` is 512KB and belongs to the module under test, so the
+  multi-file case genuinely pushes 3MB through FileReader, AES-GCM and base64
+  twice — ~3s locally, ~6.2s on a GitHub runner. The suite carries an explicit
+  `{ timeout: 30_000 }` now, with the headroom deliberate because a real
+  regression there throws rather than hangs. **Watch for this in any test that
+  moves real chunk-sized data**: this box is about 2.3× the runner's speed, so
+  anything over ~2s locally is already living on the edge of the default.
+
 **The recipe found its first bug before it was finished.** Walking step 2, a DM
 from an unknown partner showed the literal **"New Message"** as their name until
 a reload — the same string for every unknown partner, so the one thing an
