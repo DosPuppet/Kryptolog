@@ -32,6 +32,14 @@ source backend/.venv/bin/activate
 ./start_all.sh
 ```
 
+**Rebuild the SPA if any frontend code has changed since the last run.**
+`start_all.sh` builds only when `dist/` is *absent*, so an existing stale build
+is served silently and the pass verifies the wrong code:
+
+```bash
+(cd frontend && npx vite build) && pm2 restart kryptolog-frontend
+```
+
 `backend/.env` should exist and set `KRYPTOLOG_JWT_SECRET` (otherwise every
 restart invalidates all tokens and the browser starts 401ing mid-pass) and
 `REDIS_URL` (otherwise presence and WS fan-out run in-process and the L-7 Redis
@@ -92,6 +100,15 @@ Check specifically:
 - Send a message of **accented or CJK text near the length limit**. The budget
   used to assume one byte per character, so this was refused with a bare 422
   well below the advertised 10 000. Now covered by tests, worth seeing once.
+- **The partner is named on arrival, on both sides, without a reload.** This is
+  what the first walk of this step found: the `NEW_MESSAGE` frame is hand-built
+  and carries addresses only, so a first message from an unknown partner showed
+  the literal "New Message" — the same string for everyone — until the next
+  `GET /messages/conversations`. The sender saw it too, because the server
+  echoes the frame back for device sync and that echo can beat the POST it came
+  from. A username is public directory data, not part of the ciphertext, so it
+  must appear **even while the body is still undecryptable**. A short address
+  (`bbbbbbbb...`) is the acceptable failure; a placeholder name is not.
 
 ---
 
@@ -157,6 +174,20 @@ calling `toHex`/`fromHex` without importing them and every biometric path threw
 `ReferenceError` before reaching the authenticator. What a mock cannot prove is
 that a real authenticator returns a stable PRF output for the same salt across
 separate ceremonies, which is the assumption the whole design rests on.
+
+**Then keep using the app — the unlock is not the test.** The second walk of
+this step found that biometrics worked and the app asked for the password
+immediately after, which made the feature pointless. The key-cache TTL defaults
+to 0 ("always ask"), so *every* key operation has to be answered from the
+authenticator, and three things stopped that. Expect now:
+
+- **One** ceremony to log in (it used to be two for the same password), then one
+  more when the dashboard first needs keys, and **no password box**.
+- Opening the messenger, a secret and the group list should each cost at most
+  one ceremony, never a password prompt.
+- If a password box does appear, the console now names the cause — read it
+  rather than guessing. A bare `catch {}` swallowing that reason is what made
+  the original report undiagnosable from the browser.
 
 Skip if the device has no platform authenticator: there is deliberately no
 software fallback, so the feature is simply not offered and
