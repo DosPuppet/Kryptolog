@@ -1,4 +1,4 @@
-import { createContext, useContext, useState, useEffect } from 'react';
+import { createContext, useContext, useState, useEffect, useRef } from 'react';
 import API_ENDPOINTS from '../config';
 import { useAuth } from './AuthContext';
 import { vaultService } from '../services/vault';
@@ -65,31 +65,50 @@ export const PQCProvider = ({ children }) => {
         return () => document.removeEventListener('visibilitychange', handleVisibilityChange);
     }, []);
 
+    // One outstanding password request at a time. `setModalConfig` holds a single
+    // resolve/reject pair, so a second concurrent request overwrote the first's
+    // and left that operation's promise hanging forever behind a spinner that
+    // never resolved. The app issues custody calls in parallel on purpose
+    // (hooks/useSecrets.js fetches own and shared secrets at once), so this is
+    // the normal path, not an edge case — and one vault password answers them all.
+    const passwordInFlight = useRef(null);
+
     // Internal helper to request password via Modal
     const requestPassword = async (message = "Please enter your vault password to continue.") => {
         // Derived key cache — skip prompt entirely if cache is still valid
         if (vaultService.hasCachedKey()) {
             return null; // vault methods will use the cached key
         }
+        if (passwordInFlight.current) return passwordInFlight.current;
 
-        // Auto-Biometrics
-        if (biometricsEnabled) {
-            try {
-                const password = await vaultService.recoverPasswordWithBiometrics();
-                return password;
-            } catch {
-                // auto-biometrics cancelled/unsupported — fall back to manual prompt
+        const pending = (async () => {
+            // Auto-Biometrics
+            if (biometricsEnabled) {
+                try {
+                    return await vaultService.recoverPasswordWithBiometrics();
+                } catch (e) {
+                    // Falling back to the password box is right; doing it in
+                    // silence is what made "biometric unlock works, then it asks
+                    // for my password anyway" impossible to diagnose — the reason
+                    // reached neither the user nor the console.
+                    console.warn("Biometric unlock unavailable, asking for the password instead:", e);
+                }
             }
-        }
 
-        return new Promise((resolve, reject) => {
-            setModalConfig({
-                isOpen: true,
-                message,
-                resolve,
-                reject
+            return new Promise((resolve, reject) => {
+                setModalConfig({
+                    isOpen: true,
+                    message,
+                    resolve,
+                    reject
+                });
             });
+        })().finally(() => {
+            if (passwordInFlight.current === pending) passwordInFlight.current = null;
         });
+
+        passwordInFlight.current = pending;
+        return pending;
     };
 
     const handleModalSubmit = (password) => {
@@ -489,7 +508,13 @@ export const PQCProvider = ({ children }) => {
                 }
             },
             unlockWithBiometrics: async () => {
-                const success = await vaultService.unlockWithBiometrics();
+                // ONE ceremony for the whole login. This used to call
+                // vaultService.unlockWithBiometrics(), which recovers the password
+                // internally and throws it away, and then recover it a second time
+                // to sign the login challenge — so a single click on "unlock with
+                // biometrics" asked the authenticator twice for the same secret.
+                const password = await vaultService.recoverPasswordWithBiometrics();
+                const success = await vaultService.unlock(password);
                 if (!success) throw new Error("Biometric Unlock Failed");
 
                 const account = vaultService.getActiveAccount();
@@ -499,11 +524,8 @@ export const PQCProvider = ({ children }) => {
                 setPqcAccount(accountId);
                 setMlkemKey(encryptionKey);
 
-                // performServerLogin needs a signing function, and vaultService.sign
-                // requires the vault password. Recover it via the same biometric
-                // unlock so we can sign the login challenge without prompting again.
-                const password = await vaultService.recoverPasswordWithBiometrics();
-
+                // performServerLogin needs a signing function and vaultService.sign
+                // needs the password, so the one we already hold signs the challenge.
                 return performServerLogin(accountId, encryptionKey, (msg) => vaultService.sign(msg, password), account.name);
             },
             hasBiometrics: () => biometricsEnabled

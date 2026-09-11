@@ -45,7 +45,34 @@ export const biometricMethods = {
         return 'prf';
     },
 
+    // Concurrent callers share ONE ceremony.
+    //
+    // WebAuthn allows a single outstanding navigator.credentials.get() per
+    // browser; an overlapping second call is rejected with NotAllowedError
+    // ("a request is already pending"). PQCContext.requestPassword treats any
+    // biometric failure as "fall back to the password box", so two custody
+    // operations that start together turned a working authenticator into a
+    // password prompt — and the app starts several together by design
+    // (hooks/useSecrets.js fetches own and shared secrets in parallel and each
+    // batch-decrypts its titles; useGroupNames resolves channel names the same
+    // way). That is the "biometrics works, then it asks for my password anyway"
+    // report.
+    //
+    // In flight only, NEVER cached: the reference is dropped as soon as the
+    // ceremony settles, so the recovered password is not retained between
+    // operations and the next one re-authenticates. Sharing a pending ceremony
+    // grants nothing a caller could not already have had by waiting for it.
     async recoverPasswordWithBiometrics() {
+        if (this._bioInFlight) return this._bioInFlight;
+
+        const pending = this._recoverPasswordWithBiometrics().finally(() => {
+            if (this._bioInFlight === pending) this._bioInFlight = null;
+        });
+        this._bioInFlight = pending;
+        return pending;
+    },
+
+    async _recoverPasswordWithBiometrics() {
         if (!this.hasBiometrics()) throw new Error("Biometrics not set up.");
 
         const prefsString = localStorage.getItem('kryptolog_biometrics');
@@ -62,11 +89,6 @@ export const biometricMethods = {
         if (!password) throw new Error("Biometric decryption failed.");
 
         return password;
-    },
-
-    async unlockWithBiometrics() {
-        const password = await this.recoverPasswordWithBiometrics();
-        return await this.unlock(password);
     },
 
     disableBiometrics() {

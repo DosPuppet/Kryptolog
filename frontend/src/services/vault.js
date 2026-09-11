@@ -17,6 +17,8 @@ class VaultService {
         this._cachedSalt = null;     // Uint8Array(16) — salt used to derive _cachedKey
         this._cacheTimer = null;     // setTimeout reference for auto-expiry
         this._signingKey = null;     // active account ML-DSA private key (message signing, audit S1)
+        // In-flight WebAuthn ceremony, shared by concurrent callers (vaultBiometrics.js).
+        this._bioInFlight = null;
         const savedTTL = parseInt(localStorage.getItem('kryptolog_key_cache_ttl') || '0', 10);
         this._cacheTTL = isNaN(savedTTL) ? 0 : savedTTL; // 0 = "always ask" (default)
     }

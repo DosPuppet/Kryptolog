@@ -335,6 +335,7 @@ and put the manual recipe somewhere it can actually be followed.
 | `E2E-RECIPE.md`, stack wiped and re-seeded | repo | done |
 | crypto-core lint gate + live nginx M-10 test + biometric coverage | mixed | done — `ad7046e` |
 | DM partner named on arrival, not after a reload | frontend | done — `6a32bb3` |
+| Biometric unlock holds for the session, not just the login | frontend | done |
 
 **Merged to `main` on 2026-09-11** (fast-forward, `b7241f7`..`6a32bb3`), with all
 four suites (463 / 163 / 50 / 96), both builds and all five lint/format/drift
@@ -422,6 +423,44 @@ meet. Mutation-tested against both the shipped bug and a plausible L-12 slip
 (encoding `prfKey` as base64). The hardware assumption — that a real
 authenticator returns a stable PRF output across ceremonies — is still a manual
 step, now `E2E-RECIPE.md` §5b.
+
+**And the recipe's §5b immediately found the reason biometrics was no use.**
+Reported as "biometric unlock works, but the app asks for the password just
+after". The key-cache TTL defaults to **0 — "always ask"** — so nothing is
+cached and *every* custody call reaches `PQCContext.requestPassword`, whose job
+is to answer it from the authenticator instead of the password box. Three things
+stopped that working, and all three had to go:
+
+- **A browser allows ONE outstanding `navigator.credentials.get()`**; an
+  overlapping call is rejected with `NotAllowedError`. The app starts custody
+  calls in parallel on purpose — `hooks/useSecrets.js` fetches own and shared
+  secrets at once and each batch-decrypts its titles — so the loser's biometric
+  attempt failed and fell through to the password box. `recoverPasswordWithBiometrics`
+  now shares the ceremony **in flight** (the `usePartnerDirectory` pattern):
+  concurrent callers await the one ceremony, and the reference is dropped the
+  moment it settles, so **the password is still never cached** and the next
+  operation re-authenticates. Modelled in the test with the browser's own rule —
+  a mock that answers two ceremonies at once passes with or without the fix.
+- **Logging in ran two ceremonies for one password.**
+  `vaultService.unlockWithBiometrics()` recovered it, unlocked, and threw it
+  away; `PQCContext` then recovered it again to sign the login challenge. One
+  recovery now does both, and that dead service method is gone.
+- **`requestPassword` swallowed the reason.** A bare `catch {}` turned every
+  biometric failure into an unexplained password box — which is exactly why the
+  report could not be diagnosed from the browser. It logs the cause now.
+
+One more of the same family fell out: the modal holds a **single**
+resolve/reject pair, so a second concurrent request overwrote the first's and
+left that operation's promise pending forever behind a spinner that never
+resolved. `requestPassword` shares its in-flight request too — one prompt
+answers every waiting operation, which is correct anyway since there is one
+vault password. The test for it fails by **timing out**, which is the hang.
+
+Ten tests in `frontend/src/test/biometricCeremony.test.js` (the ceremony
+guard) and `frontend/src/test/biometricUnlock.test.jsx` (the provider). Each of
+the four fixes was mutation-tested separately and each kills only its own gate;
+turning the in-flight share into a permanent cache fails the two tests that
+exist to say the password is not retained.
 
 **The recipe found its first bug before it was finished.** Walking step 2, a DM
 from an unknown partner showed the literal **"New Message"** as their name until
