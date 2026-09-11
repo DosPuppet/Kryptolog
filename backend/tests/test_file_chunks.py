@@ -1,3 +1,4 @@
+import base64
 from unittest.mock import patch
 from uuid import uuid4
 
@@ -5,15 +6,17 @@ import pytest
 from conftest import TEST_USER_ADDRESS_2
 
 
-# Chunk payloads must be real hex (audit M-2): FileChunkUpload rejects anything
-# else, and upload_chunk's size accounting divides length by 2 to get bytes,
-# which only means anything for hex. These helpers keep the fixtures honest.
-def _hex(label: str, length: int = 32) -> str:
-    """Deterministic hex blob, distinct per label, padded to `length` chars."""
-    return (label.encode().hex() * length)[:length]
+# Chunk payloads must be canonical base64 (audit M-2, base64 since L-12):
+# FileChunkUpload rejects anything else, and upload_chunk's size accounting
+# converts length to bytes, which only means anything for a real encoding.
+# These helpers keep the fixtures honest.
+def _b64(label: str, byte_len: int = 16) -> str:
+    """Deterministic base64 blob, distinct per label, of `byte_len` bytes."""
+    raw = (label.encode() * byte_len)[:byte_len]
+    return base64.b64encode(raw).decode()
 
 
-IV_HEX = "0" * 24  # 12-byte AES-GCM IV
+IV_B64 = base64.b64encode(bytes(12)).decode()  # 12-byte AES-GCM IV
 
 
 def create_test_secret(client, token):
@@ -44,8 +47,8 @@ class TestFileChunks:
         chunk_0 = {
             "secret_id": secret_id,
             "chunk_index": 0,
-            "iv": IV_HEX,
-            "encrypted_data": _hex("c0"),
+            "iv": IV_B64,
+            "encrypted_data": _b64("c0"),
         }
         res0 = client.post("/secrets/chunks", headers=auth_headers, json=chunk_0)
         assert res0.status_code == 201
@@ -55,8 +58,8 @@ class TestFileChunks:
         chunk_1 = {
             "secret_id": secret_id,
             "chunk_index": 1,
-            "iv": IV_HEX,
-            "encrypted_data": _hex("c1"),
+            "iv": IV_B64,
+            "encrypted_data": _b64("c1"),
         }
         res1 = client.post("/secrets/chunks", headers=auth_headers, json=chunk_1)
         assert res1.status_code == 201
@@ -79,8 +82,8 @@ class TestFileChunks:
             json={
                 "secret_id": secret_id,
                 "chunk_index": 0,
-                "iv": IV_HEX,
-                "encrypted_data": _hex("c0"),
+                "iv": IV_B64,
+                "encrypted_data": _b64("c0"),
             },
         )
 
@@ -106,8 +109,8 @@ class TestFileChunks:
             json={
                 "secret_id": secret_id,
                 "chunk_index": 0,
-                "iv": IV_HEX,
-                "encrypted_data": _hex("original"),
+                "iv": IV_B64,
+                "encrypted_data": _b64("original"),
             },
         )
         assert first.status_code == 201
@@ -118,8 +121,8 @@ class TestFileChunks:
             json={
                 "secret_id": secret_id,
                 "chunk_index": 0,
-                "iv": IV_HEX,
-                "encrypted_data": _hex("shadow"),
+                "iv": IV_B64,
+                "encrypted_data": _b64("shadow"),
             },
         )
         assert shadow.status_code == 409
@@ -127,20 +130,27 @@ class TestFileChunks:
         # The original payload is what a read returns — deterministically.
         res = client.get(f"/secrets/{secret_id}/chunks/0", headers=auth_headers)
         assert res.status_code == 200
-        assert res.json()["encrypted_data"] == _hex("original")
+        assert res.json()["encrypted_data"] == _b64("original")
 
     @pytest.mark.parametrize(
         "field,value",
         [
-            ("encrypted_data", "not_hex_at_all"),
-            ("encrypted_data", "abc"),  # odd length
+            ("encrypted_data", "not_base64_at_all!"),
+            ("encrypted_data", "abc"),  # length not a multiple of 4
             ("encrypted_data", ""),  # empty
-            ("iv", "zzzz"),
-            ("iv", "abc"),  # odd length
+            ("iv", "z z z"),  # whitespace: atob tolerates it, we must not
+            ("iv", "A==="),  # malformed padding
+            # Non-canonical: decodes fine under a lenient decoder, but gives a
+            # SECOND spelling of the same bytes. A message signature commits to
+            # its ciphertext as a string, so a second spelling would be a second
+            # validly-signed form of one ciphertext.
+            ("iv", "AB=="),
+            ("encrypted_data", "AB=="),
         ],
     )
-    def test_non_hex_chunk_rejected(self, client, user1, field, value):
-        """iv and encrypted_data are hex on the wire; nothing checked it (M-2)."""
+    def test_non_base64_chunk_rejected(self, client, user1, field, value):
+        """iv and encrypted_data are base64 on the wire; nothing checked the
+        encoding at all before M-2, and "checked" has to mean canonical."""
         token, _ = user1
         auth_headers = {"Authorization": f"Bearer {token}"}
 
@@ -148,8 +158,8 @@ class TestFileChunks:
         payload = {
             "secret_id": secret["id"],
             "chunk_index": 0,
-            "iv": IV_HEX,
-            "encrypted_data": _hex("c0"),
+            "iv": IV_B64,
+            "encrypted_data": _b64("c0"),
         }
         payload[field] = value
 
@@ -167,8 +177,8 @@ class TestFileChunks:
             json={
                 "secret_id": secret["id"],
                 "chunk_index": -1,
-                "iv": IV_HEX,
-                "encrypted_data": _hex("c0"),
+                "iv": IV_B64,
+                "encrypted_data": _b64("c0"),
             },
         )
         assert res.status_code == 422
@@ -187,8 +197,8 @@ class TestFileChunks:
             json={
                 "secret_id": secret_id,
                 "chunk_index": 0,
-                "iv": IV_HEX,
-                "encrypted_data": _hex("c0"),
+                "iv": IV_B64,
+                "encrypted_data": _b64("c0"),
             },
         )
 
@@ -197,7 +207,7 @@ class TestFileChunks:
         assert res.status_code == 200
         data = res.json()
         assert data["chunk_index"] == 0
-        assert data["encrypted_data"] == _hex("c0")
+        assert data["encrypted_data"] == _b64("c0")
 
     def test_upload_chunk_not_owner_fails(self, client, user1, user2):
         token1, _ = user1
@@ -215,8 +225,8 @@ class TestFileChunks:
             json={
                 "secret_id": secret_id,
                 "chunk_index": 0,
-                "iv": IV_HEX,
-                "encrypted_data": _hex("c0"),
+                "iv": IV_B64,
+                "encrypted_data": _b64("c0"),
             },
         )
         assert res.status_code == 403
@@ -237,8 +247,8 @@ class TestFileChunks:
             json={
                 "secret_id": secret_id,
                 "chunk_index": 0,
-                "iv": IV_HEX,
-                "encrypted_data": _hex("c0"),
+                "iv": IV_B64,
+                "encrypted_data": _b64("c0"),
             },
         )
 
@@ -261,7 +271,7 @@ class TestFileChunks:
         # User 2 tries again -> Success
         res2 = client.get(f"/secrets/{secret_id}/chunks/0", headers=user2_headers)
         assert res2.status_code == 200
-        assert res2.json()["encrypted_data"] == _hex("c0")
+        assert res2.json()["encrypted_data"] == _b64("c0")
 
     def test_delete_secret_removes_chunks(self, client, user1):
         token, _ = user1
@@ -276,8 +286,8 @@ class TestFileChunks:
             json={
                 "secret_id": secret_id,
                 "chunk_index": 0,
-                "iv": IV_HEX,
-                "encrypted_data": _hex("c0"),
+                "iv": IV_B64,
+                "encrypted_data": _b64("c0"),
             },
         )
 
@@ -302,30 +312,30 @@ class TestFileChunks:
 
         # Mock the config limit to be very small (e.g., 10 bytes)
         with patch("config.MAX_TOTAL_FILE_SIZE", 10):
-            # 1. Upload small chunk (ok)
-            # encrypted_data is hex string. 10 chars hex = 5 bytes.
+            # 1. Upload small chunk (ok). Base64: 4 chars per 3 bytes, so
+            # 8 chars = 6 bytes.
             res1 = client.post(
                 "/secrets/chunks",
                 headers=auth_headers,
                 json={
                     "secret_id": secret_id,
                     "chunk_index": 0,
-                    "iv": IV_HEX,
-                    "encrypted_data": "0011223344",
+                    "iv": IV_B64,
+                    "encrypted_data": _b64("a", 6),
                 },
             )
             assert res1.status_code == 201
 
-            # 2. Upload another chunk that pushes total over 10 bytes
-            # Existing = 5 bytes. New 20 chars hex = 10 bytes. Total 15 > 10.
+            # 2. Upload another chunk that pushes total over 10 bytes.
+            # Existing 6 + new 6 = 12 > 10.
             res2 = client.post(
                 "/secrets/chunks",
                 headers=auth_headers,
                 json={
                     "secret_id": secret_id,
                     "chunk_index": 1,
-                    "iv": IV_HEX,
-                    "encrypted_data": "00112233445566778899",
+                    "iv": IV_B64,
+                    "encrypted_data": _b64("b", 6),
                 },
             )
             assert res2.status_code == 413
@@ -335,7 +345,7 @@ class TestFileChunks:
 class TestMultisigChunkAccess:
     """Tests that multisig signers and recipients can access file chunks."""
 
-    MULTISIG_CHUNK = _hex("multisig")
+    MULTISIG_CHUNK = _b64("multisig")
 
     def _create_workflow_with_chunk(self, client, token_owner, signer_addr, recipient_addr=None):
         """Helper: create a workflow (which internally creates a secret), then upload chunks to it."""
@@ -376,7 +386,7 @@ class TestMultisigChunkAccess:
             json={
                 "secret_id": secret_id,
                 "chunk_index": 0,
-                "iv": IV_HEX,
+                "iv": IV_B64,
                 "encrypted_data": self.MULTISIG_CHUNK,
             },
         )

@@ -7,6 +7,7 @@ cover storage, rejection, backfill, key-change replacement, and one real
 ML-DSA-44 round-trip through the endpoint (liboqs, no mocks).
 """
 
+import base64
 import os
 import sys
 
@@ -129,15 +130,15 @@ class TestRealCrypto:
         accepted and stored; a signature over a DIFFERENT key is rejected."""
         import oqs
 
-        # Restore a real verifier (conftest mocks it for endpoint tests).
-        monkeypatch.setattr("auth.verify_message_signature", _real_verify)
+        # Restore the real verifier (conftest mocks it for endpoint tests).
+        monkeypatch.setattr("auth.verify_message_signature", _REAL_VERIFY)
 
         signer = oqs.Signature(auth_module.SIG_ALG)
         address = signer.generate_keypair().hex()
         enc_key = "3c" * 1184
 
         att_msg = auth_module.encryption_key_attestation_message(enc_key)
-        good_att = signer.sign(att_msg.encode("utf-8")).hex()
+        good_att = base64.b64encode(signer.sign(att_msg.encode("utf-8"))).decode()
 
         resp = login_with_attestation(client, address, enc_key, good_att, "RealAtt")
         assert resp.status_code == 200, resp.text
@@ -149,14 +150,10 @@ class TestRealCrypto:
         assert resp.status_code == 400
 
 
-def _real_verify(address, message, signature):
-    """The genuine liboqs verifier, bypassing the conftest mock."""
-    import oqs
-
-    try:
-        with oqs.Signature(auth_module.SIG_ALG) as verifier:
-            return verifier.verify(
-                message.encode("utf-8"), bytes.fromhex(signature), bytes.fromhex(address)
-            )
-    except Exception:
-        return False
+# The production verifier itself, captured at import time — before conftest's
+# autouse fixture can stub it. This used to be a hand-rolled copy of the liboqs
+# call, which is how it came to decode the signature as hex after production
+# moved to base64 (audit L-12): the test kept passing because both halves of the
+# TEST agreed, while neither matched the server. A duplicate of the thing under
+# test cannot detect a change to it.
+_REAL_VERIFY = auth_module.verify_message_signature

@@ -28,13 +28,13 @@ import {
 // Must match backend/schemas.py. Raising one means raising the other.
 const SERVER = {
     MAX_GROUP_MEMBERS: 50,
-    KEY_WRAP_CHARS_PER_MEMBER: 5_024,
-    SIGNATURE_CHARS: 4_840,
-    WRAPPED_KEY_CHARS: 2_400,
+    KEY_WRAP_CHARS_PER_MEMBER: 4_224,
+    SIGNATURE_CHARS: 3_228,
+    WRAPPED_KEY_CHARS: 1_600,
     MAX_MESSAGE_TEXT_CHARS: 10_000,
-    MAX_GROUP_NAME_LEN: 251_200,
-    MAX_DM_CONTENT_LEN: 30_640,
-    MAX_GROUP_MESSAGE_CONTENT_LEN: 277_040,
+    MAX_GROUP_NAME_LEN: 211_200,
+    MAX_DM_CONTENT_LEN: 47_452,
+    MAX_GROUP_MESSAGE_CONTENT_LEN: 255_452,
 };
 
 // One identity's worth of real key material, generated once — keygen is the
@@ -128,6 +128,24 @@ describe('signed message envelope size', () => {
 
     it('fits a full-length first message, which carries two wrapped keys', async () => {
         const wire = await buildDm('x'.repeat(SERVER.MAX_MESSAGE_TEXT_CHARS), { rekey: true });
+        expect(wire.length).toBeLessThanOrEqual(SERVER.MAX_DM_CONTENT_LEN);
+    }, 30_000);
+
+    // The text cap counts JavaScript string length (UTF-16 units), but the
+    // budget used to assume one BYTE per unit. A full-length message of CJK or
+    // accented text is 2-3x that, so it blew MAX_DM_CONTENT_LEN and came back
+    // as a bare 422 well below the advertised 10 000 characters. Worst case is
+    // 3 bytes per unit: a BMP character is one unit and up to 3 bytes, while an
+    // astral character (emoji) is 4 bytes across TWO units, so it is cheaper
+    // per unit rather than dearer.
+    it.each([
+        ['CJK (3 bytes per unit — the worst case)', '\u6f22'],
+        ['accented Latin (2 bytes per unit)', '\u00e9'],
+        ['emoji (4 bytes, but 2 units each)', '\u{1f512}'],
+    ])('fits a full-length first message of %s', async (_label, char) => {
+        const text = char.repeat(SERVER.MAX_MESSAGE_TEXT_CHARS / char.length);
+        expect(text.length).toBe(SERVER.MAX_MESSAGE_TEXT_CHARS);
+        const wire = await buildDm(text, { rekey: true });
         expect(wire.length).toBeLessThanOrEqual(SERVER.MAX_DM_CONTENT_LEN);
     }, 30_000);
 

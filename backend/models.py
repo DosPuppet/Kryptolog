@@ -39,7 +39,7 @@ class User(Base):
     # key changed on <date>" and detect a malicious/compromised key swap.
     key_changed_at = Column(DateTime, nullable=True)
     # Self-signed binding of encryption_public_key to this identity (audit M-1):
-    # an ML-DSA-44 signature (hex) by `address` over the domain-separated
+    # an ML-DSA-44 signature (base64) by `address` over the domain-separated
     # key-attestation message. Peers verify it client-side before wrapping keys
     # to this user, so the directory can't substitute a KEM key it controls.
     # Null = account predates attestations (clients show "unverified").
@@ -193,8 +193,8 @@ class FileChunk(Base):
     id = Column(Integer, primary_key=True, index=True)
     secret_id = Column(Integer, ForeignKey("secrets.id"), index=True)
     chunk_index = Column(Integer)  # 0-based ordering
-    encrypted_data = Column(Text)  # AES-GCM encrypted chunk (hex)
-    iv = Column(String)  # Per-chunk IV (hex)
+    encrypted_data = Column(Text)  # AES-GCM encrypted chunk (base64)
+    iv = Column(String)  # Per-chunk IV (base64)
     created_at = Column(DateTime, default=utcnow_naive)
 
     secret = relationship("Secret", back_populates="chunks")

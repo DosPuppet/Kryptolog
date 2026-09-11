@@ -38,6 +38,12 @@ FIXTURE = os.path.join(
 )
 
 
+def _sig_b64(raw: bytes) -> str:
+    """A signature as the clients send it: base64 since the L-12 cutover.
+    Public keys stay hex — they are identifiers, not payloads."""
+    return base64.b64encode(raw).decode()
+
+
 @pytest.fixture(scope="module")
 def vec():
     with open(FIXTURE) as f:
@@ -143,13 +149,13 @@ def test_login_challenge_real_verification():
     with oqs.Signature(SIG_ALG) as client:
         pk = client.generate_keypair()
         sig = client.sign(message)
-    pk_hex, sig_hex = pk.hex(), sig.hex()
+    pk_hex, sig_b64 = pk.hex(), _sig_b64(sig)
 
-    assert auth.verify_pqc_signature(pk_hex, nonce, sig_hex) is True
+    assert auth.verify_pqc_signature(pk_hex, nonce, sig_b64) is True
     # signature over a different nonce must not verify
-    assert auth.verify_pqc_signature(pk_hex, "00" * 16, sig_hex) is False
+    assert auth.verify_pqc_signature(pk_hex, "00" * 16, sig_b64) is False
     # garbage signature must not raise, just fail
-    assert auth.verify_pqc_signature(pk_hex, nonce, "not-hex") is False
+    assert auth.verify_pqc_signature(pk_hex, nonce, "not-base64!") is False
 
 
 def test_login_challenge_binds_encryption_key():
@@ -162,14 +168,14 @@ def test_login_challenge_binds_encryption_key():
     with oqs.Signature(SIG_ALG) as client:
         pk = client.generate_keypair()
         sig = client.sign(message)
-    pk_hex, sig_hex = pk.hex(), sig.hex()
+    pk_hex, sig_b64 = pk.hex(), _sig_b64(sig)
 
     # Valid only with the exact bound key.
-    assert auth.verify_pqc_signature(pk_hex, nonce, sig_hex, enc_key) is True
+    assert auth.verify_pqc_signature(pk_hex, nonce, sig_b64, enc_key) is True
     # Substituting a different encryption key fails (the binding holds).
-    assert auth.verify_pqc_signature(pk_hex, nonce, sig_hex, "different_kem_key") is False
+    assert auth.verify_pqc_signature(pk_hex, nonce, sig_b64, "different_kem_key") is False
     # Dropping the key (downgrade attempt) also fails — the signature covers it.
-    assert auth.verify_pqc_signature(pk_hex, nonce, sig_hex, None) is False
+    assert auth.verify_pqc_signature(pk_hex, nonce, sig_b64, None) is False
 
 
 def test_login_challenge_is_domain_separated():
@@ -208,8 +214,8 @@ def test_content_signature_cannot_be_replayed_as_login():
 
     with oqs.Signature(SIG_ALG) as client:
         pk = client.generate_keypair()
-        sig_raw = client.sign(raw_login_body.encode("utf-8")).hex()
-        sig_content = client.sign(content_wrapped.encode("utf-8")).hex()
+        sig_raw = _sig_b64(client.sign(raw_login_body.encode("utf-8")))
+        sig_content = _sig_b64(client.sign(content_wrapped.encode("utf-8")))
     pk_hex = pk.hex()
 
     # Neither harvested signature is accepted as a login for this nonce+key.
@@ -220,7 +226,7 @@ def test_content_signature_cannot_be_replayed_as_login():
     # (what the real client builds) still verifies — we didn't break login.
     with oqs.Signature(SIG_ALG) as client:
         pk2 = client.generate_keypair()
-        good_sig = client.sign(auth._login_message(nonce, enc_key).encode("utf-8")).hex()
+        good_sig = _sig_b64(client.sign(auth._login_message(nonce, enc_key).encode("utf-8")))
     assert auth.verify_pqc_signature(pk2.hex(), nonce, good_sig, enc_key) is True
 
 
@@ -251,18 +257,18 @@ def test_verify_message_signature_pqc():
     with oqs.Signature(SIG_ALG) as signer:
         pk = signer.generate_keypair()
         sig = signer.sign(msg.encode("utf-8"))
-    pk_hex, sig_hex = pk.hex(), sig.hex()
+    pk_hex, sig_b64 = pk.hex(), _sig_b64(sig)
 
-    assert verify(pk_hex, msg, sig_hex) is True
+    assert verify(pk_hex, msg, sig_b64) is True
     # Wrong message (e.g. a different ciphertext hash) → reject.
     other = auth.multisig_approval_message(1, 1, hashlib_sha256_hex("tampered"))
-    assert verify(pk_hex, other, sig_hex) is False
+    assert verify(pk_hex, other, sig_b64) is False
     # Wrong signer key → reject.
     with oqs.Signature(SIG_ALG) as other_signer:
         other_pk = other_signer.generate_keypair().hex()
-    assert verify(other_pk, msg, sig_hex) is False
+    assert verify(other_pk, msg, sig_b64) is False
     # Malformed signature → false, not an exception.
-    assert verify(pk_hex, msg, "not-hex") is False
+    assert verify(pk_hex, msg, "not-base64!") is False
 
 
 def hashlib_sha256_hex(s: str) -> str:

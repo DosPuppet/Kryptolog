@@ -1,5 +1,7 @@
 """Format validation for PQC key material (KRY-011)."""
 
+import base64
+
 import pytest
 
 from security.crypto_validation import (
@@ -15,7 +17,9 @@ from security.crypto_validation import (
 
 VALID_KEM_KEY = "ab" * 1184
 VALID_DSA_KEY = "cd" * 1312
-VALID_DSA_SIG = "ef" * 2420
+# A signature is an opaque payload: base64 since the L-12 cutover, while the
+# public keys above stay hex because they are identifiers.
+VALID_DSA_SIG = base64.b64encode(bytes([0xEF]) * 2420).decode()
 
 
 class TestConstants:

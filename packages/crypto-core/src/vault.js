@@ -1,6 +1,6 @@
 // Vault encryption: the PBKDF2 KDF and the AES-GCM wrapping around it.
 
-import { toHex, fromHex, ENC, DEC } from './encoding.js';
+import { toB64, fromB64, ENC, DEC } from './encoding.js';
 
 // --- Vault Security ---
 
@@ -69,16 +69,16 @@ export const encryptVault = async (data, password) => {
     );
 
     return {
-        salt: toHex(salt),
-        iv: toHex(iv),
-        data: toHex(new Uint8Array(encryptedContent)) // Returns Hex for easy storage
+        salt: toB64(salt),
+        iv: toB64(iv),
+        data: toB64(new Uint8Array(encryptedContent))
     };
 };
 
 export const decryptVault = async (encryptedVault, password) => {
-    const salt = fromHex(encryptedVault.salt);
-    const iv = fromHex(encryptedVault.iv);
-    const data = fromHex(encryptedVault.data);
+    const salt = fromB64(encryptedVault.salt);
+    const iv = fromB64(encryptedVault.iv);
+    const data = fromB64(encryptedVault.data);
 
     const key = await deriveKey(password, salt);
 
@@ -109,15 +109,15 @@ export const encryptVaultWithKey = async (data, key, salt) => {
     );
 
     return {
-        salt: toHex(salt),
-        iv: toHex(iv),
-        data: toHex(new Uint8Array(encryptedContent))
+        salt: toB64(salt),
+        iv: toB64(iv),
+        data: toB64(new Uint8Array(encryptedContent))
     };
 };
 
 export const decryptVaultWithKey = async (encryptedVault, key) => {
-    const iv = fromHex(encryptedVault.iv);
-    const data = fromHex(encryptedVault.data);
+    const iv = fromB64(encryptedVault.iv);
+    const data = fromB64(encryptedVault.data);
 
     try {
         const decryptedContent = await crypto.subtle.decrypt(

@@ -10,7 +10,7 @@ from pydantic import (
     field_validator,
 )
 
-from security.crypto_validation import is_hex
+from security.crypto_validation import is_b64
 from utils.clock import to_wire_utc
 
 # Use for EVERY datetime the API returns: naive on the way in, because that is
@@ -55,31 +55,50 @@ MAX_GROUP_MEMBERS = 50
 # the first message of a conversation was capped at ~160 characters.
 #
 # So the costs are spelled out and the bounds derived from them. Every figure
-# is measured against crypto-core 1.7.0 and pinned on the producing side by
+# is measured against crypto-core 2.0.0 and pinned on the producing side by
 # packages/crypto-core/test/envelope-size.test.js, which fails if a primitive
 # change outgrows what this file budgets.
 
-# The address IS the ML-DSA-44 public key (self-certifying), in hex — 2 624
-# chars, not the 42 an address usually suggests.
+
+def b64_chars(byte_len: int) -> int:
+    """Characters base64 costs for `byte_len` bytes, padded (4 per 3 bytes)."""
+    return ((byte_len + 2) // 3) * 4
+
+
+# The address IS the ML-DSA-44 public key (self-certifying), in HEX — 2624
+# chars, not the 42 an address usually suggests. Identifiers stayed hex through
+# the L-12 cutover; only opaque payloads moved to base64.
 ADDRESS_CHARS = 2_624
-# A detached ML-DSA-44 signature in hex. Every message carries one (audit S1).
-SIGNATURE_CHARS = 4_840
-# One ML-KEM-768-wrapped session key, JSON-encoded.
-WRAPPED_KEY_CHARS = 2_400  # measured 2 330
+# A detached ML-DSA-44 signature, base64 (2420 bytes). Every message carries
+# one (audit S1).
+SIGNATURE_CHARS = b64_chars(2_420)  # 3 228
+# One ML-KEM-768-wrapped session key, JSON-encoded: {kem, iv, encKey}.
+WRAPPED_KEY_CHARS = 1_600  # measured 1 562
 # One entry in a key-wrap map: the member's address, their wrapped key, and the
 # JSON punctuation between them.
-KEY_WRAP_CHARS_PER_MEMBER = ADDRESS_CHARS + WRAPPED_KEY_CHARS  # 5 024
-# Plaintext a user may put in one message. AES-GCM ciphertext is base64 inside
-# a JSON envelope, which costs about two chars on the wire per plaintext char.
+KEY_WRAP_CHARS_PER_MEMBER = ADDRESS_CHARS + WRAPPED_KEY_CHARS  # 4 224
+# Plaintext a user may put in one message, counted the way the client counts it
+# — JavaScript string length, i.e. UTF-16 code units.
 MAX_MESSAGE_TEXT_CHARS = 10_000
-CIPHERTEXT_CHARS = 2 * MAX_MESSAGE_TEXT_CHARS
+# ...and the bytes those can encode to, which is NOT the same number. The old
+# budget was `2 * MAX_MESSAGE_TEXT_CHARS` — one byte per character — so a
+# message of accented or CJK text hit the cap well under the advertised 10 000
+# characters and came back as a bare 422. Same failure mode the rest of this
+# block exists to prevent, just narrower, and it predates the L-12 cutover.
+#
+# Worst case is 3 bytes per UTF-16 unit: a BMP character (CJK, Cyrillic, Greek)
+# is one unit and up to 3 bytes, while an astral character (emoji) is 4 bytes
+# but TWO units — cheaper per unit, not dearer.
+MAX_MESSAGE_TEXT_BYTES = 3 * MAX_MESSAGE_TEXT_CHARS
+# AES-GCM appends a 16-byte tag, and the result is base64 inside a JSON envelope.
+CIPHERTEXT_CHARS = b64_chars(MAX_MESSAGE_TEXT_BYTES + 16)  # 40 024
 # Slack for the ids, version tag and JSON structure around all of the above.
 ENVELOPE_SLACK_CHARS = 1_000
 
 # "encg1:" + JSON({ct, keys: {address: wrappedKey}}) — one wrap per member so
 # each can decrypt the name (audit M-3). Rebuilt on rename and on every
 # membership change, so create and update share the bound.
-MAX_GROUP_NAME_LEN = MAX_GROUP_MEMBERS * KEY_WRAP_CHARS_PER_MEMBER  # 251 200
+MAX_GROUP_NAME_LEN = MAX_GROUP_MEMBERS * KEY_WRAP_CHARS_PER_MEMBER  # 211 200
 
 # A DM that mints a session carries two wraps (recipient and sender), keyed by
 # short literal names rather than by address.
@@ -170,21 +189,29 @@ class SecretResponse(SecretSummaryResponse):
     encrypted_data: str  # Relax output limit for legacy secrets
 
 
+# The client chunks at 512 KB (frontend/src/utils/fileChunks.js CHUNK_SIZE);
+# budget double that, as the hex-era bound did, so a chunk-size change does not
+# immediately mean a schema change.
+MAX_CHUNK_BYTES = 1024 * 1024
+MAX_CHUNK_B64_CHARS = b64_chars(MAX_CHUNK_BYTES + 16)  # + AES-GCM tag
+
+
 class FileChunkUpload(BaseModel):
     secret_id: int
     chunk_index: int
     iv: str = Field(..., max_length=100)
-    encrypted_data: str = Field(..., max_length=2_100_000)  # ~1MB chunk hex-encoded
+    encrypted_data: str = Field(..., max_length=MAX_CHUNK_B64_CHARS)
 
-    # Both fields are hex on the wire, but nothing checked that (audit M-2), so
-    # arbitrary text reached storage and only failed much later — client-side, as
-    # an opaque decrypt error. The size accounting in upload_chunk also divides
-    # length by 2 to get bytes, which is only meaningful for real hex.
+    # Both fields are base64 on the wire (hex before the L-12 cutover), but
+    # nothing checked that (audit M-2), so arbitrary text reached storage and
+    # only failed much later — client-side, as an opaque decrypt error. The size
+    # accounting in upload_chunk also converts length to bytes, which is only
+    # meaningful for a real encoding.
     @field_validator("iv", "encrypted_data")
     @classmethod
-    def _must_be_hex(cls, v: str, info) -> str:
-        if not is_hex(v):
-            raise ValueError(f"{info.field_name} must be non-empty, even-length hex")
+    def _must_be_b64(cls, v: str, info) -> str:
+        if not is_b64(v):
+            raise ValueError(f"{info.field_name} must be non-empty, canonical base64")
         return v
 
     @field_validator("chunk_index")

@@ -242,6 +242,102 @@ describe('randomized envelope round-trips', () => {
     });
 });
 
+// The encoding split is the v2.0.0 cutover (audit L-12). Hex cost 2 chars per
+// byte; base64 costs 1.33 — 67 MB instead of 100 MB at the 50 MB file ceiling.
+//
+// These assertions exist because the round-trips above did NOT catch the swap:
+// encode and decode changed together, so every one of them still passed. A
+// round-trip proves this build agrees with itself, which is exactly what a
+// cross-build compatibility suite must not settle for. What follows pins the
+// encoding a peer will actually receive, and pins which values did NOT move.
+describe('encoding split: blobs base64, identifiers hex (v2.0.0, audit L-12)', () => {
+    // Canonical, padded, standard-alphabet base64 — and NOT hex. The hex guard
+    // matters: a 32-char hex IV is also valid base64 by alphabet alone, so
+    // asserting "is base64" without it would pass on unconverted data.
+    const B64 = /^[A-Za-z0-9+/]+={0,2}$/;
+    const isB64 = (s) => {
+        expect(typeof s).toBe('string');
+        expect(s).toMatch(B64);
+        expect(s.length % 4).toBe(0);
+        expect(() => core.fromB64(s)).not.toThrow();
+        return s;
+    };
+    const notHex = (s) => expect(s).not.toMatch(/^[0-9a-f]+$/);
+
+    it('the KEM message envelope is base64 on every field', async () => {
+        const { publicKey, privateKey } = await core.generateMlKemKeyPair();
+        const env = await core.encryptMessage('secret payload', publicKey);
+        for (const f of ['kem', 'iv', 'content']) notHex(isB64(env[f]));
+        // 1088-byte ML-KEM ciphertext -> 1452 base64 chars, was 2176 hex.
+        expect(env.kem.length).toBe(1452);
+        expect(await core.decryptMessage(env, privateKey)).toBe('secret payload');
+    });
+
+    it('the wrapped session key is base64, and the key handles stay hex', async () => {
+        const { publicKey, privateKey } = await core.generateMlKemKeyPair();
+        const sessionKey = await core.generateSessionKey();
+        const wrapped = await core.wrapSessionKey(sessionKey, publicKey);
+        for (const f of ['kem', 'iv', 'encKey']) notHex(isB64(wrapped[f]));
+        // The session key itself is a handle, not a wire value: still 32 bytes
+        // of hex, and unwrap must hand back exactly what wrap was given.
+        expect(sessionKey).toMatch(/^[0-9a-f]{64}$/);
+        expect(await core.unwrapSessionKey(wrapped, privateKey)).toBe(sessionKey);
+    });
+
+    it('chunk and symmetric envelopes are base64', async () => {
+        const key = await core.generateSymmetricKey();
+        const chunk = await core.encryptChunk(new Uint8Array([5, 6, 7, 8, 9]), key, core.chunkAad(42, 3));
+        for (const f of ['iv', 'ciphertext']) isB64(chunk[f]);
+        // 12-byte IV -> 16 base64 chars, was 24 hex.
+        expect(chunk.iv.length).toBe(16);
+        const env = await core.encryptSymmetric('plaintext', key);
+        for (const f of ['iv', 'ciphertext']) isB64(env[f]);
+    });
+
+    it('signatures are base64 while the keys they verify against stay hex', async () => {
+        const { publicKey, privateKey } = await core.generateMlDsaKeyPair();
+        const sig = await core.signMessage('msg', privateKey);
+        notHex(isB64(sig));
+        // 2420-byte ML-DSA-44 signature -> 3228 base64 chars, was 4840 hex.
+        expect(sig.length).toBe(3228);
+        // An address IS the ML-DSA public key: a primary key, a URL segment and
+        // part of the signed login body. It must stay lowercase hex.
+        expect(publicKey).toMatch(/^[0-9a-f]{2624}$/);
+        expect(await core.verifySignature('msg', sig, publicKey)).toBe(true);
+    });
+
+    it('the vault blob is base64 on every field', async () => {
+        const vault = await core.encryptVault({ a: 1 }, 'hunter2');
+        for (const f of ['salt', 'iv', 'data']) isB64(vault[f]);
+        expect(await core.decryptVault(vault, 'hunter2')).toEqual({ a: 1 });
+    });
+
+    it('digests and fingerprints did NOT move (they must match Python)', async () => {
+        expect(await core.sha256Hex('kryptolog')).toMatch(/^[0-9a-f]{64}$/);
+        const { publicKey: mldsa } = await core.generateMlDsaKeyPair();
+        const { publicKey: mlkem } = await core.generateMlKemKeyPair();
+        // Safety numbers are read aloud by humans; they stay decimal groups.
+        expect(await core.keyFingerprint(mldsa, mlkem)).toMatch(/^(\d{5} ){11}\d{5}$/);
+    });
+
+    it('base64 round-trips every length, and rejects malformed input like fromHex does', () => {
+        for (let n = 1; n <= 12; n++) {
+            const bytes = new Uint8Array(n).map((_, i) => (i * 37) & 0xff);
+            expect(Array.from(core.fromB64(core.toB64(bytes)))).toEqual(Array.from(bytes));
+        }
+        expect(core.toB64(new Uint8Array([0, 1, 254, 255]))).toBe('AAH+/w==');
+        // Malformed, and — the reason canonical form is enforced — a spelling
+        // that decodes to the same bytes under a lenient decoder. Two valid
+        // spellings of one ciphertext would mean two valid signatures for it.
+        for (const bad of ['AAA', 'A===', '****', 'AA=A', 'AAAA ', '', null, undefined, 1234]) {
+            expect(() => core.fromB64(bad)).toThrow(/base64/i);
+        }
+        expect(() => core.fromB64('AB==')).toThrow(/non-canonical/i);
+        expect(Array.from(core.fromB64('AA=='))).toEqual([0]);
+    });
+});
+
+
 describe('ML-DSA server-interop guard (FIPS 204 byte encoding)', () => {
     // The backend verifies client login/multisig signatures with liboqs ML-DSA-44.
     // noble and liboqs both emit FIPS 204 encodings; this pins noble's so a silent
@@ -338,6 +434,6 @@ describe('encryption-key attestation (audit M-1, v1.3.0)', () => {
 
 describe('single-source / version guard', () => {
     it('exports a version both app builds can assert against', () => {
-        expect(core.CRYPTO_CORE_VERSION).toBe('1.7.0');
+        expect(core.CRYPTO_CORE_VERSION).toBe('2.0.0');
     });
 });

@@ -5,6 +5,7 @@ still unlocked the file-chunk endpoints, because only the *listing* endpoints
 filtered on expiry.
 """
 
+import base64
 from datetime import UTC, datetime, timedelta
 
 from conftest import (
@@ -40,8 +41,8 @@ def _make_shared_secret_with_chunk(client, owner_token, grantee_address, expires
         json={
             "secret_id": secret["id"],
             "chunk_index": 0,
-            "iv": "00" * 12,
-            "encrypted_data": "abcdef",
+            "iv": base64.b64encode(bytes(12)).decode(),
+            "encrypted_data": base64.b64encode(b"chunk-bytes").decode(),
         },
         headers=auth_header(owner_token),
     )

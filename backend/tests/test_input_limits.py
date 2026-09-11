@@ -27,19 +27,30 @@ class TestBoundsAreSane:
         value at all, including the ones that shipped broken. The behaviour
         those bounds gate is covered by test_envelope_sizes.py.
         """
+        # Measured against crypto-core 2.0.0: a hex address (2 624) plus a
+        # base64 wrapped key (1 562) and the JSON between them.
+        per_member = 4_192
+        signature = 3_228  # base64 ML-DSA-44, was 4 840 in hex
+
         # A group name was once 500 000 (half a megabyte for what reads as a
         # sidebar label), then 2 000 — which rejected every group ever created,
-        # because one member's wrap alone costs ~4 954 chars.
-        assert schemas.KEY_WRAP_CHARS_PER_MEMBER >= 4_954
-        assert schemas.MAX_GROUP_NAME_LEN >= schemas.MAX_GROUP_MEMBERS * 4_954
+        # because one member's wrap alone costs thousands of chars.
+        assert schemas.KEY_WRAP_CHARS_PER_MEMBER >= per_member
+        assert schemas.MAX_GROUP_NAME_LEN >= schemas.MAX_GROUP_MEMBERS * per_member
 
         # A signature rides on every message and a session-minting one carries
         # two wraps, before a single character of text.
-        assert schemas.SIGNATURE_CHARS >= 4_840
-        assert schemas.MAX_DM_CONTENT_LEN >= 4_840 + 4_700 + 2 * 1_000
+        assert schemas.SIGNATURE_CHARS >= signature
+        assert schemas.MAX_DM_CONTENT_LEN >= signature + 3_200 + 2 * 1_000
+
+        # A full-length message must fit even when every character costs three
+        # bytes (CJK), which the old one-byte-per-char budget did not allow.
+        assert schemas.MAX_DM_CONTENT_LEN >= signature + 3_200 + 40_024
 
         # A group rekey wraps for every member at once.
-        assert schemas.MAX_GROUP_MESSAGE_CONTENT_LEN >= 4_840 + schemas.MAX_GROUP_MEMBERS * 4_954
+        assert schemas.MAX_GROUP_MESSAGE_CONTENT_LEN >= (
+            signature + schemas.MAX_GROUP_MEMBERS * per_member
+        )
 
     def test_envelope_bounds_are_still_bounds(self):
         """Generous enough for the protocol, not an open door."""

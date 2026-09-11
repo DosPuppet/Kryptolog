@@ -42,3 +42,40 @@ those no longer unwrap.
 Removed because it is the downgrade path the clean-cutover stance exists to
 avoid, and this file states that rule a few functions above where it was being
 broken.
+
+## 2.0.0
+
+WIRE-FORMAT AND STORAGE BREAK, and the widest one so far: every opaque payload
+moves from hex to base64 (audit L-12). Hex cost 2 characters per byte where
+base64 costs 1.33 — at the schema's 50 MB file ceiling that is 67 MB stored and
+transferred instead of 100 MB, plus roughly 25% off every message envelope.
+
+Base64 now, hex before:
+
+- AES-GCM envelopes — `iv` and the ciphertext field (`content` / `ciphertext`).
+- The wrapped session key `{kem, iv, encKey}`, and the KEM envelope `{kem, iv, content}`.
+- File chunks: `iv` and `ciphertext`.
+- ML-DSA detached signatures, including the encryption-key attestation.
+- The vault blob `{salt, iv, data}` — so existing local vaults and any exported
+  `.kvault` backup no longer open. This is the break a user feels: it is key
+  custody, not just wire format.
+
+Deliberately NOT moved, because they are identifiers rather than payloads:
+
+- Addresses (an address IS an ML-DSA public key — a primary key, a URL path
+  segment, and part of every signed login body) and ML-KEM public keys. Base64
+  is case-sensitive; the project normalizes addresses to lowercase everywhere,
+  and that convention would not survive the move.
+- SHA-256 digests, which must keep matching Python's `hexdigest()`.
+- Safety numbers, which humans read aloud.
+- Key handles passed in and out of this package (`generateSessionKey`,
+  `unwrapSessionKey`): in-memory values and the extension's IPC contract, never
+  stored or transferred.
+
+`toHex`/`fromHex` therefore stay, and are still the right tool for the above.
+
+Note on counting cutovers: the HKDF-SHA-256 derivation of the AES key from the
+ML-KEM shared secret (audit S5, `KEM_KDF_INFO` in pqc.js) was a wire break too,
+and it landed before this file existed, so it carries no version of its own. Any
+statement of how many incompatible formats this package has been through should
+count it — the honest count to 2.0.0 is six, not five.

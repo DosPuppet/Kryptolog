@@ -1,5 +1,5 @@
 import {
-    fromHex, deriveVaultKeyBits, importVaultKey, decryptVaultWithKey, normalizeAccount,
+    fromB64, deriveVaultKeyBits, importVaultKey, decryptVaultWithKey, normalizeAccount,
 } from '../../utils/crypto.js';
 import { state } from '../state.js';
 import { saveVault } from '../utils.js';
@@ -48,7 +48,7 @@ export const unlock = async (password) => {
         // save reuses it instead of re-running the deliberately-slow 600k-iter
         // PBKDF2. The raw bytes are kept alongside the CryptoKey because only
         // they can survive a service-worker restart (audit M-4).
-        const salt = fromHex(vaultData.salt);
+        const salt = fromB64(vaultData.salt);
         const keyBytes = await deriveVaultKeyBits(password, salt);
         return await openVault(vaultData, keyBytes, salt);
     } catch (e) {

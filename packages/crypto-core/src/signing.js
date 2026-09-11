@@ -38,7 +38,9 @@ export const MESSAGE_SIGNING_PREFIX = domainSeparate(SIGNING_CONTEXT.MESSAGE, ''
 // is load-bearing: interpolating the object directly would coerce it to the
 // constant "[object Object]", so the signature would NOT commit to the real
 // ciphertext and any same-session ciphertext could be swapped under a valid
-// signature. iv/content are hex, so a '.' separator is unambiguous.
+// signature. iv/content are base64 since L-12, and '.' is not in that alphabet
+// (A-Za-z0-9+/=), so the separator stays unambiguous — and fromB64 rejects
+// non-canonical spellings, so one ciphertext has exactly one signed form.
 const canonicalCiphertext = (ct) =>
     (ct && typeof ct === 'object') ? `${ct.iv}.${ct.content}` : ct;
 

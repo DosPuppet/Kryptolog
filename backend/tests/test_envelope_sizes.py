@@ -28,13 +28,18 @@ from conftest import (
 
 import schemas
 
-# Measured against crypto-core 1.7.0 with real key material. Deliberately
+# Measured against crypto-core 2.0.0 with real key material. Deliberately
 # literals rather than the schemas constants: asserting a bound against the
 # constant it is derived from would pass for any value, including the ones that
 # shipped broken.
-CHARS_PER_MEMBER = 4_954  # a 2 624-char ML-DSA address + its wrapped key
-SIGNED_ENVELOPE_CHARS = 5_100  # ML-DSA-44 signature (4 840) + ids + JSON
-DM_SESSION_WRAPS_CHARS = 4_700  # the recipient's and the sender's wrapped key
+CHARS_PER_MEMBER = 4_192  # a 2 624-char hex ML-DSA address + its wrapped key
+SIGNED_ENVELOPE_CHARS = 3_500  # ML-DSA-44 signature (3 228) + ids + JSON
+DM_SESSION_WRAPS_CHARS = 3_200  # the recipient's and the sender's wrapped key
+# What the ciphertext of a full-length message costs on the wire. NOT
+# `2 * MAX_MESSAGE_TEXT_CHARS`: the cap counts UTF-16 units and a unit is worth
+# up to 3 bytes, which is the assumption that used to reject long non-ASCII
+# messages. See MAX_MESSAGE_TEXT_BYTES in schemas.py.
+FULL_CIPHERTEXT_CHARS = 40_024
 
 
 def group_name_blob(member_count: int) -> str:
@@ -110,9 +115,7 @@ class TestDirectMessageSize:
         """
         token1, _ = user1
         _, u2 = user2
-        content = "x" * (
-            SIGNED_ENVELOPE_CHARS + DM_SESSION_WRAPS_CHARS + 2 * schemas.MAX_MESSAGE_TEXT_CHARS
-        )
+        content = "x" * (SIGNED_ENVELOPE_CHARS + DM_SESSION_WRAPS_CHARS + FULL_CIPHERTEXT_CHARS)
 
         r = client.post(
             "/messages",
@@ -151,7 +154,7 @@ class TestGroupMessageSize:
         content = "x" * (
             SIGNED_ENVELOPE_CHARS
             + schemas.MAX_GROUP_MEMBERS * CHARS_PER_MEMBER
-            + 2 * schemas.MAX_MESSAGE_TEXT_CHARS
+            + FULL_CIPHERTEXT_CHARS
         )
         r = client.post(
             f"/groups/{created.json()['id']}/messages",

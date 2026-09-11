@@ -10,18 +10,28 @@ keys reach storage where they surface later as confusing failures.
 Sizes are FIPS 203 / 204 constants for the parameter sets this project uses:
     ML-KEM-768  public key  1184 bytes -> 2368 hex chars
     ML-DSA-44   public key  1312 bytes -> 2624 hex chars
-    ML-DSA-44   signature   2420 bytes -> 4840 hex chars
+    ML-DSA-44   signature   2420 bytes -> 3228 base64 chars
+
+Two encodings, on purpose (audit L-12). Public keys are IDENTIFIERS — an
+address IS an ML-DSA public key, it is a primary key and a URL path segment,
+and the project normalizes addresses to lowercase everywhere, which would not
+survive a case-sensitive encoding. Signatures are opaque payloads and moved to
+base64 with the rest of them.
 """
+
+import base64
+import re
 
 # Byte lengths (FIPS 203/204).
 ML_KEM_768_PUBLIC_KEY_BYTES = 1184
 ML_DSA_44_PUBLIC_KEY_BYTES = 1312
 ML_DSA_44_SIGNATURE_BYTES = 2420
 
-# Hex-encoded lengths — the wire/storage format used throughout.
+# Hex lengths for the identifiers.
 ML_KEM_768_PUBLIC_KEY_HEX_LEN = ML_KEM_768_PUBLIC_KEY_BYTES * 2
 ML_DSA_44_PUBLIC_KEY_HEX_LEN = ML_DSA_44_PUBLIC_KEY_BYTES * 2
-ML_DSA_44_SIGNATURE_HEX_LEN = ML_DSA_44_SIGNATURE_BYTES * 2
+# Base64 length for the payload: 4 chars per 3 bytes, padded.
+ML_DSA_44_SIGNATURE_B64_LEN = ((ML_DSA_44_SIGNATURE_BYTES + 2) // 3) * 4
 
 
 def is_hex(value: str) -> bool:
@@ -33,6 +43,40 @@ def is_hex(value: str) -> bool:
         return True
     except ValueError:
         return False
+
+
+_B64_RE = re.compile(r"^[A-Za-z0-9+/]+={0,2}$")
+
+
+def is_b64(value: str | None) -> bool:
+    """True if `value` is non-empty, padded, CANONICAL standard base64.
+
+    Canonical matters beyond tidiness, and it is why this is not just a
+    `b64decode(validate=True)` call: that accepts a value whose unused trailing
+    bits are set, so the same bytes have more than one valid spelling. A message
+    signature commits to its ciphertext in STRING form, so a second spelling
+    would be a second validly-signed form of one ciphertext. Mirrors fromB64()
+    in packages/crypto-core/src/encoding.js — the two must agree.
+    """
+    if not value or not isinstance(value, str):
+        return False
+    if len(value) % 4 != 0 or not _B64_RE.match(value):
+        return False
+    try:
+        decoded = base64.b64decode(value, validate=True)
+    except Exception:
+        return False
+    # Re-encoding is the cheapest exact canonical-form check in Python.
+    return base64.b64encode(decoded).decode() == value
+
+
+def is_valid_b64_of_length(value: str | None, b64_len: int) -> bool:
+    """True if `value` is canonical base64 of exactly `b64_len` characters."""
+    if not value or not isinstance(value, str):
+        return False
+    if len(value) != b64_len:
+        return False
+    return is_b64(value)
 
 
 def is_valid_hex_of_length(value: str | None, hex_len: int) -> bool:
@@ -63,8 +107,8 @@ def is_valid_ml_dsa_public_key(value: str | None) -> bool:
 
 
 def is_valid_ml_dsa_signature(value: str | None) -> bool:
-    """True if `value` is a well-formed hex ML-DSA-44 signature."""
-    return is_valid_hex_of_length(value, ML_DSA_44_SIGNATURE_HEX_LEN)
+    """True if `value` is a well-formed base64 ML-DSA-44 signature."""
+    return is_valid_b64_of_length(value, ML_DSA_44_SIGNATURE_B64_LEN)
 
 
 # --- Capability check -------------------------------------------------------

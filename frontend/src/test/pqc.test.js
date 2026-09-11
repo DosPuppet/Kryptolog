@@ -35,6 +35,11 @@ import {
 } from '../utils/crypto';
 
 const fromHexLocal = (h) => new Uint8Array(Buffer.from(h, 'hex'));
+// Payloads are base64 since the L-12 cutover; KEYS are still hex, because an
+// address is an identifier. The committed interop fixture stays hex — it is a
+// test vector, not a wire value — so a signature from it is re-encoded here.
+const fromB64Local = (b) => new Uint8Array(Buffer.from(b, 'base64'));
+const hexToB64 = (h) => Buffer.from(h, 'hex').toString('base64');
 
 describe('FIPS size conformance', () => {
   it('ML-KEM-768 keys are 1184 / 2400 bytes', async () => {
@@ -55,7 +60,7 @@ describe('ML-DSA-44 sign/verify', () => {
     const { publicKey, privateKey } = await generateMlDsaKeyPair();
     const msg = 'Sign in to Kryptolog with nonce: 0123456789abcdef';
     const sig = await signMessagePQC(msg, privateKey);
-    expect(fromHexLocal(sig).length).toBe(2420);
+    expect(fromB64Local(sig).length).toBe(2420);
     expect(await verifySignaturePQC(msg, sig, publicKey)).toBe(true);
     expect(await verifySignaturePQC(msg + ' ', sig, publicKey)).toBe(false);
   });
@@ -63,7 +68,7 @@ describe('ML-DSA-44 sign/verify', () => {
   it('verifies a liboqs-produced signature (server -> client interop)', async () => {
     const ok = await verifySignaturePQC(
       Buffer.from(vec.message, 'hex').toString('utf8'),
-      vec.liboqs_dsa_signature,
+      hexToB64(vec.liboqs_dsa_signature),
       vec.liboqs_dsa_publicKey
     );
     expect(ok).toBe(true);
@@ -79,7 +84,7 @@ describe('ML-KEM-768 hybrid envelope round-trips', () => {
     const { publicKey, privateKey } = await generateMlKemKeyPair();
     const plaintext = 'hello post-quantum world 🛡️';
     const env = await encryptMessagePQC(plaintext, publicKey);
-    expect(fromHexLocal(env.kem).length).toBe(1088); // ML-KEM-768 ciphertext
+    expect(fromB64Local(env.kem).length).toBe(1088); // ML-KEM-768 ciphertext
     expect(await decryptMessagePQC(env, privateKey)).toBe(plaintext);
   });
 

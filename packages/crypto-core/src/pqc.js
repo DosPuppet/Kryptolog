@@ -6,7 +6,7 @@
 import { ml_kem768 } from '@noble/post-quantum/ml-kem.js';
 import { ml_dsa44 } from '@noble/post-quantum/ml-dsa.js';
 
-import { toHex, fromHex, ENC, DEC } from './encoding.js';
+import { toHex, fromHex, toB64, fromB64, ENC, DEC } from './encoding.js';
 
 // Derive the AES-GCM key from an ML-KEM shared secret via HKDF-SHA-256 with a
 // fixed context label (audit S5), instead of importing the raw shared secret as
@@ -61,20 +61,22 @@ export const normalizeAccount = (account) => {
     };
 };
 
-// ML-DSA-44 detached signature over the UTF-8 message bytes.
+// ML-DSA-44 detached signature over the UTF-8 message bytes, base64-encoded
+// (audit L-12). The KEYS stay hex either side of it: a public key is an
+// identifier (an address), a private key is a vault handle.
 export const signMessage = async (message, privateKeyHex) => {
     const secretKey = fromHex(privateKeyHex);
     const msgBytes = ENC.encode(message);
     // noble API: sign(message, secretKey) -> detached signature
     const signature = ml_dsa44.sign(msgBytes, secretKey);
-    return toHex(signature);
+    return toB64(signature);
 };
 
 // Exact-match verification (audit H4): a signature is valid iff ML-DSA verifies
 // the detached signature against exactly the given message + public key.
-export const verifySignature = async (message, signatureHex, publicKeyHex) => {
+export const verifySignature = async (message, signatureB64, publicKeyHex) => {
     try {
-        const signature = fromHex(signatureHex);
+        const signature = fromB64(signatureB64);
         const publicKey = fromHex(publicKeyHex);
         const msgBytes = ENC.encode(message);
         // noble API: verify(signature, message, publicKey) -> boolean
@@ -103,24 +105,24 @@ export const encryptMessage = async (message, publicKeyHex) => {
     );
 
     return {
-        kem: toHex(ct),
-        iv: toHex(iv),
-        content: toHex(new Uint8Array(encryptedContent))
+        kem: toB64(ct),
+        iv: toB64(iv),
+        content: toB64(new Uint8Array(encryptedContent))
     };
 };
 
 export const decryptMessage = async (encryptedData, privateKeyHex) => {
-    // encryptedData: { kem: hexString, iv, content }
+    // encryptedData: { kem, iv, content } — all base64
     const privateKey = fromHex(privateKeyHex);
 
     // Parse KEM ciphertext
-    const ct = fromHex(encryptedData.kem);
+    const ct = fromB64(encryptedData.kem);
 
     // ML-KEM-768 decapsulate -> shared secret (ss, 32B)
     const ss = ml_kem768.decapsulate(ct, privateKey);
 
-    const iv = fromHex(encryptedData.iv);
-    const content = fromHex(encryptedData.content);
+    const iv = fromB64(encryptedData.iv);
+    const content = fromB64(encryptedData.content);
 
     const key = await kemAesKey(new Uint8Array(ss), ["decrypt"]);
 

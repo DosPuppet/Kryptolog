@@ -22,11 +22,15 @@ describe('setup and unlock', () => {
         const res = await h.send({ type: 'GET_STATUS' }, internalSender());
         expect(res).toMatchObject({ hasPassword: true, isLocked: false });
 
+        // Base64 since the L-12 cutover (crypto-core 2.0.0). The `=`-padded
+        // shape is the point: this assertion is what caught the encoding change
+        // in the extension, so keep it pinning an encoding rather than "a
+        // non-empty string".
         const blob = Object.fromEntries(h.localStore).vaultData;
         expect(blob).toMatchObject({
-            salt: expect.stringMatching(/^[0-9a-f]+$/),
-            iv: expect.stringMatching(/^[0-9a-f]+$/),
-            data: expect.stringMatching(/^[0-9a-f]+$/),
+            salt: expect.stringMatching(/^[A-Za-z0-9+/]+={0,2}$/),
+            iv: expect.stringMatching(/^[A-Za-z0-9+/]+={0,2}$/),
+            data: expect.stringMatching(/^[A-Za-z0-9+/]+={0,2}$/),
         });
     });
 

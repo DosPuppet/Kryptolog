@@ -396,16 +396,21 @@ def upload_chunk(
     if not authorization.can_write_secret(db, secret, current_user.address):
         raise HTTPException(status_code=403, detail="Only the owner can upload chunks")
 
-    # Enforce total file size limit using SQL-level aggregation (hex-encoded: 2 chars = 1 byte)
-    total_stored_size_hex = (
+    # Enforce total file size limit using SQL-level aggregation. Base64 since
+    # the L-12 cutover: 4 chars per 3 bytes, so chars * 3/4 (was chars / 2).
+    # Counted in SQL rather than by loading the rows — see the note on the
+    # listing query below.
+    total_stored_size_b64 = (
         db.query(func.sum(func.length(models.FileChunk.encrypted_data)))
         .filter(models.FileChunk.secret_id == chunk.secret_id)
         .scalar()
         or 0
     )
 
-    current_total_bytes = total_stored_size_hex / 2
-    new_chunk_size = len(chunk.encrypted_data) / 2
+    # Slightly over-counts: padding makes the true byte count up to 2 lower per
+    # chunk. Over-counting is the safe direction for a ceiling.
+    current_total_bytes = total_stored_size_b64 * 3 / 4
+    new_chunk_size = len(chunk.encrypted_data) * 3 / 4
 
     if (current_total_bytes + new_chunk_size) > config.MAX_TOTAL_FILE_SIZE:
         raise HTTPException(
@@ -437,8 +442,9 @@ def upload_chunk(
 
 # NOTE: `GET /secrets/{id}/chunks` (list every chunk WITH its payload) was removed
 # — audit H-2. Despite its "metadata only if needed" docstring it loaded every
-# row's full encrypted_data: at MAX_TOTAL_FILE_SIZE and hex encoding, one
-# unauthenticated-by-rate-limit request materialized ~100 MB of strings, again
+# row's full encrypted_data: at MAX_TOTAL_FILE_SIZE, one
+# unauthenticated-by-rate-limit request materialized ~100 MB of strings (~67 MB
+# now that payloads are base64 — cheaper, still ruinous), again
 # through Pydantic, against a 500 MB worker restart threshold. No client ever
 # called it — fileChunks.js fetches chunks one at a time by index, below.
 

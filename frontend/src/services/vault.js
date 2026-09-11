@@ -1,4 +1,4 @@
-import { encryptVault, decryptVaultWithKey, encryptVaultWithKey, deriveKey, fromHex, generateAccount, signMessagePQC, decryptMessagePQC, unwrapSessionKey, generateSessionKey, wrapSessionKey, normalizeAccount } from '../utils/crypto';
+import { encryptVault, decryptVaultWithKey, encryptVaultWithKey, deriveKey, fromB64, generateAccount, signMessagePQC, decryptMessagePQC, unwrapSessionKey, generateSessionKey, wrapSessionKey, normalizeAccount } from '../utils/crypto';
 import { backupMethods } from './vaultBackup';
 import { biometricMethods } from './vaultBiometrics';
 
@@ -105,7 +105,7 @@ class VaultService {
 
         // Fall back to password-based derivation
         if (!password) throw new Error("Password required");
-        const salt = fromHex(encrypted.salt);
+        const salt = fromB64(encrypted.salt);
         const key = await deriveKey(password, salt);
         const vault = await decryptVaultWithKey(encrypted, key);
         this._cacheKey(key, salt);
@@ -135,7 +135,7 @@ class VaultService {
             if (!password) throw new Error("Password required to save");
             encrypted = await encryptVault(fullVault, password);
             // Cache the new key from the freshly encrypted vault
-            const salt = fromHex(encrypted.salt);
+            const salt = fromB64(encrypted.salt);
             const key = await deriveKey(password, salt);
             this._cacheKey(key, salt);
         }
@@ -180,7 +180,7 @@ class VaultService {
             const encrypted = JSON.parse(encryptedJson);
 
             // 1. Derive key explicitly so we can cache it
-            const salt = fromHex(encrypted.salt);
+            const salt = fromB64(encrypted.salt);
             const key = await deriveKey(password, salt);
 
             // 2. Decrypt with derived key (normalize legacy field names on load)

@@ -1,3 +1,4 @@
+import base64
 import logging
 import os
 import secrets
@@ -122,15 +123,30 @@ def multisig_approval_message(workflow_id, secret_id, ciphertext_sha256_hex: str
     return _domain_separate(_CTX_MULTISIG, body)
 
 
+def _sig_bytes(signature: str) -> bytes:
+    """Decode a base64 ML-DSA signature, refusing a non-canonical spelling.
+
+    Strict for the same reason crypto-core's fromB64 is: a signature commits to
+    a ciphertext in its string form, so accepting two spellings of one value
+    would accept two valid signatures for it. `validate=True` alone still lets
+    unused trailing bits through, hence the re-encode.
+    """
+    decoded = base64.b64decode(signature, validate=True)
+    if base64.b64encode(decoded).decode() != signature:
+        raise ValueError("non-canonical base64 signature")
+    return decoded
+
+
 def verify_message_signature(address: str, message: str, signature: str) -> bool:
-    """Verify an exact-message ML-DSA-44 signature: `address` is the signer's
-    public-key hex, `signature` is hex. Used for non-login signatures the server
-    must check (e.g. multisig approvals). `message` is the exact UTF-8 string
-    that was signed."""
+    """Verify an exact-message ML-DSA-44 signature. `address` is the signer's
+    public key in HEX (an address is an identifier); `signature` is BASE64 (an
+    opaque payload — audit L-12). Used for non-login signatures the server must
+    check (e.g. multisig approvals). `message` is the exact UTF-8 string signed.
+    """
     try:
         with oqs.Signature(SIG_ALG) as verifier:
             return verifier.verify(
-                message.encode("utf-8"), bytes.fromhex(signature), bytes.fromhex(address)
+                message.encode("utf-8"), _sig_bytes(signature), bytes.fromhex(address)
             )
     except Exception as e:
         # Verification failures are expected/attacker-triggerable — keep at debug.
@@ -142,10 +158,11 @@ def verify_pqc_signature(
     public_key: str, nonce: str, signature: str, encryption_public_key: str | None = None
 ) -> bool:
     """Verify a client login challenge: ML-DSA-44 over the (key-bound) login message.
-    `public_key` and `signature` are hex; the client signs with @noble/post-quantum."""
+    `public_key` is hex, `signature` is base64; the client signs with
+    @noble/post-quantum."""
     try:
         message = _login_message(nonce, encryption_public_key).encode("utf-8")
-        sig_bytes = bytes.fromhex(signature)
+        sig_bytes = _sig_bytes(signature)
         pk_bytes = bytes.fromhex(public_key)
         with oqs.Signature(SIG_ALG) as verifier:
             return verifier.verify(message, sig_bytes, pk_bytes)
