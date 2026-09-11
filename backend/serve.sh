@@ -32,10 +32,16 @@ fi
 # migrate with one interpreter and serve with another, or simply not find
 # alembic. start_all.sh activates a venv before it runs, which is why it gets
 # away with plain `python3`.
+# Both locations are in play: the README documents a repo-root ../.venv, and
+# backend/.venv also exists in practice. Checking both beats picking one and
+# being wrong on half the machines.
 PY=python3
-if [ -x .venv/bin/python3 ]; then
-    PY=.venv/bin/python3
-fi
+for candidate in .venv/bin/python3 ../.venv/bin/python3; do
+    if [ -x "$candidate" ]; then
+        PY="$candidate"
+        break
+    fi
+done
 
 # Migrations are a deliberate deployment step, not an import-time side effect
 # (audit M-3) — and a hard gate: serving new code against an old schema is the

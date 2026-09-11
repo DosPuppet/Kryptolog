@@ -61,7 +61,13 @@ real path and then needs `@noble/post-quantum` next to it, so run `npm ci` insid
   and `packages/crypto-core/src/{encoding,signing}.js` for the standard.
 - **Wire-format changes are a clean cutover.** No compatibility fallbacks — a fallback is
   a downgrade path. Bump `CRYPTO_CORE_VERSION` and regenerate the golden vectors
-  *deliberately*; never let a vector auto-update, that defeats their purpose.
+  *deliberately*; never let a vector auto-update, that defeats their purpose. A
+  round-trip is not a golden vector: encode and decode change together, so a
+  round-trip passes through any encoding change. Pin the bytes a *peer* receives.
+- **Opaque payloads are base64; identifiers are hex.** Ciphertext, IVs, wrapped
+  keys, signatures and the vault blob are base64 (`toB64`/`fromB64`). Addresses,
+  ML-KEM public keys, SHA-256 digests and safety numbers stay hex
+  (`toHex`/`fromHex`) — see the L-12 note below for why the line is drawn there.
 - **Security rules belong in `backend/security/`,** not inline in routers. Inline
   re-implementation is what produced KRY-001.
 - **Addresses are lowercase everywhere** in the database and in signed bodies. Normalize
@@ -73,7 +79,8 @@ real path and then needs `@noble/post-quantum` next to it, so run `npm ci` insid
 Two things are deliberately **not** in git, so a fresh clone will be missing them:
 
 - `AUDIT.md` — the full security audit (2026-09-01, French).
-- `roadmap/` — remediation plans with file/line detail.
+- `audit/AUDIT-2026-09-03.md` — the follow-up audit (French). `roadmap/` is gone;
+  every item in it landed.
 
 Both enumerate not-yet-fixed findings, which is why they stay local. Copy them across
 machines out of band. The status table below is the tracked substitute.
@@ -211,6 +218,9 @@ for the column object's truthiness and builds a different query.
   the legacy `ct` field name. Wrapped keys stored by a client older than the
   `encKey` rename no longer unwrap. **This is the fourth cumulative cutover**
   (1.3.0 → 1.7.0); see the list below before deploying against real data.
+  *(Corrected 2026-09-11: "fourth" undercounts. The audit S5 HKDF change was a
+  wire break too and predates `CHANGELOG.md`, so it has no version — the honest
+  count through 2.0.0 is six.)*
   `packages/crypto-core/package.json` is now synced to the constant.
 - **Two dead endpoints removed.** `POST /groups/{id}/mark-read` marked nothing,
   and the reject-workflow `reason` was validated and discarded. Both still
@@ -309,35 +319,127 @@ columns and the comparisons agree; nothing checked what the convention looked
 like once it left the process. If a future field is aware, `to_wire_utc` passes
 its real offset through rather than stamping UTC over it.
 
-### Still open from before, unchanged
+## Pre-deployment pass — 2026-09-11
 
-Everything under "Still open from the remediation" below still applies. The
-end-to-end manual recipe has **not** been run, and it now matters more: `login`,
-`sign_multisig_workflow` and the WebSocket handshake were all split, and
-`conftest.py` patches both signature verifiers to `True` as `autouse`, so no
-backend test exercises a real login or approval signature.
+Branch `cutover-base64-2026-09`. The gate before a first deployment: settle the
+encoding question while data is still disposable, close the deploy-time holes,
+and put the manual recipe somewhere it can actually be followed.
+
+| Scope | Area | Status |
+|---|---|---|
+| base64 cutover (L-12), crypto-core 2.0.0 | all four | done — `784b558` |
+| PM2 migrates before serving (audit §8 item 4) | repo | done — `a29f3bc` |
+| Login challenge single-sourced + real signature tests | mixed | done — `7afe9da` |
+| Chunked-file round-trip coverage | frontend | done — `47085e1` |
+| `E2E-RECIPE.md`, stack wiped and re-seeded | repo | done |
+
+**L-12 is done, and the scope line matters.** Everything opaque moved to base64;
+everything that identifies something stayed hex. Base64 is case-sensitive, and
+"addresses are lowercase everywhere" is a project-wide convention that would not
+have survived the move — an address is also a primary key, a URL path segment,
+and part of the signed login body. `b64_chars()` in `schemas.py` derives every
+envelope bound from that, and the two languages' constants are still pinned
+against each other.
+
+**`fromB64` refuses non-canonical spellings**, and `is_b64` in
+`security/crypto_validation.py` mirrors it. Not tidiness: a message signature
+commits to its ciphertext *as a string*, so a second valid spelling of one
+ciphertext would be a second valid signature for it.
+
+**Three things this pass found rather than changed:**
+
+- **Biometric unlock was dead.** The crypto-core module split (`26a9319`) left
+  `toHex`/`fromHex` behind in `encoding.js` while `webauthn.js` kept calling
+  them, so every biometric path threw `ReferenceError` before reaching the
+  authenticator. Fixed in `b7241f7`. It survived because the module needs
+  `window` so it has no tests, **and crypto-core is the only package with no
+  lint gate** — `no-undef` never ran over it. That gap is still open.
+- **The login challenge had two copies and no test that could fail.** The server
+  built it in `auth.py`; the SPA rebuilt it inline. `conftest` stubs the
+  verifier, so a typo in either would have passed all of CI and broken every
+  login. Now `crypto-core`'s `loginChallengeBody`, pinned from both languages
+  against `tests/fixtures/signed_bodies.json`.
+- **Long non-ASCII messages were refused.** `CIPHERTEXT_CHARS` budgeted one byte
+  per character, so a full-length CJK or accented message blew
+  `MAX_DM_CONTENT_LEN` well under the advertised 10 000 and came back as a bare
+  422. The bound now derives from 3 bytes per UTF-16 unit, which is the real
+  worst case (an astral character is 4 bytes but *two* units, so cheaper per
+  unit, not dearer).
+
+**`conftest` has a real opt-out now** — `@pytest.mark.real_signatures` — and
+three tests drive a genuine ML-DSA login through `POST /auth/login`, including
+the refusals. The previous escape was re-patching over the fixture with a
+hand-rolled copy of the verifier, and `test_key_attestation` shows why that is
+not enough: its private copy went on decoding hex after production moved to
+base64, passing the whole time, because both halves of the test agreed with each
+other. Note the old claim that "no backend test exercises a real login
+signature" was overstated — `test_pqc.py` always called `verify_pqc_signature`
+directly; what was missing was the endpoint path.
+
+**The dev stack has been wiped and re-seeded** (`docker compose down -v`), and
+`backend/.env` now sets a persistent `KRYPTOLOG_JWT_SECRET` and `REDIS_URL`.
+Both matter for the recipe: without the secret every restart 401s the browser
+mid-pass, and without Redis the WS fan-out and L-7 presence path run in-process
+and never get exercised. Verified against the live server: a real ML-DSA login
+with a base64 signature returns 200, a forged one 401.
+
+**nginx is checked, not proven.** `nginx -t` runs against an adapted
+`nginx.conf.example` inside the `nginx:alpine` container (no host install, no
+sudo) and the `/api/` block carries the M-10 upgrade headers. That a
+`wss://host/api/ws` handshake really upgrades through a running nginx is still
+unverified; `E2E-RECIPE.md` §6 says so explicitly.
+
+**Two gotchas worth keeping:**
+- `start_all.sh` calls `python3 -m pip` with whatever `python3` is on PATH, so
+  **the venv must be active before running it** or it fails at the dependency
+  step. `backend/serve.sh` does not have this problem — it resolves the
+  interpreter itself, checking `backend/.venv` and the repo-root `../.venv` the
+  README documents.
+- Build the extension with `npm run build:dev` for the recipe. The production
+  build strips `__TRUSTKEYS_ALLOW_DEV_AUTOSIGN__` and prompts on every single
+  message signature.
 
 ### Still open from the remediation
 
-- **End-to-end recipe not run.** Everything is covered by automated tests except the
-  manual pass, which needs a running stack and a browser: two accounts exchanging DMs;
-  the WebSocket connecting through the corrected nginx `/api/` block; a multi-chunk
-  file round-tripping to confirm the AAD binding; locking/unlocking the extension to
-  confirm the idle alarm fires. Do this before any real deployment.
-- **Four cutover breaks are cumulative.** `CRYPTO_CORE_VERSION` went 1.3.0 → 1.7.0.
-  Existing chunk uploads no longer decrypt, existing message signatures no longer
-  verify, unsigned legacy messages no longer decrypt at all, and (1.7.0) wrapped
-  session keys stored under the old `ct` field name no longer unwrap. Fine for a
-  pre-production system; a decision if there is real data.
-- **Mixed-script usernames are grandfathered.** The new rule applies on write; existing
-  rows are only NFKC-normalized. Migration `f6a7b8c9d0e5` reports collisions but
-  deliberately does not rename anyone. If the directory already holds such names, that
-  needs an operator pass.
-- **`conftest.py` patches `auth.verify_message_signature` to `True` as `autouse`,** so
-  no backend test exercises a real login signature. Flipping it to opt-out was scoped
-  as a follow-up with its own blast radius, and was not done.
+- **End-to-end recipe not run.** The steps now live in a tracked checklist,
+  `E2E-RECIPE.md`, ordered by untested risk and saying what each step proves.
+  It needs a running stack and a browser. Do this before any real deployment.
+  The stack on the dev box is re-seeded and ready for it (empty database,
+  persistent JWT secret, `REDIS_URL` set).
+- **The cutovers are cumulative, and there are six of them.** `CRYPTO_CORE_VERSION`
+  went 1.3.0 → 2.0.0, and the count is one higher than the version list suggests:
+  the HKDF derivation of the AES key from the ML-KEM shared secret (audit S5,
+  `KEM_KDF_INFO` in `pqc.js`) was a wire break that landed before `CHANGELOG.md`
+  existed, so it carries no version at all. Existing chunk uploads no longer
+  decrypt, message signatures no longer verify, unsigned legacy messages no
+  longer decrypt, wrapped session keys under the old `ct` name no longer unwrap
+  (1.7.0), and everything is base64 rather than hex (2.0.0) — **including the
+  vault blob, so existing local vaults and `.kvault` backups no longer open.**
+  That last one is key custody, not just wire format. Fine for a pre-production
+  system; a decision to re-take explicitly if there is ever real data.
+- **Nothing can detect old data.** No version marker is persisted anywhere, and
+  neither client reads `CRYPTO_CORE_VERSION` — its only consumer is a test
+  assertion. Old rows therefore fail as an opaque `OperationError`, or worse: a
+  pre-1.4.0 message renders with an **invalid-signature badge** indistinguishable
+  from a forgery, and a failed unwrap leaves a "Click to Decrypt" button that
+  never resolves and never says why. If real data ever exists, a wipe is safer
+  than a migration, because there is no version to migrate *from*.
+- **Mixed-script usernames are grandfathered.** The new rule applies on write;
+  existing rows are only NFKC-normalized. Migration `f6a7b8c9d0e5` does **not**
+  report mixed-script names — it neither rewrites nor reports them, by design.
+  What it does do is **raise and abort the whole migration** on an NFKC
+  *collision*, and both start paths refuse to start on a failed migration, so on
+  a directory holding colliding names this is a hard deploy stop needing a manual
+  `UPDATE` pass, not a warning.
 
 ### Known issues, not yet scoped
+
+- **crypto-core has no lint gate.** The other three packages have a blocking
+  `eslint` step in CI; the package that exists to be the single source of truth
+  for every wire primitive does not, and has no eslint config at all. That is
+  why a module referencing `toHex` without importing it shipped and broke every
+  biometric path silently (see the 2026-09-11 pass). Adding the config and the
+  CI step is small; it was left out of that pass to keep its scope honest.
 
 - **Port 5432 may be held by a native PostgreSQL** that lacks the `kryptolog` role, in
   which case `docker compose up -d postgres` fails to bind. Workaround: run the test
