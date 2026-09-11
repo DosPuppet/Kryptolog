@@ -335,11 +335,14 @@ and put the manual recipe somewhere it can actually be followed.
 | `E2E-RECIPE.md`, stack wiped and re-seeded | repo | done |
 | crypto-core lint gate + live nginx M-10 test + biometric coverage | mixed | done — `ad7046e` |
 | DM partner named on arrival, not after a reload | frontend | done — `6a32bb3` |
-| Biometric unlock holds for the session, not just the login | frontend | done |
+| Biometric unlock holds for the session, not just the login | frontend | done — `1cf73d2` |
+| CI: high npm advisory + runner-speed test timeout | repo | done — `96dbe37` |
 
 **Merged to `main` on 2026-09-11** (fast-forward, `b7241f7`..`6a32bb3`), with all
-four suites (463 / 163 / 50 / 96), both builds and all five lint/format/drift
-gates green at `6a32bb3`. Not pushed — `origin/main` is 8 commits behind.
+four suites (463 / 173 / 50 / 96), both builds and all five lint/format/drift
+gates green. **Pushed, and GitHub Actions is green at `96dbe37`** — the first
+time both workflows have run on this work, which is how the two failures above
+were found: a local pass is not the same gate.
 
 **L-12 is done, and the scope line matters.** Everything opaque moved to base64;
 everything that identifies something stayed hex. Base64 is case-sensitive, and
