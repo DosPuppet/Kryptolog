@@ -18,12 +18,36 @@ Base = declarative_base()
 
 
 class Nonce(Base):
+    """One pending login challenge.
+
+    The NONCE is the primary key, not the address (audit H-1). Keying on the
+    address allowed exactly one live challenge per identity, and
+    `GET /auth/nonce/{address}` is unauthenticated by necessity — the caller
+    has no session yet — and keyed by a value the whole directory can read. So
+    a single request from a stranger REPLACED whatever challenge the legitimate
+    owner was holding, and their in-flight login failed. That is a denial of
+    service against a chosen account at no cost to the attacker.
+
+    Several challenges may now be outstanding for one address at once, so a
+    stranger's request adds a row instead of overwriting someone else's.
+    `routers.auth._claim_nonce` still consumes exactly one, matched on
+    (address, nonce), so one-time use is unchanged.
+
+    There is deliberately NO per-address cap. A cap with oldest-eviction is
+    this same vulnerability again, only needing N requests instead of one.
+    Growth is bounded by the rate limit on the endpoint and the five-minute
+    TTL, and expired rows are purged on every issue — which is what the
+    expires_at index is for.
+    """
+
     __tablename__ = "nonces"
 
-    address = Column(String, primary_key=True, index=True)  # Address associated with nonce
-    nonce = Column(String, nullable=False)
+    nonce = Column(String, primary_key=True)  # 128 bits of token_hex, globally unique
+    address = Column(String, nullable=False, index=True)  # the identity this was issued to
     created_at = Column(DateTime, default=utcnow_naive)
-    expires_at = Column(DateTime, nullable=False)
+    # Indexed: the lazy purge deletes by expiry on every issue, and the table
+    # now holds more than one row per address.
+    expires_at = Column(DateTime, nullable=False, index=True)
 
 
 class User(Base):

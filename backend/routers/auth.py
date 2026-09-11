@@ -35,9 +35,15 @@ def get_nonce(request: Request, address: str, db: Session = Depends(get_db)):
     nonce_val = auth.generate_nonce()
     expires = now + timedelta(minutes=5)
 
-    # Upsert logic
-    new_nonce = models.Nonce(address=address.lower(), nonce=nonce_val, expires_at=expires)
-    db.merge(new_nonce)  # Updates if exists
+    # INSERT, never an upsert keyed by the address (audit H-1). This was
+    # `db.merge` on an address-keyed row, so issuing a challenge REPLACED
+    # whichever one that identity already held — and this endpoint cannot be
+    # authenticated (the caller has no session yet) and is keyed by a public
+    # value, so any stranger could invalidate a chosen user's in-flight login
+    # with one request, repeatedly. Several challenges may now be live at once;
+    # `_claim_nonce` still consumes exactly one. See models.Nonce for why there
+    # is no per-address cap.
+    db.add(models.Nonce(nonce=nonce_val, address=address.lower(), expires_at=expires))
     db.commit()
 
     return {"nonce": nonce_val}
@@ -54,6 +60,11 @@ def _claim_nonce(db: Session, address: str, nonce: str) -> bool:
     means exactly one caller can ever claim a given nonce — whoever's statement
     reports rowcount == 1 — and the expensive crypto happens after the claim is
     already settled.
+
+    An address may hold several live challenges at once (audit H-1), which
+    changes nothing here: the predicate names one of them, and the delete is
+    still what settles ownership. Matching on the address as well as the nonce
+    is what stops a challenge issued to one identity being spent by another.
     """
     claimed = (
         db.query(models.Nonce)

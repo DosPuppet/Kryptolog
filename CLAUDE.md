@@ -558,3 +558,36 @@ names go through the M-3 encrypted-name path, which is a different mechanism.
 - **Extension tests are slow by design** (~15s): the vault KDF is 600k PBKDF2
   iterations and each `bootWithVault()` pays it. Use `boot()` where a test only needs
   the sender guard, which runs before any vault access.
+
+## Independent audit — 2026-09-11
+
+A second audit was run over the whole repo from scratch, deliberately without
+reading this file or the earlier reports, so its findings are not downstream of
+theirs. Report and re-runnable probes are **untracked** (`audit/`, `audit/probes/`)
+for the usual reason — they enumerate what is not fixed yet. Copy across machines
+out of band.
+
+Branch `audit-2026-09-11-followups`. No critical finding; one high, fixed below.
+The rest are open and carry no detail here on purpose — see the local report.
+
+**Login challenges are now keyed by the nonce, not the address.** The `nonces`
+table had the address as its primary key and `get_nonce` issued with `db.merge`,
+so `GET /auth/nonce/{address}` **replaced** whatever challenge that identity was
+already holding. That endpoint cannot be authenticated (the caller has no session
+yet) and is keyed by public directory data, so one request from any stranger made
+a chosen user's in-flight login fail — repeatably, for free. Migration
+`b8c9d0e1f2a3` recreates the table (a challenge lives five minutes, so there is
+nothing to preserve); `_claim_nonce` is untouched and still consumes exactly one
+row matched on `(address, nonce)`.
+
+**There is deliberately no per-address cap**, and that is the part worth
+remembering: a cap with oldest-eviction is the same defect, needing N requests
+instead of one. Growth is bounded by the endpoint's rate limit and the 5-minute
+TTL, and expired rows are purged on every issue — which is what the new
+`expires_at` index is for. The reasoning is written into `models.Nonce` because
+"why is there no cap here" is exactly what a later reader will ask.
+
+Mutation-tested: restoring the one-challenge-per-address semantics fails exactly
+`test_a_stranger_cannot_invalidate_a_pending_login` and
+`test_each_live_challenge_is_still_single_use`, and no others. Backend suite is
+463 → **466**.

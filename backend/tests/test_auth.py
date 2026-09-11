@@ -16,12 +16,74 @@ class TestNonce:
         assert isinstance(nonce, str)
         assert len(nonce) == 32  # token_hex(16) → 32 hex chars
 
-    def test_get_nonce_replaces_on_second_call(self, client):
+    def test_get_nonce_mints_a_fresh_value_each_call(self, client):
         nonce1 = get_nonce(client, TEST_USER_ADDRESS)
         nonce2 = get_nonce(client, TEST_USER_ADDRESS)
         assert isinstance(nonce2, str)
         assert len(nonce2) == 32
         assert nonce2 != nonce1, "second call must mint a fresh nonce"
+
+    def test_a_stranger_cannot_invalidate_a_pending_login(self, client):
+        """audit H-1. This endpoint cannot be authenticated — the caller has no
+        session yet — and it is keyed by the address, which is public directory
+        data. It used to REPLACE the target's single row, so one request from
+        anyone at all made that user's in-flight login fail with "Invalid or
+        expired nonce", repeatably and for free: a denial of service against a
+        chosen account.
+
+        Both challenges have to stay live. Asserting only that the second call
+        returns something would pass on the broken version too.
+        """
+        victims_nonce = get_nonce(client, TEST_USER_ADDRESS)
+        # Same address, someone else asking — indistinguishable at the endpoint.
+        strangers_nonce = get_nonce(client, TEST_USER_ADDRESS)
+        assert strangers_nonce != victims_nonce
+
+        resp = client.post(
+            "/auth/login",
+            json={
+                "address": TEST_USER_ADDRESS,
+                "signature": "fake_signature_for_testing",
+                "nonce": victims_nonce,
+            },
+        )
+        assert resp.status_code == 200, (
+            f"the earlier challenge was invalidated by a later request: {resp.text}"
+        )
+
+    def test_each_live_challenge_is_still_single_use(self, client):
+        """Several may be outstanding; spending one must not spend the others,
+        and a spent one must not come back."""
+        first = get_nonce(client, TEST_USER_ADDRESS)
+        second = get_nonce(client, TEST_USER_ADDRESS)
+
+        def login(nonce):
+            return client.post(
+                "/auth/login",
+                json={
+                    "address": TEST_USER_ADDRESS,
+                    "signature": "fake_signature_for_testing",
+                    "nonce": nonce,
+                },
+            )
+
+        assert login(first).status_code == 200
+        assert login(first).status_code == 400, "a spent challenge was accepted twice"
+        assert login(second).status_code == 200, "spending one challenge burned another"
+
+    def test_a_challenge_issued_to_one_address_cannot_be_spent_by_another(self, client):
+        """The claim matches on (address, nonce), so holding a nonce is not
+        enough — it has to be the nonce that identity was issued."""
+        victims_nonce = get_nonce(client, TEST_USER_ADDRESS)
+        resp = client.post(
+            "/auth/login",
+            json={
+                "address": synthetic_address("nonce-thief"),
+                "signature": "fake_signature_for_testing",
+                "nonce": victims_nonce,
+            },
+        )
+        assert resp.status_code == 400, resp.text
 
     def test_get_nonce_normalizes_to_lowercase(self, client):
         # Uppercase hex is still a well-formed address, so it passes validation
