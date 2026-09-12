@@ -41,6 +41,11 @@ describe('address labels', () => {
         expect(displayName({ username: 'alice', address: addr })).toBe('alice');
         expect(displayName({ address: addr })).toBe('aaaaaaaa...');
         expect(displayName(null)).toBe('');
+        // A deleted account is not the same as a lookup that failed: without
+        // the flag it would fall through to the short address and read as
+        // somebody who simply never registered.
+        expect(displayName({ deleted: true, address: addr })).toBe('User removed');
+        expect(displayName({ deleted: true, username: 'alice', address: addr })).toBe('User removed');
     });
 
     it('reads user_address too, which the group member rows use', () => {

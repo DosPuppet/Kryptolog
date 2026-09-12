@@ -79,7 +79,12 @@ const ChatArea = ({ activeConversation, onBack, onSend, loadingMessages, sending
                                         ? 'bg-indigo-600 text-white rounded-br-none'
                                         : 'bg-white dark:bg-slate-750 text-slate-800 dark:text-white rounded-bl-none border border-slate-200 dark:border-slate-600'}
                                 `}>
-                                    {msg.plainText ? (
+                                    {msg.redacted ? (
+                                        // Not a failure: there is nothing to
+                                        // decrypt. A "Click to Decrypt" button
+                                        // here could only ever spin and fail.
+                                        <p className="text-sm italic opacity-70">Content removed</p>
+                                    ) : msg.plainText ? (
                                         <p className="text-sm">{msg.plainText}</p>
                                     ) : (
                                         <button

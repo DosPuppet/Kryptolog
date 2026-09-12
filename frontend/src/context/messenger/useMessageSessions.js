@@ -77,7 +77,13 @@ export const useMessageSessions = ({
             try { parsed = JSON.parse(msg.content); } catch { /* legacy/plain content */ }
             const verified = await verifyMessageAuthenticity(msg, parsed, mode);
             const payload = parsed && parsed.v === version && parsed.sid ? parsed : null;
-            return { ...msg, verified, plainText: null, _sessionPayload: payload };
+            // Content the author removed on their way out of the app: the key
+            // envelope survives (other people's messages in this session depend
+            // on it) and the signature still verifies, because the author signed
+            // this exact form. So it stays adoptable — it just has nothing to
+            // decrypt, and must never offer a decrypt button that can only fail.
+            const redacted = !!payload && payload.ct == null;
+            return { ...msg, verified, redacted, plainText: null, _sessionPayload: payload };
         }));
 
         // 2. Decrypt whatever the cache already covers.
@@ -85,7 +91,7 @@ export const useMessageSessions = ({
             const p = m._sessionPayload;
             if (!p) return m;
             const key = sessionKeysRef.current[sessionKeyId(convOf(m), p.sid)];
-            if (!key) return m;
+            if (!key || m.redacted) return m;
             try {
                 return { ...m, plainText: await decryptWithSessionKey(p.ct, key) };
             } catch { return m; /* best-effort: failure is non-fatal */ }
@@ -180,7 +186,7 @@ export const useMessageSessions = ({
                 const p = m._sessionPayload;
                 if (!p || m.plainText !== null) return m;
                 const key = newKeys[sessionKeyId(convOf(m), p.sid)];
-                if (!key) return m;
+                if (!key || m.redacted) return m;
                 try {
                     return { ...m, plainText: await decryptWithSessionKey(p.ct, key) };
                 } catch { return m; /* best-effort: failure is non-fatal */ }

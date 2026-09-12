@@ -218,7 +218,12 @@ const GroupChatArea = ({ activeGroupConversation, onBack, onSend, loadingMessage
                                                 {getSenderName(msg.sender_address)}
                                             </div>
                                         )}
-                                        {msg.plainText ? (
+                                        {msg.redacted ? (
+                                            // Not a failure: there is nothing to
+                                            // decrypt. A "Click to Decrypt" button
+                                            // here could only ever spin and fail.
+                                            <p className="text-sm italic opacity-70">Content removed</p>
+                                        ) : msg.plainText ? (
                                             <p className="text-sm">{msg.plainText}</p>
                                         ) : (
                                             <button onClick={() => onDecrypt(msg)}

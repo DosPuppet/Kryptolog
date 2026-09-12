@@ -62,6 +62,17 @@ const groupMessage = async ({ id, from, sid, sKey, text = 'hi group', wrapFor = 
     return { id, sender_address: from.address, channel_id: CHANNEL, content: JSON.stringify(payload) };
 };
 
+/** An author-redacted DM: the key envelope and signature survive, `ct` does not. */
+const dmRedacted = async ({ id, from, to, sid, blob }) => {
+    const keys = { recip: blob, sender: null };
+    const payload = { v: 1, sid, keys, ct: null };
+    payload.sig = await signMessagePQC(
+        await messageSigningBody({ from: from.address, conv: to.address, sid, keys, ct: null }),
+        from.privateKey
+    );
+    return { id, sender_address: from.address, recipient_address: to.address, content: JSON.stringify(payload) };
+};
+
 /** Mount the hook with a stub custody provider that maps blob strings to keys. */
 const setup = (blobToKey = {}) => {
     const unwrapManySessionKeys = vi.fn(async (blobs) => blobs.map(b => blobToKey[b] ?? null));
@@ -272,5 +283,49 @@ describe('mayAdoptSession', () => {
         for (const verdict of [false, null, undefined, 'true', 1]) {
             expect(mayAdoptSession(dm(alice.address, me.address), verdict, 'dm', me.address)).toBe(false);
         }
+    });
+});
+
+describe('author-redacted messages (account deletion)', () => {
+    it('still seeds the session, so the partner keeps their OWN replies', async () => {
+        // The property the whole redaction design exists for. Alice opened the
+        // epoch and later erased her account. Her message kept the wrapped key
+        // both sides need and lost only its ciphertext — had it been DELETED,
+        // my own reply under the same sid would be permanently unreadable.
+        const sKey = await generateSessionKey();
+        const opener = await dmRedacted({ id: 1, from: alice, to: me, sid: 'S', blob: 'blob-alice' });
+        const mine = await dmMessage({ id: 2, from: me, to: alice, sid: 'S', sKey, text: 'mine' });
+
+        const { result } = setup({ 'blob-alice': sKey });
+        const out = await process(result, [opener, mine]);
+
+        expect(out[1].plainText).toBe('mine');
+        expect(result.current.sessionKeys[sessionKeyId(alice.address, 'S')]).toBe(sKey);
+    });
+
+    it('is marked redacted and verified, never offered for decryption', async () => {
+        // The signature covers the redacted form, so this is authentic — it
+        // must not show an invalid-signature badge, and must not show a decrypt
+        // button that could only ever fail.
+        const sKey = await generateSessionKey();
+        const opener = await dmRedacted({ id: 1, from: alice, to: me, sid: 'S', blob: 'blob-alice' });
+
+        const { result } = setup({ 'blob-alice': sKey });
+        const out = await process(result, [opener]);
+
+        expect(out[0].redacted).toBe(true);
+        expect(out[0].verified).toBe(true);
+        expect(out[0].plainText).toBeNull();
+    });
+
+    it('a live message is not mistaken for a redacted one', async () => {
+        const sKey = await generateSessionKey();
+        const live = await dmMessage({ id: 1, from: alice, to: me, sid: 'S', sKey, blob: 'blob-alice' });
+
+        const { result } = setup({ 'blob-alice': sKey });
+        const out = await process(result, [live]);
+
+        expect(out[0].redacted).toBe(false);
+        expect(out[0].plainText).toBe('hello');
     });
 });

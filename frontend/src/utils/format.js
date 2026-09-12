@@ -34,9 +34,21 @@ export const middleEllipsis = (value, lead = 8, tail = 8) =>
         ? `${value.slice(0, lead)}...${value.slice(-tail)}`
         : value || '';
 
-/** How to label a user: their name if they have one, else a short address. */
+/** What a deleted identity is called everywhere it still appears. */
+export const DELETED_USER_LABEL = 'User removed';
+
+/**
+ * How to label a user: their name if they have one, else a short address.
+ *
+ * A deleted account is NOT the same thing as a lookup that failed, and this is
+ * the one place that distinction is rendered. Deletion strips the row but keeps
+ * it, precisely so the server can still answer "this address belonged to
+ * someone who left" — without the flag a deleted sender would fall through to
+ * the short-address branch and read as a stranger who never registered.
+ */
 export const displayName = (user) => {
     if (!user) return '';
+    if (user.deleted) return DELETED_USER_LABEL;
     return user.username || shortAddress(user.address || user.user_address);
 };
 

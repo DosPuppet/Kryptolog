@@ -7,6 +7,13 @@ export const API_ENDPOINTS = {
         LOGIN: `${API_BASE_URL}/auth/login`,
         LOGOUT: `${API_BASE_URL}/auth/logout`,
     },
+    // The caller's own account, as opposed to USERS which is the directory.
+    ACCOUNT: {
+        // Messages an erase must redact rather than delete, because they carry
+        // a session key other people's messages depend on. Paged (audit O-3).
+        REDACTABLE: `${API_BASE_URL}/account/redactable-messages`,
+        DELETE: `${API_BASE_URL}/account/delete`,
+    },
     USERS: {
         GET: (address) => `${API_BASE_URL}/users/${address}`,
         LIST: `${API_BASE_URL}/users`,

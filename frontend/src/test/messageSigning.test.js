@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import {
+    accountDeletionBody,
     generateMlDsaKeyPair,
     signMessagePQC,
     verifySignaturePQC,
@@ -163,5 +164,22 @@ describe('group message channel binding (F-1)', () => {
             // canonical form — otherwise verification would fail at random.
             expect(await deliver({ bob: keys.bob, alice: keys.alice })).toBe(true);
         });
+    });
+});
+
+describe('what the extension will and will not sign silently', () => {
+    // TrustKeys auto-signs message-context bodies and prompts for everything
+    // else. Redaction happens once per session epoch during an account
+    // deletion, so it has to be silent; the deletion itself must not be.
+    it('a redaction body is a message body, so it is signed without a popup', async () => {
+        const body = await messageSigningBody({ from: 'a', conv: 'b', sid: 's', ct: null });
+        expect(body.startsWith(MESSAGE_SIGNING_PREFIX)).toBe(true);
+        expect(body.endsWith('\nredacted=1')).toBe(true);
+    });
+
+    it('an account-deletion body is NOT, so it needs explicit approval', async () => {
+        const body = await accountDeletionBody('n', 'erase', ['dm:1']);
+        expect(body.startsWith(MESSAGE_SIGNING_PREFIX)).toBe(false);
+        expect(body).toContain(`context=${SIGNING_CONTEXT.ACCOUNT_DELETION}`);
     });
 });

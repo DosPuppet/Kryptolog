@@ -6,6 +6,7 @@ import API_ENDPOINTS from '../../config';
 import DisplayField from '../common/DisplayField';
 import { safetyNumber } from '../../utils/fingerprint';
 import { apiFetch } from '../../services/api';
+import DeleteAccountSection from './DeleteAccountSection';
 
 const ProfileModal = ({ isOpen, onClose }) => {
     const { user, setUser, token } = useAuth();
@@ -112,6 +113,8 @@ const ProfileModal = ({ isOpen, onClose }) => {
                                 </div>
                             )}
                         </div>
+
+                        <DeleteAccountSection />
                     </div>
 
                     <div className="flex gap-3 pt-2">

@@ -2,8 +2,10 @@ import { createContext, useContext, useState, useEffect, useRef } from 'react';
 import API_ENDPOINTS from '../config';
 import { useAuth } from './AuthContext';
 import { vaultService } from '../services/vault';
-import { loginChallengeBody, encryptionKeyAttestationBody } from '../utils/crypto';
+import { loginChallengeBody, encryptionKeyAttestationBody, messageSigningBody, accountDeletionBody } from '../utils/crypto';
 import { toast } from '../utils/toast';
+import { apiFetch } from '../services/api';
+import { fetchAllPages, pageUrl } from '../utils/paging';
 import PasswordModal from '../components/PasswordModal';
 
 const PQCContext = createContext();
@@ -17,7 +19,7 @@ export const usePQC = () => {
 };
 
 export const PQCProvider = ({ children }) => {
-    const { login: authLogin, logout: authLogout } = useAuth();
+    const { login: authLogin, logout: authLogout, token } = useAuth();
     const [pqcAccount, setPqcAccount] = useState(null); // ML-DSA public key
     const [mlkemKey, setMlkemKey] = useState(null);
     const [isExtensionAvailable, setIsExtensionAvailable] = useState(false);
@@ -439,6 +441,64 @@ export const PQCProvider = ({ children }) => {
         return account;
     };
 
+    // --- Account deletion ---
+    //
+    // Two modes, and the mode is part of what gets SIGNED: without that a relay
+    // could downgrade an erase into a leave (the data the user asked to destroy
+    // stays) or escalate a leave into an erase, under a signature the server
+    // accepts either way.
+    //
+    // Erase asks the server which of the user's messages carry a session key
+    // other people's messages depend on, and re-signs a redacted form of each
+    // — keys kept, ciphertext dropped. Deleting those outright would take the
+    // partner's OWN replies with them, since a DM epoch's key lives in the
+    // first message under that sid and the replies carry keys:null.
+    const deleteServerAccount = async (mode) => {
+        let redactions = [];
+        if (mode === 'erase') {
+            // Paged to the end (audit O-3). Reading only the first page would
+            // silently DELETE every carrier past it rather than redacting it —
+            // the quiet half of the paging trap, since nothing on screen would
+            // say a page was missed.
+            const rows = await fetchAllPages(({ limit, offset }) =>
+                apiFetch(pageUrl(API_ENDPOINTS.ACCOUNT.REDACTABLE, { limit, offset }), token)
+            );
+            // `conv` and `gid` come from the server, derived from the row the
+            // message was delivered under (audit F-1) — signing a conversation
+            // of our own choosing would just produce a signature it rejects.
+            redactions = await Promise.all(rows.map(async (row) => ({
+                key: row.key,
+                signature: await signMessage(await messageSigningBody({
+                    from: pqcAccount,
+                    conv: row.conv,
+                    gid: row.gid,
+                    sid: row.sid,
+                    keys: row.keys,
+                    ct: null,
+                })),
+            })));
+        }
+
+        const nonceRes = await fetch(API_ENDPOINTS.AUTH.NONCE(pqcAccount));
+        if (!nonceRes.ok) throw new Error("Failed to fetch nonce");
+        const { nonce } = await nonceRes.json();
+
+        // sign(), not signMessage(): this deliberately carries its own context,
+        // so the extension shows an approval window instead of auto-signing it.
+        const signature = await sign(
+            await accountDeletionBody(nonce, mode, redactions.map((r) => r.key))
+        );
+
+        await apiFetch(API_ENDPOINTS.ACCOUNT.DELETE, token, {
+            method: 'POST',
+            body: { mode, nonce, signature, redactions },
+        });
+
+        // The vault stays on the device: the keys are the user's, and after a
+        // `leave` they are what brings the account back.
+        authLogout();
+    };
+
     const deleteVaultAccount = async (id) => {
         const password = await requestPassword("Enter password to DELETE account:");
         await vaultService.deleteAccount(id, password);
@@ -492,6 +552,7 @@ export const PQCProvider = ({ children }) => {
             addVaultAccount,
             switchVaultAccount,
             deleteVaultAccount,
+            deleteServerAccount,
             exportVault,
             importVault,
             exportEncryptedVault,
