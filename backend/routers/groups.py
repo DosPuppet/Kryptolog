@@ -11,6 +11,7 @@ from dependencies import get_current_user, limiter
 from security import authorization
 from security.crypto_validation import is_usable_encryption_key
 from utils.clock import to_wire_utc
+from utils.group_events import broadcast_removal
 from utils.push import display_name, notify_many_push_async
 from websocket_manager import manager
 
@@ -398,73 +399,6 @@ async def add_member(
     return new_member
 
 
-def _succeed_owner(db, channel, caller_member, remaining, is_self):
-    """Hand the group over when its owner leaves, or tear it down.
-
-    A channel with no owner is unadministrable (the Q-1 bug), so the departure
-    of an owner must always end with either a new owner or no channel.
-    Successor order: the admin doing the removing, else any existing admin,
-    else the earliest-joined remaining member.
-
-    Returns (new_owner_info, group_deleted). The dict is built here, while the
-    rows are still live, because reading attributes off a deleted or expired
-    instance afterwards is the Q-2 bug.
-    """
-    if not remaining:
-        # Cascades to members and messages.
-        db.delete(channel)
-        return None, True
-
-    if not is_self and caller_member.role == "admin":
-        successor = caller_member
-    else:
-        successor = next((m for m in remaining if m.role == "admin"), None) or min(
-            remaining, key=lambda m: m.joined_at
-        )
-
-    successor.role = "owner"
-    channel.owner_address = successor.user_address
-    db.add(successor)
-    db.add(channel)
-    return {
-        "user_address": successor.user_address,
-        "role": "owner",
-        "username": successor.user.username if successor.user else None,
-        "joined_at": to_wire_utc(successor.joined_at),
-    }, False
-
-
-async def _broadcast_removal(
-    channel_id, target_addr, removed_by, remaining_addrs, new_owner_info, is_self
-):
-    """Tell the group who left, and who owns it now.
-
-    Ownership first: a client that applies the removal before the succession
-    briefly renders an ownerless group.
-    """
-    if new_owner_info:
-        owner_event = {
-            "type": "GROUP_MEMBER_UPDATED",
-            "channel_id": channel_id,
-            "member": new_owner_info,
-        }
-        for addr in remaining_addrs:
-            await manager.send_personal_message(owner_event, addr)
-
-    event = {
-        "type": "GROUP_MEMBER_REMOVED",
-        "channel_id": channel_id,
-        "removed_address": target_addr,
-        "removed_by": removed_by,
-    }
-    for addr in remaining_addrs:
-        await manager.send_personal_message(event, addr)
-
-    # The removed user also needs to know, unless they did it themselves.
-    if not is_self:
-        await manager.send_personal_message(event, target_addr)
-
-
 # ── Remove Member / Leave Group ─────────────────────────────────
 
 
@@ -505,7 +439,7 @@ async def remove_member(
 
     new_owner_info, group_deleted = None, False
     if target_was_owner:
-        new_owner_info, group_deleted = _succeed_owner(
+        new_owner_info, group_deleted = authorization.succeed_group_owner(
             db, channel, caller_member, remaining, is_self
         )
 
@@ -525,7 +459,7 @@ async def remove_member(
     if group_deleted:
         return {"status": "ok", "group_deleted": True}
 
-    await _broadcast_removal(
+    await broadcast_removal(
         channel_id, target_addr, current_user.address, remaining_addrs, new_owner_info, is_self
     )
     return {"status": "ok"}

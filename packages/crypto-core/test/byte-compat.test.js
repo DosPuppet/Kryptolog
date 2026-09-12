@@ -89,23 +89,26 @@ describe('golden constants (wire/storage format contract)', () => {
         }
     });
 
-    it('the account-deletion body binds the mode and sorts ids NUMERICALLY', async () => {
-        const ids = [2, 10];
-        const body = await core.accountDeletionBody('N', 'erase', ids);
+    it('the account-deletion body binds the mode and the redaction set (2.1.0)', async () => {
+        const keys = ['dm:2', 'group:10', 'dm:10'];
+        const body = await core.accountDeletionBody('N', 'erase', keys);
         expect(body.startsWith('Kryptolog Signed Message v1\ncontext=account-deletion\n')).toBe(true);
         expect(body).toContain('\nmode=erase\n');
 
-        // JS's default sort is lexicographic: [2,10] would render as [10,2]
-        // while Python's sorted() gives [2,10]. A one-character mutation that
-        // breaks every deletion and is invisible in review.
-        expect(body).toContain(
-            `redactions=${createHash('sha256').update('[2,10]').digest('hex')}`);
+        // Namespaced ids, not bare numbers: DMs and group messages have
+        // independent id sequences, so "10" names two different rows and a
+        // relay could drop one while the set still matched.
+        expect(body).toContain(`redactions=${createHash('sha256')
+            .update('["dm:10","dm:2","group:10"]').digest('hex')}`);
 
         // Order in, order out: the caller's array must not decide the bytes.
-        expect(await core.accountDeletionBody('N', 'erase', [10, 2])).toBe(body);
-        // ...but the mode and the set both must.
-        expect(await core.accountDeletionBody('N', 'leave', ids)).not.toBe(body);
-        expect(await core.accountDeletionBody('N', 'erase', [2])).not.toBe(body);
+        expect(await core.accountDeletionBody('N', 'erase', [...keys].reverse())).toBe(body);
+        // ...but the mode and the membership of the set both must.
+        expect(await core.accountDeletionBody('N', 'leave', keys)).not.toBe(body);
+        expect(await core.accountDeletionBody('N', 'erase', ['dm:2', 'dm:10'])).not.toBe(body);
+        // Dropping the namespace would collapse two distinct rows into one.
+        expect(await core.accountDeletionBody('N', 'erase', ['dm:2', 'dm:10', 'dm:10']))
+            .not.toBe(body);
     });
 
     it('message signing body binds the key envelope and the group id (M-8)', async () => {
@@ -537,7 +540,7 @@ describe('signed bodies match the server, byte for byte', () => {
 
     it('account deletion', async () => {
         expect(await core.accountDeletionBody(
-            vectors.nonce, vectors.deletion_mode, vectors.redaction_ids
+            vectors.nonce, vectors.deletion_mode, vectors.redaction_keys
         )).toBe(vectors.bodies.account_deletion);
     });
 

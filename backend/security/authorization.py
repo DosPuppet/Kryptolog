@@ -398,3 +398,45 @@ def workflow_is_deletable(workflow: models.MultisigWorkflow | None) -> bool:
     of the two it failed — "not yours" and "too late" are different answers.
     """
     return workflow is not None and workflow.status != "completed"
+
+
+def succeed_group_owner(db, channel, caller_member, remaining, is_self):
+    """Hand the group over when its owner leaves, or tear it down.
+
+    A channel with no owner is unadministrable (the Q-1 bug), so the departure
+    of an owner must always end with either a new owner or no channel.
+    Successor order: the admin doing the removing, else any existing admin,
+    else the earliest-joined remaining member.
+
+    Returns (new_owner_info, group_deleted). The dict is built here, while the
+    rows are still live, because reading attributes off a deleted or expired
+    instance afterwards is the Q-2 bug. `joined_at` is left as the column value
+    for the caller to render — this module decides succession, not wire format.
+
+    Lives here rather than in the router because account deletion walks every
+    group the departing user belongs to and must not re-derive any of it: two
+    spellings of "who inherits this channel" is the O-2 failure mode, and
+    test_authorization_drift.py pins the two callers against each other.
+    """
+    if not remaining:
+        # Cascades to members and messages.
+        db.delete(channel)
+        return None, True
+
+    if not is_self and caller_member.role == "admin":
+        successor = caller_member
+    else:
+        successor = next((m for m in remaining if m.role == "admin"), None) or min(
+            remaining, key=lambda m: m.joined_at
+        )
+
+    successor.role = "owner"
+    channel.owner_address = successor.user_address
+    db.add(successor)
+    db.add(channel)
+    return {
+        "user_address": successor.user_address,
+        "role": "owner",
+        "username": successor.user.username if successor.user else None,
+        "joined_at": successor.joined_at,
+    }, False

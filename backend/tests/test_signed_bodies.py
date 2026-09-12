@@ -99,26 +99,29 @@ class TestSignedBodiesMatchTheSharedFixture:
     def test_account_deletion(self):
         v = _vectors()
         assert (
-            auth.account_deletion_message(v["nonce"], v["deletion_mode"], v["redaction_ids"])
+            auth.account_deletion_message(v["nonce"], v["deletion_mode"], v["redaction_keys"])
             == v["bodies"]["account_deletion"]
         )
 
-    def test_the_redaction_id_set_is_sorted_numerically(self):
-        """JS sorts lexicographically by default, so [2, 10] spells [10, 2]
-        there and [2, 10] here. A one-character difference that breaks every
-        deletion and is invisible in review — hence ids 2 and 10 in the fixture.
+    def test_the_redaction_set_is_order_independent_and_namespaced(self):
+        """Namespaced ids, and a sort both languages spell the same way.
+
+        "dm:2" vs "dm:10" order differently under a numeric and a lexicographic
+        comparison, and group:10 collides with dm:10 on the bare id — the
+        fixture carries all three so one vector covers both traps.
         """
         v = _vectors()
+        expected = v["bodies"]["account_deletion"]
         assert (
             auth.account_deletion_message(
-                v["nonce"], v["deletion_mode"], list(reversed(v["redaction_ids"]))
+                v["nonce"], v["deletion_mode"], list(reversed(v["redaction_keys"]))
             )
-            == v["bodies"]["account_deletion"]
+            == expected
         )
-        assert (
-            auth.account_deletion_message(v["nonce"], "leave", v["redaction_ids"])
-            != v["bodies"]["account_deletion"]
-        )
+        assert auth.account_deletion_message(v["nonce"], "leave", v["redaction_keys"]) != expected
+        # Stripping the namespace collapses two distinct rows into one.
+        stripped = [k.split(":", 1)[1] for k in v["redaction_keys"]]
+        assert auth.account_deletion_message(v["nonce"], v["deletion_mode"], stripped) != expected
 
 
 class TestTheVectorsAreWhatWeThinkTheyAre:

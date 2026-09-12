@@ -222,7 +222,7 @@ def message_signing_body(*, from_: str, conv: str, sid: str, ct, gid: str = "", 
     return _domain_separate(_CTX_MESSAGE, body)
 
 
-def account_deletion_message(nonce: str, mode: str, redacted_message_ids=()) -> str:
+def account_deletion_message(nonce: str, mode: str, redaction_keys=()) -> str:
     """The bytes a client signs to authorize destroying its own account.
 
     Its own context (H1), so a login signature cannot be replayed as one — and
@@ -231,17 +231,21 @@ def account_deletion_message(nonce: str, mode: str, redacted_message_ids=()) -> 
 
     `mode` is signed because the two modes are not interchangeable: without it a
     relay could downgrade an "erase" into a "leave" or escalate a "leave" into
-    an "erase" under a signature that verifies either way. The redaction id set
-    is signed for the same class of reason — dropping one entry turns a
-    redaction into a deletion, which takes the partner's own history with it.
+    an "erase" under a signature that verifies either way. The redaction set is
+    signed for the same class of reason — dropping one entry turns a redaction
+    into a deletion, which takes the partner's own history with it.
 
-    Sorted NUMERICALLY, matching the explicit comparator on the JS side: its
-    default sort is lexicographic, so [2, 10] would spell [10, 2] there and
-    [2, 10] here. Must be byte-identical to crypto-core's accountDeletionBody().
+    Entries are `"dm:<id>"` / `"group:<id>"`, never bare ids: the two message
+    tables have independent id sequences, so 412 names two different rows and a
+    relay could drop one while the set still matched.
+
+    Sorted with the default string order, which is where JS and Python agree:
+    both compare ASCII code points. Numeric ids would NOT have been safe —
+    JS's default sort is lexicographic, so [2, 10] spells [10, 2] there.
+
+    Must be byte-identical to crypto-core's accountDeletionBody().
     """
-    digest = hashlib.sha256(
-        _canonical_json(sorted(redacted_message_ids)).encode("utf-8")
-    ).hexdigest()
+    digest = hashlib.sha256(_canonical_json(sorted(redaction_keys)).encode("utf-8")).hexdigest()
     return _domain_separate(
         _CTX_ACCOUNT_DELETION, f"nonce={nonce}\nmode={mode}\nredactions={digest}"
     )

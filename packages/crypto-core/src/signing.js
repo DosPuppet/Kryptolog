@@ -123,18 +123,26 @@ export const loginChallengeBody = (nonce, encryptionPublicKeyHex = null) =>
 // destroy stays) or escalate a "leave" into an "erase" (data destroyed that the
 // user asked to keep), under a signature the server accepts either way.
 //
-// The redaction id set is signed for the same class of reason: dropping one
-// entry en route turns a redaction into a deletion, which takes the partner's
-// own history with it. Digested rather than inlined — same reasoning as `keysh`
-// — so the body stays a fixed size for an account with thousands of epochs.
+// The redaction set is signed for the same class of reason: dropping one entry
+// en route turns a redaction into a deletion, which takes the partner's own
+// history with it. Digested rather than inlined — same reasoning as `keysh` —
+// so the body stays a fixed size for an account with thousands of epochs.
 //
-// The numeric sort is NOT cosmetic: JS sorts lexicographically by default, so
-// [2, 10] would become [10, 2] while Python's sorted() gives [2, 10]. That
-// one-character difference breaks every deletion and is invisible in review.
-export const accountDeletionBody = async (nonce, mode, redactedMessageIds = []) =>
+// Entries are `"dm:<id>"` / `"group:<id>"`, NOT bare ids: DMs and group
+// messages live in tables with independent id sequences, so a bare 412 names
+// two different rows and a relay could drop one of them while the set still
+// matched. The prefix is what makes the set a set of messages rather than of
+// numbers.
+//
+// Sorted with the DEFAULT comparator on purpose, now that these are strings:
+// JS sorts by UTF-16 code unit and Python's sorted() by code point, which agree
+// exactly over the ASCII these ids are made of. (Numeric ids would not have
+// been safe here — JS's default sort is lexicographic, so [2, 10] would spell
+// [10, 2] on one side and [2, 10] on the other.)
+export const accountDeletionBody = async (nonce, mode, redactionKeys = []) =>
     domainSeparate(SIGNING_CONTEXT.ACCOUNT_DELETION,
         `nonce=${nonce}\nmode=${mode}\nredactions=${await sha256Hex(
-            canonicalJson([...redactedMessageIds].sort((a, b) => a - b)))}`);
+            canonicalJson([...redactionKeys].sort()))}`);
 
 // --- Encryption-key attestation (audit M-1) ---
 // The address IS the ML-DSA public key (self-certifying), but the ML-KEM
