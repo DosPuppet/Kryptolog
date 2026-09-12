@@ -26,6 +26,11 @@ export default function Login() {
     // Set to 'trustkeys' when a one-button login came back "invite required" —
     // reveals an inline code prompt that retries that method.
     const [pendingInviteMethod, setPendingInviteMethod] = useState(null);
+    // Same thing for the vault modal: a create whose server login was refused
+    // still leaves the vault on this device, so the user comes back through
+    // *unlock* once they have a code. Reveal the field there on a 403 rather
+    // than showing it to every returning user.
+    const [vaultNeedsInvite, setVaultNeedsInvite] = useState(false);
 
     // Open the vault modal in a specific mode ('unlock' | 'create' | 'import').
     const openVault = (mode) => {
@@ -111,12 +116,21 @@ export default function Login() {
                 await importLocalVault(importJson, password, inviteCode.trim() || null);
             } else {
                 if (!password) throw new Error("Password required");
-                await loginLocalVault(password);
+                await loginLocalVault(password, inviteCode.trim() || null);
             }
             setShowVaultModal(false);
+            setVaultNeedsInvite(false);
         } catch (err) {
             console.error("Vault Action Error:", err);
-            setError(err.message);
+            if (err.code === 'INVITE_REQUIRED') {
+                // The vault is already on this device and is the right identity —
+                // only the server registration is missing. Keep the modal open on
+                // the invite field instead of dead-ending on a 403 message.
+                setVaultNeedsInvite(true);
+                setError("This server is invite-only. Enter your invite code to finish creating your account.");
+            } else {
+                setError(err.message);
+            }
         } finally {
             setLoading(false);
         }
@@ -197,7 +211,11 @@ export default function Login() {
                     </button>
                 ) : (
                     <button
-                        onClick={() => hasBiometrics ? handleLogin('biometric') : openVault(hasLocalVault ? 'unlock' : 'create')}
+                        // hasBiometrics is a getter on the context, not a flag: read bare
+                        // it is a function object, so this button always took the
+                        // biometric branch and every password user paid a doomed
+                        // ceremony before the modal opened on the catch.
+                        onClick={() => hasBiometrics() ? handleLogin('biometric') : openVault(hasLocalVault ? 'unlock' : 'create')}
                         disabled={loading}
                         className="w-full bg-emerald-600 hover:bg-emerald-500 text-white font-semibold py-4 px-6 rounded-xl transition-all duration-200 flex items-center justify-center gap-3 disabled:opacity-50 disabled:cursor-not-allowed group mt-4 shadow-lg shadow-emerald-500/20"
                     >
@@ -205,7 +223,7 @@ export default function Login() {
                             <Loader2 className="w-5 h-5 animate-spin" />
                         ) : (
                             <>
-                                {hasBiometrics ? (
+                                {hasBiometrics() ? (
                                     <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                                         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 11c0 3.517-1.009 6.799-2.753 9.571m-3.44-2.04l.054-.09A13.916 13.916 0 008 11a4 4 0 118 0c0 1.017-.07 2.019-.203 3m-2.118 6.844A21.88 21.88 0 0015.171 17m3.839 1.132c.645-2.266.99-4.659.99-7.132A8 8 0 008 4.07M3 15.364c.64-1.319 1-2.8 1-4.364 0-1.457.2-2.858.567-4.168" />
                                     </svg>
@@ -313,7 +331,7 @@ export default function Login() {
                                     />
                                 </div>
 
-                                {vaultMode !== 'unlock' && (
+                                {(vaultMode !== 'unlock' || vaultNeedsInvite) && (
                                     <div>
                                         <label className="block text-xs font-medium text-slate-500 mb-1">
                                             Invite code <span className="text-slate-400">(if required)</span>

@@ -219,7 +219,12 @@ export const PQCProvider = ({ children }) => {
         return performServerLogin(accountId, encryptionKey, (msg) => window.trustkeys.sign(msg), tkAccount.name, inviteCode, attestFn);
     };
 
-    const loginLocalVault = async (password) => {
+    // `inviteCode` is not dead weight on an unlock path: the vault is written to
+    // localStorage by `setup()` *before* the server is asked anything, so a
+    // create that the server refuses for want of an invite code (audit §5)
+    // leaves a perfectly good local identity that the server has never seen.
+    // Without this the only way back in was to clear localStorage by hand.
+    const loginLocalVault = async (password, inviteCode = null) => {
         const success = await vaultService.unlock(password);
         if (!success) throw new Error("Incorrect password");
 
@@ -231,7 +236,7 @@ export const PQCProvider = ({ children }) => {
         setMlkemKey(encryptionKey);
 
         // Pass known password
-        return performServerLogin(accountId, encryptionKey, (msg) => vaultService.sign(msg, password), account.name);
+        return performServerLogin(accountId, encryptionKey, (msg) => vaultService.sign(msg, password), account.name, inviteCode);
     };
 
     const createLocalVault = async (name, password, inviteCode = null) => {

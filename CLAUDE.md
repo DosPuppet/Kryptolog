@@ -598,3 +598,28 @@ are green at `f0fbf9e`**: CI (crypto-core byte-compat, backend pytest + PQC inte
 frontend tests + build, extension tests + build) and Security (pip-audit, CodeQL
 python and javascript-typescript, gitleaks, `npm audit` in all three node packages).
 
+## Invite-only signup left the vault behind — 2026-09-12
+
+Reported from the field: on an invite-only server a new user creates a local
+vault without a code, is refused — and is then stuck. `vaultService.setup()`
+writes the vault to localStorage *before* the server is asked anything, so the
+refusal leaves a perfectly good identity on the device; the screen then offers
+**"Unlock Local Vault"**, whose path had no invite field and no way to carry a
+code. Once the code arrived the only way in was to clear localStorage from the
+browser console.
+
+**The vault is not rolled back on refusal** — that is key custody, and the
+identity is the *right* one, only its server-side registration is missing. The
+unlock path carries an invite code instead: `loginLocalVault(password,
+inviteCode)`, and `Login.jsx` reveals the code field on the unlock form when a
+403 comes back (`vaultNeedsInvite`), rather than showing it to every returning
+user. Four tests in `frontend/src/test/inviteRecovery.test.jsx` drive the real
+provider against a stubbed server, since the bug was in the seam between the
+two; each gate mutation-tested separately.
+
+**One more fell out of writing the test:** `hasBiometrics` is a *getter* on the
+PQC context (`() => biometricsEnabled`), and `Login.jsx` read it bare — a
+function object, always truthy. Every password-only user therefore ran a doomed
+WebAuthn ceremony on the main login button and reached the vault modal through
+the catch, which is also why the button always wore the fingerprint icon. It is
+the only consumer of that context value; `VaultManager` keeps its own state.
