@@ -324,3 +324,124 @@ class TestGrantExpiryHasOneSpelling:
             for g in db_session.query(models.AccessGrant).filter_by(secret_id=secret.id)
         }
         assert remaining == {theirs}
+
+
+class TestLeavingHasOneSpelling:
+    """Account deletion walks every group the user belongs to. That is the
+    second caller of a rule the leave endpoint already had — who inherits a
+    channel, and what happens when nobody is left — and two spellings of it
+    would be the O-2 failure mode again.
+
+    Rather than asserting the outcome twice, these build the SAME fixture twice
+    and drive each path over it, then compare the rows. A re-implementation that
+    got one succession case wrong would pass hand-written assertions about the
+    case its author was thinking of.
+    """
+
+    @staticmethod
+    def _members(db, channel_id):
+        rows = db.query(models.GroupMember).filter_by(channel_id=channel_id).all()
+        return sorted((m.user_address, m.role) for m in rows)
+
+    @staticmethod
+    def _build(client, owner_token, addresses, admin_address=None):
+        resp = client.post(
+            "/groups",
+            json={"name": "drift", "member_addresses": addresses},
+            headers=auth_header(owner_token),
+        )
+        assert resp.status_code == 200, resp.text
+        channel_id = resp.json()["id"]
+        if admin_address:
+            promoted = client.put(
+                f"/groups/{channel_id}/members/{admin_address}/role",
+                json={"role": "admin"},
+                headers=auth_header(owner_token),
+            )
+            assert promoted.status_code == 200, promoted.text
+        return channel_id
+
+    @pytest.mark.parametrize("with_admin", [True, False], ids=["admin-present", "no-admin"])
+    def test_leaving_via_the_endpoint_and_via_deletion_agree(
+        self, client, db_session, user1, user2, with_admin
+    ):
+        import base64
+
+        token1, u1 = user1
+        _, u2 = user2
+        third = synthetic_address("drift-leaver-3")
+        from conftest import do_login
+
+        _, u3 = do_login(client, third, TEST_ENCRYPTION_KEY, "DriftThird")
+        members = [u1["address"], u2["address"], u3["address"]]
+
+        # The endpoint: the owner leaves by removing themselves.
+        endpoint_channel = self._build(
+            client, token1, members, u2["address"] if with_admin else None
+        )
+        left = client.delete(
+            f"/groups/{endpoint_channel}/members/{u1['address']}",
+            headers=auth_header(token1),
+        )
+        assert left.status_code == 200, left.text
+        via_endpoint = self._members(db_session, endpoint_channel)
+
+        # Deletion: the same owner, the same group shape, the other path.
+        deletion_channel = self._build(
+            client, token1, members, u2["address"] if with_admin else None
+        )
+        nonce = client.get(f"/auth/nonce/{u1['address']}").json()["nonce"]
+        deleted = client.post(
+            "/account/delete",
+            json={
+                "mode": "leave",
+                "nonce": nonce,
+                "signature": base64.b64encode(b"\x00" * 2420).decode(),
+                "redactions": [],
+            },
+            headers=auth_header(token1),
+        )
+        assert deleted.status_code == 204, deleted.text
+        db_session.expire_all()
+        via_deletion = self._members(db_session, deletion_channel)
+
+        assert via_deletion == via_endpoint
+        # ...and neither leaves the channel ownerless (the Q-1 bug).
+        owner = db_session.query(models.GroupChannel).filter_by(id=deletion_channel).one()
+        assert owner.owner_address in dict(via_deletion)
+        assert dict(via_deletion)[owner.owner_address] == "owner"
+
+    def test_the_last_member_leaving_tears_the_group_down_either_way(
+        self, client, db_session, user1
+    ):
+        import base64
+
+        token1, u1 = user1
+        endpoint_channel = self._build(client, token1, [u1["address"]])
+        assert (
+            client.delete(
+                f"/groups/{endpoint_channel}/members/{u1['address']}",
+                headers=auth_header(token1),
+            ).status_code
+            == 200
+        )
+
+        deletion_channel = self._build(client, token1, [u1["address"]])
+        nonce = client.get(f"/auth/nonce/{u1['address']}").json()["nonce"]
+        assert (
+            client.post(
+                "/account/delete",
+                json={
+                    "mode": "leave",
+                    "nonce": nonce,
+                    "signature": base64.b64encode(b"\x00" * 2420).decode(),
+                    "redactions": [],
+                },
+                headers=auth_header(token1),
+            ).status_code
+            == 204
+        )
+
+        db_session.expire_all()
+        assert db_session.query(models.GroupChannel).filter_by(id=endpoint_channel).first() is None
+        assert db_session.query(models.GroupChannel).filter_by(id=deletion_channel).first() is None

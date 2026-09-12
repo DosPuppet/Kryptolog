@@ -267,6 +267,52 @@ Still not covered by this: TLS. The block is exercised over plain HTTP, so the
 certificate paths and `ssl_*` directives are syntax-checked (`nginx -t` runs as
 part of the container start) but never handshaken.
 
+## 7. Deleting an account, both modes
+
+Needs two accounts with a shared history, so do this after step 2. The point is
+what OTHER people still see afterwards — the failure this feature exists to
+avoid is invisible from the deleting user's own screen.
+
+**7a. Leave (keep the data).** As account B, click your name (upper right) →
+**Delete user** → *Leave — keep the data* → Continue → confirm → approve the
+signature.
+
+Then, as account A:
+
+- The conversation with B is still there, and **every message still decrypts**,
+  including B's.
+- B shows as **"User removed"**, not as a short address and not as a username.
+- B no longer appears in the directory: search for their name when sharing a
+  secret or adding a group member and confirm they cannot be picked.
+- A group B owned has a new owner, and B is no longer a member.
+
+Then log in again as B **with the same vault**, choosing a new username (and an
+invite code if the server requires one). B's secrets and DM history must all be
+back. *Reload the page before checking* — session keys live only in memory, so a
+reload is what proves the history is genuinely readable rather than cached.
+
+**7b. Erase (delete the history).** Repeat with a second pair of accounts, this
+time choosing *Erase — delete the history*.
+
+As the other account, **reload first**, then check:
+
+- Messages the erased user sent read **"Content removed"** and carry no
+  invalid-signature badge — the author signed that exact form.
+- **Your own messages in that conversation still decrypt.** This is the whole
+  point: the erased user's first message under each session carried the key both
+  sides use, so a naive delete would have taken your own replies with it. A
+  "Click to Decrypt" button that never resolves here is a FAILURE, not a
+  cosmetic issue.
+- A document released to you through a completed multisig workflow still opens.
+- Their signature still appears in Proof Audit on a workflow they signed.
+
+Finally, try to log in again as the erased user with the same vault: it must be
+refused with "This identity was deleted. Register with a new key."
+
+**What to watch for:** both modes are reached through the same two dialogs, and
+`ConfirmDialogHost` maps Enter to "confirm". Holding Enter should still stop at
+the signing prompt — if it does not, the sequence is not a decision.
+
 ## Recording the result
 
 Note the outcome of each step in `CLAUDE.md` under the remediation status, with
