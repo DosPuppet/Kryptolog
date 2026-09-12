@@ -1,5 +1,5 @@
 from datetime import datetime
-from typing import Annotated
+from typing import Annotated, Literal
 
 from pydantic import (
     BaseModel,
@@ -10,7 +10,7 @@ from pydantic import (
     field_validator,
 )
 
-from security.crypto_validation import is_b64
+from security.crypto_validation import is_b64, is_valid_ml_dsa_signature
 from utils.clock import to_wire_utc
 
 # Use for EVERY datetime the API returns: naive on the way in, because that is
@@ -520,3 +520,71 @@ class PushSubscriptionResponse(PushSubscriptionCreate):
     created_at: UtcDateTime
 
     model_config = ConfigDict(from_attributes=True)
+
+
+# ── Account deletion ────────────────────────────────────────────────────────
+
+# One redaction is a namespaced message id plus an ML-DSA signature over the
+# redacted form of that message's body. The signature dominates the size: 3228
+# base64 characters against a couple of dozen for the id.
+#
+# The cap is a DoS bound, not a protocol limit. Erase asks the client to
+# re-sign one message per session epoch it ever opened, so a long-lived account
+# in many conversations can legitimately submit hundreds. At the cap the body
+# is roughly 3.3 MB and the server performs 1000 ML-DSA-44 verifications,
+# ~0.05 s of CPU — expensive enough to bound, cheap enough not to refuse a real
+# account.
+MAX_REDACTIONS_PER_DELETE = 1_000
+# "dm:" / "group:" plus a 64-bit id, with room to spare.
+MAX_REDACTION_KEY_LEN = 32
+
+
+class RedactionSignature(BaseModel):
+    key: str = Field(..., max_length=MAX_REDACTION_KEY_LEN)
+    signature: str = Field(..., max_length=SIGNATURE_CHARS)
+
+    @field_validator("signature")
+    @classmethod
+    def _signature_is_ml_dsa(cls, v: str) -> str:
+        # Exact length and canonical spelling, not a length guess: a signature
+        # commits to its message AS A STRING, so a second valid spelling of one
+        # signature would be a second valid signature for it (audit L-12).
+        if not is_valid_ml_dsa_signature(v):
+            raise ValueError("signature must be a canonical base64 ML-DSA-44 signature")
+        return v
+
+
+class AccountDeleteRequest(BaseModel):
+    # "leave" keeps every row and can be undone by logging in again; "erase"
+    # removes the user's content and blocks the key forever. Both are signed,
+    # and the MODE is part of what is signed — see auth.account_deletion_message.
+    mode: Literal["leave", "erase"]
+    nonce: str = Field(..., max_length=200)
+    signature: str = Field(..., max_length=SIGNATURE_CHARS)
+    redactions: list[RedactionSignature] = Field(
+        default_factory=list, max_length=MAX_REDACTIONS_PER_DELETE
+    )
+
+    @field_validator("signature")
+    @classmethod
+    def _signature_is_ml_dsa(cls, v: str) -> str:
+        if not is_valid_ml_dsa_signature(v):
+            raise ValueError("signature must be a canonical base64 ML-DSA-44 signature")
+        return v
+
+
+class RedactableMessageResponse(BaseModel):
+    """One message the client must re-sign before an erase.
+
+    `conv` and `gid` are derived server-side from the delivered row (audit
+    F-1); the client signs what it is given here rather than choosing its own,
+    and a lying manifest could only produce a signature the server rejects.
+    """
+
+    id: int
+    kind: Literal["dm", "group"]
+    key: str
+    conv: str
+    gid: str
+    sid: str | None
+    keys: dict

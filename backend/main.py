@@ -16,7 +16,17 @@ from slowapi.errors import RateLimitExceeded
 from starlette.middleware.base import BaseHTTPMiddleware
 
 from dependencies import limiter
-from routers import auth, groups, messenger, multisig, notifications, secrets, transfers, users
+from routers import (
+    account,
+    auth,
+    groups,
+    messenger,
+    multisig,
+    notifications,
+    secrets,
+    transfers,
+    users,
+)
 
 # ── App & Middleware (initialised FIRST so CORS always works) ───
 
@@ -130,6 +140,7 @@ signing.get_jwt_secret()
 # ── Routers ─────────────────────────────────────────────────────
 
 app.include_router(auth.router)
+app.include_router(account.router)
 app.include_router(users.router)
 app.include_router(secrets.router)
 app.include_router(multisig.router)

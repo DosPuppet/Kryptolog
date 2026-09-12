@@ -10,6 +10,7 @@ import models
 import schemas
 from database import get_db
 from dependencies import get_current_user, limiter
+from security import authorization
 from security.crypto_validation import is_valid_ml_dsa_public_key, is_valid_ml_kem_public_key
 from security.usernames import InvalidUsername, normalize_username, username_taken
 from utils.clock import utcnow_naive
@@ -49,7 +50,7 @@ def get_nonce(request: Request, address: str, db: Session = Depends(get_db)):
     return {"nonce": nonce_val}
 
 
-def _claim_nonce(db: Session, address: str, nonce: str) -> bool:
+def claim_nonce(db: Session, address: str, nonce: str) -> bool:
     """Consume the login nonce atomically, returning whether this caller won it.
 
     The claim happens BEFORE signature verification (KRY-004). The old flow was
@@ -60,6 +61,9 @@ def _claim_nonce(db: Session, address: str, nonce: str) -> bool:
     means exactly one caller can ever claim a given nonce — whoever's statement
     reports rowcount == 1 — and the expensive crypto happens after the claim is
     already settled.
+
+    Public because account deletion claims a challenge the same way: the same
+    single-use guarantee, for an action even less repeatable than a login.
 
     An address may hold several live challenges at once (audit H-1), which
     changes nothing here: the predicate names one of them, and the delete is
@@ -115,10 +119,8 @@ def _verify_login_payload(login_req: schemas.LoginRequest, address: str) -> None
             raise HTTPException(status_code=400, detail="Invalid encryption key attestation")
 
 
-def _register_user(
-    db: Session, login_req: schemas.LoginRequest, address: str, attestation: str | None
-) -> models.User:
-    """Create a brand-new identity, consuming an invite if the server needs one."""
+def _claim_username(db: Session, login_req: schemas.LoginRequest, address: str) -> str:
+    """The username a new or revived identity will hold."""
     try:
         default_username = normalize_username(login_req.username) or address[:7]
     except InvalidUsername as exc:
@@ -132,6 +134,59 @@ def _register_user(
             status_code=409,
             detail=f"Username '{default_username}' is already taken. Please choose a different one.",
         )
+    return default_username
+
+
+def _consume_invite_or_403(db: Session, login_req: schemas.LoginRequest, address: str) -> None:
+    """Access filter (audit §5): a new identity needs a valid code.
+
+    Generic 403 on failure — no distinction between missing/expired/used, to
+    avoid turning this into an invite-code oracle.
+    """
+    if config.invites_required() and not invites.consume_invite(
+        db, login_req.invite_code, used_by=address
+    ):
+        db.rollback()
+        raise HTTPException(status_code=403, detail="A valid invite code is required to register.")
+
+
+def _revive_user(
+    db: Session,
+    login_req: schemas.LoginRequest,
+    address: str,
+    attestation: str | None,
+    user: models.User,
+) -> models.User:
+    """Bring back an identity deleted with the "leave" mode.
+
+    Every row the account owned is still attached to this address — nothing was
+    ever detached — so reviving the row restores the account with its data.
+
+    It is still an ADMISSION, not a plain login: the username was freed on the
+    way out and may now belong to somebody else, and an invite-only server
+    charges a fresh code. Deleting and returning must not be a way around the
+    access filter.
+    """
+    username = _claim_username(db, login_req, address)
+
+    user.username = username
+    user.encryption_public_key = login_req.encryption_public_key
+    user.encryption_key_attestation = attestation
+    user.deleted_at = None
+    db.add(user)
+    db.flush()
+
+    _consume_invite_or_403(db, login_req, address)
+    db.commit()
+    db.refresh(user)
+    return user
+
+
+def _register_user(
+    db: Session, login_req: schemas.LoginRequest, address: str, attestation: str | None
+) -> models.User:
+    """Create a brand-new identity, consuming an invite if the server needs one."""
+    default_username = _claim_username(db, login_req, address)
 
     user = models.User(
         address=address,
@@ -149,13 +204,7 @@ def _register_user(
     # Access filter (audit §5): a brand-new identity may only be created with a
     # valid invite code when invites are required. Consumed atomically so the
     # same code can't be over-spent. Existing users never reach this branch.
-    # Generic 403 on failure — no distinction between missing/expired/used, to
-    # avoid turning this into an invite-code oracle.
-    if config.invites_required() and not invites.consume_invite(
-        db, login_req.invite_code, used_by=address
-    ):
-        db.rollback()
-        raise HTTPException(status_code=403, detail="A valid invite code is required to register.")
+    _consume_invite_or_403(db, login_req, address)
 
     db.commit()
     db.refresh(user)
@@ -170,6 +219,20 @@ def _upsert_identity(
 
     if not user:
         return _register_user(db, login_req, address, attestation)
+
+    if user.deleted_at is not None:
+        # An "erase" deletion is final, and this is the one check that makes
+        # the modal's promise true. Explicit rather than generic on purpose:
+        # only the holder of the key reaches this point, and they are owed the
+        # reason. GET /auth/nonce/{address} stays silent for the opposite
+        # reason — it is unauthenticated, so answering there would turn it into
+        # a "was this address deleted" oracle for anybody.
+        if not authorization.may_register(user):
+            raise HTTPException(
+                status_code=403,
+                detail="This identity was deleted. Register with a new key.",
+            )
+        return _revive_user(db, login_req, address, attestation, user)
 
     if (
         login_req.encryption_public_key
@@ -207,7 +270,7 @@ def login(request: Request, login_req: schemas.LoginRequest, db: Session = Depen
     """
     address = login_req.address.lower()
 
-    if not _claim_nonce(db, address, login_req.nonce):
+    if not claim_nonce(db, address, login_req.nonce):
         # Missing, mismatched, expired, or already consumed — one generic
         # answer, so this can't be used to probe which nonces exist.
         raise HTTPException(status_code=400, detail="Invalid or expired nonce.")

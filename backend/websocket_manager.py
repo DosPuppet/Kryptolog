@@ -32,6 +32,11 @@ from fastapi import WebSocket
 logger = logging.getLogger("kryptolog.ws")
 
 FANOUT_CHANNEL = "kryptolog:ws:fanout"
+
+# Reserved frame type: not a message for the user, an instruction to every
+# worker holding one of their sockets to hang up. Fanned out like any other
+# frame so it reaches sockets this worker does not own.
+ACCOUNT_DELETED = "ACCOUNT_DELETED"
 # Presence: ONE sorted set per address (audit L-7).
 #   key    kryptolog:ws:presence:{address}
 #   member "{conn_id}:{state}", state ∈ PRESENCE_STATES
@@ -296,6 +301,42 @@ class ConnectionManager:
                 await connection.send_json(message)
             except Exception as e:
                 logger.warning("Sending WS message failed: %s", e)
+        if message.get("type") == ACCOUNT_DELETED:
+            await self.close_address(user_address, notify=False)
+
+    async def close_address(self, user_address: str, *, notify: bool = True):
+        """Hang up on an address whose account has just been deleted.
+
+        A database write does not close a socket that is already open. The
+        deleted identity cannot RECONNECT — user_for_token refuses a deleted
+        row, and the WS handshake goes through the same dependency — but
+        without this its current tabs keep receiving other people's messages
+        until they happen to reload.
+
+        In shared mode those sockets may be on another worker, so the close is
+        fanned out through the existing pub/sub as a reserved message type that
+        _deliver_local turns back into a close. Note the rolling-restart caveat
+        the L-7 presence change documents: a worker on the previous build will
+        deliver ACCOUNT_DELETED as an ordinary frame and not close the socket,
+        so the SPA must treat it as "log out now" in its own right.
+        """
+        if notify:
+            await self.send_personal_message({"type": ACCOUNT_DELETED}, user_address)
+
+        for connection in list(self.active_connections.get(user_address, [])):
+            try:
+                await connection.close()
+            except Exception as e:
+                logger.warning("Closing WS for a deleted account failed: %s", e)
+            await self.disconnect(connection, user_address)
+
+        # Presence is keyed per address and read by the push path, so a
+        # deleted account left in it looks online for up to PRESENCE_TTL.
+        if self.shared:
+            try:
+                await self._redis.delete(self._presence_key(user_address))
+            except Exception as e:
+                logger.warning("WS presence purge failed: %s", e)
 
 
 manager = ConnectionManager()
