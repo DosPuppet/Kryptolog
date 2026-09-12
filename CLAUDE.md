@@ -741,10 +741,15 @@ gate mutation-tested individually.
   `E2E-RECIPE.md` §7 covers both modes and is written from the *other* account's
   screen, because the failure this feature exists to avoid is invisible from the
   deleting user's own.
-- `ConnectionManager.close_address` has no test. It needs `fakeredis` and the
-  `test_ws_fanout.py` harness; the HTTP side is already safe (`user_for_token`
-  refuses a deleted row and the WS handshake uses the same dependency), so what
-  is uncovered is only whether an already-open socket is hung up promptly.
+- ~~`ConnectionManager.close_address` has no test.~~ **Covered now** — four in
+  `test_ws_fanout.py`: every socket for the address is closed (not just the
+  first), the hangup reaches a socket held by *another worker* through the
+  pub/sub fan-out, it works in single-process mode, and presence is purged even
+  for a connection this worker never held. That last one earns its place: the
+  first version of the presence assertion passed with the purge deleted,
+  because `disconnect()` already removes each socket's own entry — the explicit
+  purge exists for an entry left by a worker that died, and only a test that
+  plants one can tell the difference.
 - Rolling restarts: a worker on the previous build will deliver the reserved
   `ACCOUNT_DELETED` frame as an ordinary message and not close the socket, so
   the SPA should treat it as "log out now" in its own right. It does not yet.

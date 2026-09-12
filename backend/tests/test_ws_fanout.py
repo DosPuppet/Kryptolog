@@ -59,13 +59,17 @@ class _CommandSpy:
 
 
 class FakeWebSocket:
-    """Just enough of a WebSocket for the manager: hashable + send_json."""
+    """Just enough of a WebSocket for the manager: hashable + send_json + close."""
 
     def __init__(self):
         self.sent = []
+        self.closed = False
 
     async def send_json(self, message):
         self.sent.append(message)
+
+    async def close(self):
+        self.closed = True
 
 
 async def _make_shared_manager():
@@ -363,3 +367,112 @@ async def test_startup_with_unreachable_redis_degrades_to_local(addr):
     await mgr.connect(ws, addr)
     await mgr.send_personal_message({"type": "TEST_EVENT"}, addr)
     assert ws.sent == [{"type": "TEST_EVENT"}]
+
+
+# ── Hanging up on a deleted account ─────────────────────────────────────────
+#
+# A database write does not close a socket that is already open. The deleted
+# identity cannot RECONNECT — user_for_token refuses a deleted row and the WS
+# handshake goes through the same dependency — so what these cover is the
+# window where their current tabs would otherwise keep receiving other people's
+# messages until something happened to reload them.
+
+
+@pytest.mark.anyio
+async def test_deleting_an_account_closes_its_sockets_and_clears_presence(addr):
+    mgr = await _make_shared_manager()
+    try:
+        first, second = FakeWebSocket(), FakeWebSocket()
+        await mgr.connect(first, addr)
+        await mgr.connect(second, addr)
+        assert mgr.is_connected(addr) is True
+
+        await mgr.close_address(addr)
+
+        assert first.closed and second.closed, "every socket for the address, not just the first"
+        assert mgr.active_connections.get(addr) in (None, [])
+        assert mgr.is_connected(addr) is False
+    finally:
+        await mgr.shutdown()
+
+
+@pytest.mark.anyio
+async def test_presence_is_purged_even_for_connections_this_worker_never_held(addr):
+    """Why close_address deletes the whole presence key rather than relying on
+    disconnect().
+
+    disconnect() removes the entry for a socket THIS worker holds. An entry left
+    by a worker that died still sits in the set until its score expires, and the
+    push path reads that set — so a deleted account would look online for up to
+    the 90s TTL and be sent other people's notifications.
+    """
+    mgr = await _make_shared_manager()
+    try:
+        await mgr._redis.zadd(
+            mgr._presence_key(addr), {"ghost-connection:focused": time.time() + 90}
+        )
+        assert mgr.is_connected(addr) is True
+
+        await mgr.close_address(addr)
+
+        assert mgr._presence_states(addr) == []
+        assert mgr.is_connected(addr) is False
+    finally:
+        await mgr.shutdown()
+
+
+@pytest.mark.anyio
+async def test_the_hangup_reaches_sockets_held_by_another_worker(addr):
+    """The reason it goes through pub/sub at all.
+
+    In shared mode the deleted user's sockets may be on a worker that knows
+    nothing about the request that deleted them, so a local-only close would
+    leave those tabs live.
+    """
+    if not os.getenv("TEST_REDIS_URL"):
+        import fakeredis
+        import fakeredis.aioredis
+
+        server = fakeredis.FakeServer()
+
+        async def make():
+            m = ConnectionManager(redis_url="redis://fake")
+            await m.startup(
+                redis_client=fakeredis.aioredis.FakeRedis(server=server, decode_responses=True),
+                redis_sync_client=fakeredis.FakeRedis(server=server, decode_responses=True),
+            )
+            return m
+
+        mgr_a, mgr_b = await make(), await make()
+    else:
+        mgr_a, mgr_b = await _make_shared_manager(), await _make_shared_manager()
+
+    try:
+        ws = FakeWebSocket()
+        await mgr_b.connect(ws, addr)
+
+        # Worker A handles the deletion and holds no socket for this address.
+        await mgr_a.close_address(addr)
+
+        assert await _wait_for(lambda: ws.closed), "worker B never hung up"
+        # It is told why before the socket goes, so a client on an older build
+        # (which will not be closed for it) can still log itself out.
+        assert ws.sent and ws.sent[-1]["type"] == "ACCOUNT_DELETED"
+    finally:
+        await mgr_a.shutdown()
+        await mgr_b.shutdown()
+
+
+@pytest.mark.anyio
+async def test_closing_works_without_redis(addr):
+    """Single-process mode is the default for a dev box, and the deletion
+    endpoint calls this unconditionally."""
+    mgr = ConnectionManager(redis_url=None)
+    assert not mgr.shared
+
+    ws = FakeWebSocket()
+    await mgr.connect(ws, addr)
+    await mgr.close_address(addr)
+
+    assert ws.closed
+    assert mgr.active_connections.get(addr) in (None, [])
