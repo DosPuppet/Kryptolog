@@ -591,3 +591,10 @@ Mutation-tested: restoring the one-challenge-per-address semantics fails exactly
 `test_a_stranger_cannot_invalidate_a_pending_login` and
 `test_each_live_challenge_is_still_single_use`, and no others. Backend suite is
 463 → **466**.
+
+**Merged to `main` on 2026-09-11** (fast-forward, `e847eda`..`f0fbf9e`; the branch
+is still around at the merged commit) and **pushed — both GitHub Actions workflows
+are green at `f0fbf9e`**: CI (crypto-core byte-compat, backend pytest + PQC interop,
+frontend tests + build, extension tests + build) and Security (pip-audit, CodeQL
+python and javascript-typescript, gitleaks, `npm audit` in all three node packages).
+
