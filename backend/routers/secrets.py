@@ -200,7 +200,7 @@ async def share_secret(
     )
     _refuse_if_workflow_managed(db, grant.secret_id, "manually share")
 
-    grantee = db.query(models.User).filter(models.User.address == grantee_address).first()
+    grantee = authorization.find_active_user(db, grantee_address)
     if not grantee:
         raise HTTPException(status_code=404, detail="Grantee not found")
 

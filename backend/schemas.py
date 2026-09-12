@@ -136,6 +136,13 @@ class UserResponse(UserBase):
     # Self-signed ML-KEM key attestation (audit M-1) — peers verify this against
     # the address before encrypting to encryption_public_key.
     encryption_key_attestation: str | None = None
+    # True once the identity has been deleted. The row is kept, stripped, so
+    # that messages and workflows which still name the address can render as
+    # "user removed" rather than as an unknown stranger — a deleted account is
+    # not the same thing as a lookup that failed, and only the server can tell
+    # the two apart. A bare username of None would be indistinguishable from an
+    # account that simply never set one.
+    deleted: bool = False
 
     model_config = ConfigDict(from_attributes=True)
 

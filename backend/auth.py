@@ -1,4 +1,6 @@
 import base64
+import hashlib
+import json
 import logging
 import os
 import secrets
@@ -121,6 +123,128 @@ def multisig_approval_message(workflow_id, secret_id, ciphertext_sha256_hex: str
     (frontend `multisigApprovalMessage`)."""
     body = f"workflow={workflow_id}\nsecret={secret_id}\nct={ciphertext_sha256_hex}"
     return _domain_separate(_CTX_MULTISIG, body)
+
+
+_CTX_MESSAGE = "message"
+_CTX_ACCOUNT_DELETION = "account-deletion"
+
+
+class NonCanonicalKeyEnvelope(ValueError):
+    """A key envelope whose shape the two languages would not agree on."""
+
+
+def _canonical_json(value) -> str:
+    """Mirror of crypto-core's `canonicalJson` (encoding.js).
+
+    Sorted keys, no whitespace, `JSON.stringify` semantics for scalars. Only
+    reached through `message_signing_body`, and only over values
+    `_check_envelope_shape` has already accepted — see there for why that
+    restriction is what makes this mirror safe rather than merely close.
+    """
+    if value is None:
+        return "null"
+    if isinstance(value, list):
+        return "[" + ",".join(_canonical_json(v) for v in value) + "]"
+    if isinstance(value, dict):
+        return (
+            "{"
+            + ",".join(
+                f"{json.dumps(k, ensure_ascii=False)}:{_canonical_json(value[k])}"
+                for k in sorted(value)
+            )
+            + "}"
+        )
+    if isinstance(value, bool) or not isinstance(value, (str, int)):
+        # Bools, floats and everything exotic are refused rather than guessed
+        # at: Python renders True as "True" and 1.0 as "1.0" where JS gives
+        # "true" and "1", so agreeing here would be a coincidence.
+        raise NonCanonicalKeyEnvelope(f"unsupported value type: {type(value).__name__}")
+    return json.dumps(value, ensure_ascii=False)
+
+
+def check_envelope_shape(keys) -> None:
+    """Refuse a key envelope this mirror cannot promise to spell like JS.
+
+    `_canonical_json` agrees with `canonicalJson` on ASCII strings and integers
+    and nothing else: Python escapes non-ASCII by default where JS does not,
+    the two sort by code point vs UTF-16 code unit, and lone surrogates cannot
+    round-trip at all. In production a `keys` map is address → {kem, iv,
+    encKey}, i.e. lowercase hex mapping to base64 — all ASCII, where the two
+    provably agree.
+
+    So this validates that assumption instead of assuming it. A payload that
+    fails is refused, NOT hashed: a digest computed over a value the client
+    spelled differently would fail verification for a reason nothing reports.
+    """
+
+    def ascii_str(v) -> bool:
+        return isinstance(v, str) and v.isascii()
+
+    if not isinstance(keys, dict) or not keys:
+        raise NonCanonicalKeyEnvelope("key envelope must be a non-empty object")
+    for name, entry in keys.items():
+        if not ascii_str(name):
+            raise NonCanonicalKeyEnvelope("key envelope names must be ASCII strings")
+        if not isinstance(entry, dict) or not entry:
+            raise NonCanonicalKeyEnvelope("each wrapped key must be a non-empty object")
+        for field, value in entry.items():
+            if not ascii_str(field) or not ascii_str(value):
+                raise NonCanonicalKeyEnvelope("wrapped key fields must be ASCII strings")
+
+
+def _canonical_ciphertext(ct) -> str:
+    """Mirror of crypto-core's `canonicalCiphertext`: the AES-GCM envelope
+    object serializes as `iv.content`, a pre-serialized string passes through.
+    '.' is not in the base64 alphabet, so the separator stays unambiguous."""
+    if isinstance(ct, dict):
+        return f"{ct.get('iv')}.{ct.get('content')}"
+    return ct
+
+
+def message_signing_body(*, from_: str, conv: str, sid: str, ct, gid: str = "", keys=None) -> str:
+    """The bytes a sender signs for one chat message (audit S1).
+
+    Must stay byte-identical to crypto-core's `messageSigningBody` — and unlike
+    the other bodies here, this one had no Python half until account deletion
+    needed it, because the server never verified a message signature. It does
+    now, for redactions only.
+
+    Both branches are implemented even though only `ct=None` is reached in
+    production: without the live branch nothing proves this `keysh` agrees with
+    the JS one over a real key envelope, and that agreement is the whole point
+    of the shared fixture.
+    """
+    if keys is not None:
+        check_envelope_shape(keys)
+    tail = "\nredacted=1" if ct is None else f"\nct={_canonical_ciphertext(ct)}"
+    keysh = hashlib.sha256(_canonical_json(keys).encode("utf-8")).hexdigest()
+    body = f"from={from_}\nconv={conv}\ngid={gid or ''}\nsid={sid}\nkeysh={keysh}" + tail
+    return _domain_separate(_CTX_MESSAGE, body)
+
+
+def account_deletion_message(nonce: str, mode: str, redacted_message_ids=()) -> str:
+    """The bytes a client signs to authorize destroying its own account.
+
+    Its own context (H1), so a login signature cannot be replayed as one — and
+    so the extension will not auto-sign it: TrustKeys silently signs only
+    `message`-context bodies, and this deliberately falls outside that.
+
+    `mode` is signed because the two modes are not interchangeable: without it a
+    relay could downgrade an "erase" into a "leave" or escalate a "leave" into
+    an "erase" under a signature that verifies either way. The redaction id set
+    is signed for the same class of reason — dropping one entry turns a
+    redaction into a deletion, which takes the partner's own history with it.
+
+    Sorted NUMERICALLY, matching the explicit comparator on the JS side: its
+    default sort is lexicographic, so [2, 10] would spell [10, 2] there and
+    [2, 10] here. Must be byte-identical to crypto-core's accountDeletionBody().
+    """
+    digest = hashlib.sha256(
+        _canonical_json(sorted(redacted_message_ids)).encode("utf-8")
+    ).hexdigest()
+    return _domain_separate(
+        _CTX_ACCOUNT_DELETION, f"nonce={nonce}\nmode={mode}\nredactions={digest}"
+    )
 
 
 def _sig_bytes(signature: str) -> bytes:

@@ -69,7 +69,7 @@ async def create_group(
     if current_user.address not in member_addrs:
         member_addrs.append(current_user.address)
 
-    users = db.query(models.User).filter(models.User.address.in_(member_addrs)).all()
+    users = authorization.active_users(db).filter(models.User.address.in_(member_addrs)).all()
     found_addrs = {u.address for u in users}
     missing = set(member_addrs) - found_addrs
     if missing:
@@ -352,7 +352,7 @@ async def add_member(
     if authorization.is_group_member(db, channel_id, new_addr):
         raise HTTPException(status_code=400, detail="User is already a member")
 
-    target_user = db.query(models.User).filter(models.User.address == new_addr).first()
+    target_user = authorization.find_active_user(db, new_addr)
     if not target_user:
         raise HTTPException(status_code=404, detail="User not found")
 

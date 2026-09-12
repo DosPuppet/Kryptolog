@@ -18,6 +18,7 @@ side gets to be the definition of correct.
 """
 
 import base64
+import hashlib
 import json
 import pathlib
 
@@ -63,6 +64,62 @@ class TestSignedBodiesMatchTheSharedFixture:
             == v["bodies"]["multisig_approval"]
         )
 
+    def test_message_body(self):
+        """The newest mirror, and the one with the most room to drift: it
+        digests a canonical JSON rendering of the key envelope, and Python and
+        JS disagree about JSON given half a chance (non-ASCII escaping, sort
+        order, number formatting)."""
+        v = _vectors()
+        assert (
+            auth.message_signing_body(
+                from_=v["message_from"],
+                conv=v["message_conv"],
+                gid=v["message_gid"],
+                sid=v["message_sid"],
+                ct=v["message_ct"],
+                keys=v["message_keys"],
+            )
+            == v["bodies"]["message"]
+        )
+
+    def test_author_redacted_message_body(self):
+        v = _vectors()
+        assert (
+            auth.message_signing_body(
+                from_=v["message_from"],
+                conv=v["message_conv"],
+                gid=v["message_gid"],
+                sid=v["message_sid"],
+                ct=None,
+                keys=v["message_keys"],
+            )
+            == v["bodies"]["message_redacted"]
+        )
+
+    def test_account_deletion(self):
+        v = _vectors()
+        assert (
+            auth.account_deletion_message(v["nonce"], v["deletion_mode"], v["redaction_ids"])
+            == v["bodies"]["account_deletion"]
+        )
+
+    def test_the_redaction_id_set_is_sorted_numerically(self):
+        """JS sorts lexicographically by default, so [2, 10] spells [10, 2]
+        there and [2, 10] here. A one-character difference that breaks every
+        deletion and is invisible in review — hence ids 2 and 10 in the fixture.
+        """
+        v = _vectors()
+        assert (
+            auth.account_deletion_message(
+                v["nonce"], v["deletion_mode"], list(reversed(v["redaction_ids"]))
+            )
+            == v["bodies"]["account_deletion"]
+        )
+        assert (
+            auth.account_deletion_message(v["nonce"], "leave", v["redaction_ids"])
+            != v["bodies"]["account_deletion"]
+        )
+
 
 class TestTheVectorsAreWhatWeThinkTheyAre:
     """Guards the fixture itself. Asserting agreement with a file that both
@@ -83,7 +140,50 @@ class TestTheVectorsAreWhatWeThinkTheyAre:
             "context=login",
             "context=key-attestation",
             "context=multisig-approval",
+            "context=message",
+            "context=account-deletion",
         }
+
+    def test_a_redaction_differs_from_the_live_message_in_its_last_line_only(self):
+        """The redacted form keeps the author, conversation, gid, sid and key
+        envelope and drops only the ciphertext — that is what lets the partner
+        keep decrypting their own replies under the same session."""
+        v = _vectors()
+        live, redacted = v["bodies"]["message"], v["bodies"]["message_redacted"]
+        assert live.rsplit("\n", 1)[0] == redacted.rsplit("\n", 1)[0]
+        assert redacted.endswith("\nredacted=1")
+        assert live.endswith("\nct=AAAAAAAAAAAAAAAA.3q2+7w==")
+
+    def test_no_ciphertext_value_can_spell_a_redaction(self):
+        """If one could, a single signature would be valid for two different
+        messages, and a server could pass a live message off as author-redacted.
+        """
+        v = _vectors()
+        common = dict(
+            from_=v["message_from"],
+            conv=v["message_conv"],
+            gid=v["message_gid"],
+            sid=v["message_sid"],
+            keys=v["message_keys"],
+        )
+        redacted = auth.message_signing_body(ct=None, **common)
+        for ct in ("null", "None", "redacted=1", "", "1"):
+            assert auth.message_signing_body(ct=ct, **common) != redacted
+
+    def test_the_key_envelope_digest_is_independently_reproducible(self):
+        """Guards the fixture: agreement with a file both sides regenerate would
+        pass for any value, including a broken one."""
+        v = _vectors()
+        canon = (
+            "{"
+            + ",".join(
+                f'"{name}":{{"encKey":"{e["encKey"]}","iv":"{e["iv"]}","kem":"{e["kem"]}"}}'
+                for name, e in sorted(v["message_keys"].items())
+            )
+            + "}"
+        )
+        digest = hashlib.sha256(canon.encode("utf-8")).hexdigest()
+        assert f"keysh={digest}" in v["bodies"]["message"]
 
     def test_binding_the_encryption_key_changes_the_bytes(self):
         v = _vectors()

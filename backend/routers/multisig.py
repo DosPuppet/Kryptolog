@@ -68,9 +68,9 @@ def create_multisig_workflow(
     }
     known = {
         addr
-        for (addr,) in db.query(models.User.address).filter(
-            models.User.address.in_(participant_addrs)
-        )
+        for (addr,) in authorization.active_users(db)
+        .with_entities(models.User.address)
+        .filter(models.User.address.in_(participant_addrs))
     }
     if participant_addrs - known:
         raise HTTPException(

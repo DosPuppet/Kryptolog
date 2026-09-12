@@ -72,6 +72,26 @@ class User(Base):
     # and are rejected once it no longer matches (token revocation).
     token_version = Column(Integer, nullable=False, default=0, server_default="0")
     created_at = Column(DateTime, default=utcnow_naive)
+    # Account deletion STRIPS this row instead of removing it: username,
+    # encryption_public_key and encryption_key_attestation go to NULL and this
+    # is stamped. The row survives because the address is a foreign key from
+    # nine other tables, and both deletion modes deliberately leave rows behind
+    # that still name it — messages others still read, and signatures the owner
+    # of someone else's workflow relies on. Deleting the row would mean dropping
+    # those constraints, and `db.delete(instance)` would first NULL the very
+    # sender_address / owner_address columns those signatures verify against.
+    #
+    # What is left here is the address, which IS the ML-DSA public key and is
+    # public data embedded in every message the identity ever signed. So nothing
+    # survives this that a hard delete would have removed.
+    #
+    # NULL = active. Every "is this a usable identity" question goes through
+    # security/authorization.py, never through an inline check on this column.
+    deleted_at = Column(DateTime, nullable=True)
+    # True only for the "erase" mode: the key may never register again. A
+    # "leave" deletion sets deleted_at alone, and logging in with the same vault
+    # revives the account with its data still attached.
+    blocked = Column(Boolean, nullable=False, default=False, server_default="false")
 
     # Usernames are unique case-INSENSITIVELY: a plain unique index is
     # case-sensitive on PostgreSQL, which would let "alice" and "Alice" exist as
@@ -90,6 +110,17 @@ class User(Base):
         Index("ix_users_username_unique", username, unique=True),
         Index("ix_users_username_lower_unique", func.lower(username), unique=True),
     )
+
+    @property
+    def deleted(self) -> bool:
+        """What the API exposes instead of the timestamp.
+
+        Read by `schemas.UserResponse` via from_attributes. The wire carries a
+        flag rather than `deleted_at` because when the account went is nobody
+        else's business — the clients only need to know to render "user
+        removed" instead of a name.
+        """
+        return self.deleted_at is not None
 
     secrets = relationship("Secret", back_populates="owner")
     access_grants = relationship("AccessGrant", back_populates="grantee")

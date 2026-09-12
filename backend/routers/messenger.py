@@ -20,6 +20,7 @@ import models
 import schemas
 from database import SessionLocal, get_db
 from dependencies import get_current_user, limiter, user_for_token
+from security import authorization
 from security.crypto_validation import is_usable_encryption_key
 from utils.clock import to_wire_utc
 from utils.push import display_name, notify_user_push_async
@@ -39,7 +40,7 @@ async def send_message(
     db: Session = Depends(get_db),
 ):
     recipient_addr = msg.recipient_address.lower()
-    recipient = db.query(models.User).filter(models.User.address == recipient_addr).first()
+    recipient = authorization.find_active_user(db, recipient_addr)
     if not recipient:
         raise HTTPException(status_code=404, detail="Recipient not found")
 

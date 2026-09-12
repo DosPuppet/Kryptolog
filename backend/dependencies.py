@@ -10,6 +10,7 @@ from sqlalchemy.orm import Session
 import auth
 import models
 from database import get_db
+from security import authorization
 
 logger = logging.getLogger("kryptolog.ratelimit")
 
@@ -103,6 +104,12 @@ def user_for_token(token: str, db: Session):
         return None
     user = db.query(models.User).filter(models.User.address == address.lower()).first()
     if user is None:
+        return None
+    # A deleted identity cannot authenticate. Deletion already bumps
+    # token_version, so the check below would refuse every token minted before
+    # it — but this does not depend on that: a row stripped of its keys must
+    # never carry a session, whatever its version happens to be.
+    if not authorization.is_active(user):
         return None
     if payload.get("tv", 0) != (user.token_version or 0):
         return None

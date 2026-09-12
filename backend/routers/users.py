@@ -6,6 +6,7 @@ import models
 import schemas
 from database import get_db
 from dependencies import get_current_user, limiter
+from security import authorization
 from security.crypto_validation import LEGACY_MIN_KEY_LEN
 from security.usernames import InvalidUsername, normalize_username, username_taken
 
@@ -66,6 +67,11 @@ def get_user(
     current_user: models.User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
+    # Deliberately answers for a DELETED identity too, marked `deleted` by the
+    # response model. This is the directory half of the rule in
+    # security/authorization.py: a message or a group that still names the
+    # address has to render as "user removed" rather than as an unknown
+    # stranger, and this is the only lookup that can say which it is.
     user = db.query(models.User).filter(models.User.address == address.lower()).first()
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
@@ -86,7 +92,10 @@ def list_users(
     current_user: models.User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    query = db.query(models.User)
+    # Deleted identities are excluded here, unlike the two by-address lookups:
+    # this list exists to PICK someone — to share a secret, add a member, start
+    # a conversation — and a stripped row has no encryption key to wrap to.
+    query = authorization.active_users(db)
 
     if search is not None:
         term = search.strip()
@@ -126,6 +135,8 @@ def resolve_user(
 ):
     # Exact-match resolve of a user by their identity public key. Auth-gated.
     # Addresses are stored lowercased, so normalize the query (matches get_user).
+    # Like GET /{address}, this answers for a deleted identity so the caller can
+    # label it; see the note there.
     user = db.query(models.User).filter(models.User.address == req.address.lower()).first()
     if not user:
         raise HTTPException(status_code=404, detail="User not found")

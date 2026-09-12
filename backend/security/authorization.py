@@ -37,6 +37,64 @@ def normalize_address(address: str | None) -> str | None:
     return address.lower() if address is not None else None
 
 
+# ── Deleted identities ──────────────────────────────────────────────────────
+#
+# Account deletion strips the `users` row rather than removing it (see
+# models.User), so a deleted identity is still a row and every lookup that used
+# to mean "does this user exist" now has to mean "is this user usable". The rule
+# in one sentence:
+#
+#   A deleted identity is NOT a valid counterparty and cannot authenticate,
+#   but IS still a directory record for display.
+#
+# The second half is why this is not simply a filter everywhere: a message, a
+# group or a workflow that still names the address has to render as "user
+# removed" rather than as an unknown stranger, so `GET /users/{address}` and
+# `POST /users/resolve` deliberately keep answering.
+#
+# The first half is the security-relevant one, and it lives here rather than as
+# an inline `deleted_at is None` at each call site for exactly the reason in
+# this module's docstring: `test_authorization_drift.py` walks every endpoint
+# that takes an address and asserts each refuses a deleted identity, which is a
+# gate a scattered condition cannot have.
+
+
+def is_active(user: models.User | None) -> bool:
+    """True if this is a usable identity: present, and not deleted."""
+    return user is not None and user.deleted_at is None
+
+
+def find_active_user(db: Session, address: str | None) -> models.User | None:
+    """The one lookup for "is there a usable identity at this address?".
+
+    Every path that needs a COUNTERPARTY — a DM recipient, a grantee, a new
+    group member, a workflow signer — goes through this. A deleted identity has
+    no `encryption_public_key`, so wrapping anything to it would produce a row
+    nobody can ever open; refusing here turns that into an honest 404 instead.
+    """
+    addr = normalize_address(address)
+    if addr is None:
+        return None
+    user = db.query(models.User).filter(models.User.address == addr).first()
+    return user if is_active(user) else None
+
+
+def active_users(db: Session):
+    """Query form of `is_active`, for the directory listing and its search."""
+    return db.query(models.User).filter(models.User.deleted_at.is_(None))
+
+
+def may_register(user: models.User | None) -> bool:
+    """True if a login may create or revive an account at this address.
+
+    False only for an "erase" deletion, which is final: the modal says the key
+    can never be used again, and this is the one check that makes that true. A
+    "leave" deletion returns True and `_upsert_identity` revives the row with
+    every retained row still attached to it.
+    """
+    return user is None or not user.blocked
+
+
 def _live_grant_filter(now: datetime):
     """SQL predicate selecting grants that have not expired."""
     return or_(
