@@ -29,6 +29,7 @@ describe('golden constants (wire/storage format contract)', () => {
             MULTISIG_APPROVAL: 'multisig-approval',
             MESSAGE: 'message',
             KEY_ATTESTATION: 'key-attestation',
+            ACCOUNT_DELETION: 'account-deletion',
         });
     });
 
@@ -36,6 +37,11 @@ describe('golden constants (wire/storage format contract)', () => {
     // gained `gid` and `keysh`. `keysh` here is sha256("null") — the digest of
     // an absent key envelope — which is also what `echo -n null | sha256sum`
     // gives, so this vector is checkable by hand.
+    //
+    // UNCHANGED at 2.1.0, and deliberately so: 2.1.0 added a redacted branch
+    // taken only when `ct` is absent, so a message WITH a ciphertext must still
+    // produce these exact bytes. This vector is the proof that release was
+    // additive — if it ever needs regenerating, the change was a cutover.
     const NULL_KEYS_DIGEST = '74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b';
 
     it('message signing body is byte-exact', async () => {
@@ -55,6 +61,51 @@ describe('golden constants (wire/storage format contract)', () => {
         // Different ciphertext => different signed bytes.
         expect(await core.messageSigningBody({ from: 'A', conv: 'B', sid: 'S', ct: { iv: '00', content: 'ee' } }))
             .not.toBe(await core.messageSigningBody({ from: 'A', conv: 'B', sid: 'S', ct: { iv: '00', content: 'ff' } }));
+    });
+
+    it('an author-redacted body drops the ciphertext and keeps everything else (2.1.0)', async () => {
+        // Removal has to keep `keys`: a DM epoch's session key lives in the
+        // first message under that sid and the partner's own replies reuse it,
+        // so deleting that message takes the partner's authored history too.
+        const base = { from: 'A', conv: 'B', sid: 'S' };
+        expect(await core.messageSigningBody({ ...base, ct: null }))
+            .toBe('Kryptolog Signed Message v1\ncontext=message\n' +
+                `from=A\nconv=B\ngid=\nsid=S\nkeysh=${NULL_KEYS_DIGEST}\nredacted=1`);
+        // Absent and explicitly-null are the same statement, so the two
+        // languages cannot diverge on which one they emit.
+        expect(await core.messageSigningBody({ ...base, ct: undefined }))
+            .toBe(await core.messageSigningBody({ ...base, ct: null }));
+    });
+
+    it('no ciphertext value can spell a redaction (2.1.0)', async () => {
+        // The disjointness the design rests on. If a ciphertext could produce
+        // the redacted body, one signature would be valid for two different
+        // messages — the L-12 defect in a new place — and a server could pass a
+        // live message off as author-redacted.
+        const base = { from: 'A', conv: 'B', sid: 'S' };
+        const redacted = await core.messageSigningBody({ ...base, ct: null });
+        for (const ct of ['null', 'undefined', 'redacted=1', '', '1']) {
+            expect(await core.messageSigningBody({ ...base, ct })).not.toBe(redacted);
+        }
+    });
+
+    it('the account-deletion body binds the mode and sorts ids NUMERICALLY', async () => {
+        const ids = [2, 10];
+        const body = await core.accountDeletionBody('N', 'erase', ids);
+        expect(body.startsWith('Kryptolog Signed Message v1\ncontext=account-deletion\n')).toBe(true);
+        expect(body).toContain('\nmode=erase\n');
+
+        // JS's default sort is lexicographic: [2,10] would render as [10,2]
+        // while Python's sorted() gives [2,10]. A one-character mutation that
+        // breaks every deletion and is invisible in review.
+        expect(body).toContain(
+            `redactions=${createHash('sha256').update('[2,10]').digest('hex')}`);
+
+        // Order in, order out: the caller's array must not decide the bytes.
+        expect(await core.accountDeletionBody('N', 'erase', [10, 2])).toBe(body);
+        // ...but the mode and the set both must.
+        expect(await core.accountDeletionBody('N', 'leave', ids)).not.toBe(body);
+        expect(await core.accountDeletionBody('N', 'erase', [2])).not.toBe(body);
     });
 
     it('message signing body binds the key envelope and the group id (M-8)', async () => {
@@ -434,7 +485,7 @@ describe('encryption-key attestation (audit M-1, v1.3.0)', () => {
 
 describe('single-source / version guard', () => {
     it('exports a version both app builds can assert against', () => {
-        expect(core.CRYPTO_CORE_VERSION).toBe('2.0.0');
+        expect(core.CRYPTO_CORE_VERSION).toBe('2.1.0');
     });
 });
 
@@ -468,6 +519,42 @@ describe('signed bodies match the server, byte for byte', () => {
         expect(core.multisigApprovalMessage(
             vectors.workflow_id, vectors.secret_id, vectors.ciphertext_sha256
         )).toBe(vectors.bodies.multisig_approval);
+    });
+
+    it('message body', async () => {
+        expect(await core.messageSigningBody({
+            from: vectors.message_from, conv: vectors.message_conv, gid: vectors.message_gid,
+            sid: vectors.message_sid, ct: vectors.message_ct, keys: vectors.message_keys,
+        })).toBe(vectors.bodies.message);
+    });
+
+    it('author-redacted message body', async () => {
+        expect(await core.messageSigningBody({
+            from: vectors.message_from, conv: vectors.message_conv, gid: vectors.message_gid,
+            sid: vectors.message_sid, ct: null, keys: vectors.message_keys,
+        })).toBe(vectors.bodies.message_redacted);
+    });
+
+    it('account deletion', async () => {
+        expect(await core.accountDeletionBody(
+            vectors.nonce, vectors.deletion_mode, vectors.redaction_ids
+        )).toBe(vectors.bodies.account_deletion);
+    });
+
+    it('the fixture is what we think it is, not just what both sides produce', () => {
+        // Guards the vectors themselves: agreement with a file both sides could
+        // regenerate would pass for any value, including a broken one. keysh is
+        // recomputed here from node's own crypto, independent of sha256Hex.
+        const canon = core.canonicalJson(vectors.message_keys);
+        expect(vectors.bodies.message).toContain(
+            `keysh=${createHash('sha256').update(canon).digest('hex')}`);
+
+        // The redaction differs from the live body in its LAST LINE ONLY — same
+        // author, conversation, gid, sid and key envelope.
+        const cut = (b) => b.slice(0, b.lastIndexOf('\n'));
+        expect(cut(vectors.bodies.message_redacted)).toBe(cut(vectors.bodies.message));
+        expect(vectors.bodies.message_redacted.endsWith('\nredacted=1')).toBe(true);
+        expect(vectors.bodies.message.endsWith('\nct=AAAAAAAAAAAAAAAA.3q2+7w==')).toBe(true);
     });
 
     it('a login signature verifies against the body the server would rebuild', async () => {

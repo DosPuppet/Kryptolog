@@ -79,3 +79,34 @@ ML-KEM shared secret (audit S5, `KEM_KDF_INFO` in pqc.js) was a wire break too,
 and it landed before this file existed, so it carries no version of its own. Any
 statement of how many incompatible formats this package has been through should
 count it — the honest count to 2.0.0 is six, not five.
+
+## 2.1.0
+
+ADDITIVE — **existing message signatures are unaffected**, and nothing stored
+stops verifying. Two additions, both for account deletion.
+
+- `messageSigningBody` gains a `redacted=1` branch, taken when `ct` is absent.
+  A message with a ciphertext still produces byte-identical output to 2.0.0
+  (the byte-compat suite asserts exactly that), so this is not a cutover. The
+  branch exists so an author can remove their own content without destroying
+  anyone else's: a DM epoch's session key lives in the FIRST message under that
+  sid and the partner's own replies reuse it with `keys:null`, so deleting that
+  message takes the partner's authored history with it. Redaction keeps `keys`
+  and drops only `ct`.
+
+  The two forms are structurally disjoint — `\nct=` is always emitted for a
+  present ciphertext and `\nredacted=` never is — so no ciphertext value can
+  spell a redaction and no redaction can be read as a ciphertext. This is not
+  the "compatibility fallback" the project bans: nothing accepts an old form
+  *instead of* a new one, and each value still has exactly one signed spelling.
+
+  Because the author signs it, a redaction is an authenticated act rather than
+  an absence. A server can neither forge one on a live message nor un-redact one.
+
+- `accountDeletionBody(nonce, mode, redactedMessageIds)` under a new
+  `account-deletion` context, so a login signature can never be replayed as an
+  account deletion and the extension will not silently auto-sign one (it signs
+  only `message`-context bodies without prompting). `mode` and the redaction id
+  set are both signed: without them a relay could downgrade an erase into a
+  leave, escalate a leave into an erase, or drop one id and turn a redaction
+  into a deletion.

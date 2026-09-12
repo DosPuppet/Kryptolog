@@ -23,6 +23,7 @@ export const SIGNING_CONTEXT = Object.freeze({
     MULTISIG_APPROVAL: 'multisig-approval',
     MESSAGE: 'message',
     KEY_ATTESTATION: 'key-attestation',
+    ACCOUNT_DELETION: 'account-deletion',
 });
 const DS_HEADER = 'Kryptolog Signed Message v1';
 export const domainSeparate = (context, body) => `${DS_HEADER}\ncontext=${context}\n${body}`;
@@ -64,11 +65,31 @@ const canonicalCiphertext = (ct) =>
 // channel_id: it makes the payload's self-declared group id part of the signed
 // statement rather than something only a separate equality check defends.
 //
+// `redacted=1` — the form an author signs when removing their own content
+// (account deletion). The key envelope has to survive the removal: a DM epoch's
+// session key lives in the FIRST message under that sid, and the partner's own
+// replies reuse it with keys:null, so deleting that message takes the partner's
+// authored history with it. Redacting keeps `keys` and drops only `ct`.
+//
+// It is a DISJOINT branch, not a missing field, and that is the whole point:
+//   • `\nct=` is always emitted for a present ciphertext and `\nredacted=`
+//     never is, so no ciphertext value can spell a redaction and no redaction
+//     can be read as a ciphertext. (A bare `ct=null` would have collided with
+//     the literal string ciphertext "null" — one signature valid for two
+//     different messages, which is the L-12 defect in a new place.)
+//   • Because the author must SIGN this form, a redaction is an authenticated
+//     statement rather than an absence: the server cannot strip `ct` from a
+//     live message and pass it off as one (the original signature covers
+//     `ct=…`), and cannot un-redact one either.
+// `ct == null` catches null and undefined alike, so "absent" and "explicitly
+// null" cannot diverge between the two languages.
+//
 // Async because of the digest — every call site must await it.
 export const messageSigningBody = async ({ from, conv, sid, ct, gid = '', keys = null }) =>
     domainSeparate(SIGNING_CONTEXT.MESSAGE,
         `from=${from}\nconv=${conv}\ngid=${gid ?? ''}\nsid=${sid}` +
-        `\nkeysh=${await sha256Hex(canonicalJson(keys ?? null))}\nct=${canonicalCiphertext(ct)}`);
+        `\nkeysh=${await sha256Hex(canonicalJson(keys ?? null))}` +
+        (ct == null ? '\nredacted=1' : `\nct=${canonicalCiphertext(ct)}`));
 
 // --- Login challenge ---
 // The bytes a client signs to prove it holds the identity key, domain-separated
@@ -89,6 +110,31 @@ export const loginChallengeBody = (nonce, encryptionPublicKeyHex = null) =>
         `Sign in to Kryptolog with nonce: ${nonce}` +
         (encryptionPublicKeyHex ? `\nEncryption key: ${encryptionPublicKeyHex}` : '')
     );
+
+// --- Account deletion ---
+// The bytes a client signs to authorize destroying its own account. Its own
+// context, so a login signature (which a relay could obtain by other means) can
+// never be replayed as one (audit H1) — and, the other way round, the extension
+// will not auto-sign this: it silently signs only `message`-context bodies, so
+// account deletion surfaces an explicit approval popup.
+//
+// `mode` is signed because the two modes are not interchangeable: without it a
+// relay could downgrade an "erase" into a "leave" (the data the user asked to
+// destroy stays) or escalate a "leave" into an "erase" (data destroyed that the
+// user asked to keep), under a signature the server accepts either way.
+//
+// The redaction id set is signed for the same class of reason: dropping one
+// entry en route turns a redaction into a deletion, which takes the partner's
+// own history with it. Digested rather than inlined — same reasoning as `keysh`
+// — so the body stays a fixed size for an account with thousands of epochs.
+//
+// The numeric sort is NOT cosmetic: JS sorts lexicographically by default, so
+// [2, 10] would become [10, 2] while Python's sorted() gives [2, 10]. That
+// one-character difference breaks every deletion and is invisible in review.
+export const accountDeletionBody = async (nonce, mode, redactedMessageIds = []) =>
+    domainSeparate(SIGNING_CONTEXT.ACCOUNT_DELETION,
+        `nonce=${nonce}\nmode=${mode}\nredactions=${await sha256Hex(
+            canonicalJson([...redactedMessageIds].sort((a, b) => a - b)))}`);
 
 // --- Encryption-key attestation (audit M-1) ---
 // The address IS the ML-DSA public key (self-certifying), but the ML-KEM
