@@ -806,3 +806,29 @@ Note the earlier hypothesis recorded here — that `enableBiometrics` never set
 what left the console line as the thing that solved this.
 
 Frontend suite 193 → **195**.
+
+**And the real cause was the ENABLE path, not the unlock path.** The second
+console line named it: `Decryption failed with cached key`, thrown by `unlock()`
+*after* recovery succeeded — so the registration held something that was not the
+password, and re-enabling reproduced it every time.
+
+`requestPassword` answers **null** when a derived key is cached, and
+`enableBiometrics`'s "verify password first" was `_getFullVault(password)`,
+which decrypts with that cache and never looks at the password. So enabling
+biometrics with a warm cache wrapped a **null**. Every later unlock recovered
+it, handed it to `unlock()`, and was refused.
+
+Three changes, each mutation-tested:
+- `vaultService.verifyPassword()` — asks "is this the password?" rather than
+  `_getFullVault`'s "is the vault open?". Anything that stores or re-wraps the
+  password has to ask the second question.
+- `enableBiometrics` refuses a password that does not verify, **before** it
+  touches the authenticator: a wrong password should not cost a Face ID prompt
+  first.
+- `requestPassword(msg, { forcePrompt: true })` for that one caller, which also
+  skips the biometric shortcut — recovering the old password to wrap it as the
+  new one is the same defect wearing a different hat.
+
+Frontend suite 195 → **198**. The self-heal from the previous commit stays: it
+is what lets an install already holding a wrapped null recover without the
+console.

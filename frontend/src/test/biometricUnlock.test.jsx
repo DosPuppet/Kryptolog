@@ -44,6 +44,7 @@ const vault = {
     decryptMany: vi.fn(async () => ['plaintext']),
     recoverPasswordWithBiometrics: vi.fn(),
     disableBiometrics: vi.fn(),
+    enableBiometrics: vi.fn(async () => 'prf'),
 };
 vi.mock('../services/vault', () => ({ vaultService: vault }));
 
@@ -177,5 +178,26 @@ describe('when the authenticator cannot be used', () => {
         await expect(second).resolves.toEqual(['plaintext']);
         expect(vault.decryptMany).toHaveBeenNthCalledWith(1, [{ a: 1 }], PASSWORD);
         expect(vault.decryptMany).toHaveBeenNthCalledWith(2, [{ b: 2 }], PASSWORD);
+    });
+});
+
+describe('enabling biometrics', () => {
+    it('asks for the password even when a derived key is cached', async () => {
+        // requestPassword normally answers a cache hit with null, and enabling
+        // WRAPS the password — so that shortcut stored a wrapped null and every
+        // later unlock recovered it and was refused. The prompt is forced here.
+        vault.hasCachedKey = () => true;
+        await mount();
+        await settle();
+
+        let pending;
+        await act(async () => { pending = api.manageBiometrics(true); });
+
+        const box = await screen.findByPlaceholderText('Enter Password');
+        fireEvent.change(box, { target: { value: PASSWORD } });
+        fireEvent.click(screen.getByText('Confirm'));
+        await act(async () => { await pending; });
+
+        expect(vault.enableBiometrics).toHaveBeenCalledWith(PASSWORD);
     });
 });

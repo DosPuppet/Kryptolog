@@ -76,16 +76,20 @@ export const PQCProvider = ({ children }) => {
     const passwordInFlight = useRef(null);
 
     // Internal helper to request password via Modal
-    const requestPassword = async (message = "Please enter your vault password to continue.") => {
+    // `forcePrompt` is for the one caller that needs the PASSWORD itself rather
+    // than the ability to use the vault: enabling biometrics wraps it, so both
+    // shortcuts below would hand it something that is not the password — null
+    // from the cache, or the old password from a registration being replaced.
+    const requestPassword = async (message = "Please enter your vault password to continue.", { forcePrompt = false } = {}) => {
         // Derived key cache — skip prompt entirely if cache is still valid
-        if (vaultService.hasCachedKey()) {
+        if (!forcePrompt && vaultService.hasCachedKey()) {
             return null; // vault methods will use the cached key
         }
         if (passwordInFlight.current) return passwordInFlight.current;
 
         const pending = (async () => {
             // Auto-Biometrics
-            if (biometricsEnabled) {
+            if (biometricsEnabled && !forcePrompt) {
                 try {
                     return await vaultService.recoverPasswordWithBiometrics();
                 } catch (e) {
@@ -618,7 +622,10 @@ export const PQCProvider = ({ children }) => {
             // Biometrics
             manageBiometrics: async (enable) => {
                 if (enable) {
-                    const password = await requestPassword("Enter password to ENABLE FaceID/TouchID:");
+                    const password = await requestPassword(
+                        "Enter password to ENABLE FaceID/TouchID:",
+                        { forcePrompt: true }
+                    );
                     const mode = await vaultService.enableBiometrics(password);
                     setBiometricsEnabled(true);
                     return mode; // always 'prf' (enableBiometrics throws on unsupported devices)

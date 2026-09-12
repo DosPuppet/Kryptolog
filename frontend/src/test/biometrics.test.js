@@ -181,3 +181,48 @@ describe('a new vault does not inherit the old vault biometrics', () => {
         expect(vaultService.hasBiometrics()).toBe(false);
     }, 30000);
 });
+
+// Enabling biometrics WRAPS the vault password, so it needs the password
+// itself — not merely the ability to use the vault. PQCContext.requestPassword
+// returns null on a warm key cache, and _getFullVault(null) happily decrypts
+// with that cache, so "verify password first" verified nothing: the setup stored
+// a wrapped `null`, and every later unlock recovered it and was refused with
+// "Decryption failed with cached key". Re-enabling reproduced it every time.
+describe('enabling biometrics needs the real password', () => {
+    beforeEach(() => {
+        localStorage.clear();
+        vi.resetModules();
+    });
+    afterEach(() => localStorage.clear());
+
+    /** A vault whose derived key is cached, i.e. the state that hid the bug. */
+    const vaultWithWarmCache = async () => {
+        const { vaultService } = await import('../services/vault');
+        vaultService.setCacheTTL(60_000);
+        await vaultService.setup('Cached', 'the-real-password');
+        await vaultService.unlock('the-real-password');
+        expect(vaultService.hasCachedKey()).toBe(true);
+        return vaultService;
+    };
+
+    it('refuses a null password even when the vault is open', async () => {
+        const vaultService = await vaultWithWarmCache();
+        await expect(vaultService.enableBiometrics(null)).rejects.toThrow(/vault password is required/);
+        // ...and registers nothing, so the login screen keeps offering the
+        // password rather than a fingerprint button that cannot work.
+        expect(vaultService.hasBiometrics()).toBe(false);
+    }, 30000);
+
+    it('refuses a wrong password even when the vault is open', async () => {
+        const vaultService = await vaultWithWarmCache();
+        await expect(vaultService.enableBiometrics('not-it')).rejects.toThrow(/vault password is required/);
+        expect(vaultService.hasBiometrics()).toBe(false);
+    }, 30000);
+
+    it('verifyPassword asks about the password, not about the cache', async () => {
+        const vaultService = await vaultWithWarmCache();
+        expect(await vaultService.verifyPassword('the-real-password')).toBe(true);
+        expect(await vaultService.verifyPassword('not-it')).toBe(false);
+        expect(await vaultService.verifyPassword(null)).toBe(false);
+    }, 30000);
+});

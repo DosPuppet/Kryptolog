@@ -182,6 +182,30 @@ class VaultService {
         return this._sanitize(account);
     }
 
+    /**
+     * Does this password actually open the vault?
+     *
+     * Deliberately NOT `_getFullVault(password)`: that decrypts with the cached
+     * derived key whenever one is warm and never looks at the password at all,
+     * so it answers "is the vault open?" rather than "is this the password?".
+     * Anything that STORES or re-wraps the password itself has to ask the
+     * second question — see enableBiometrics, where the first one let a null
+     * password through and got wrapped as if it were real.
+     */
+    async verifyPassword(password) {
+        if (!password) return false;
+        const encryptedJson = localStorage.getItem('kryptolog_vault');
+        if (!encryptedJson) return false;
+        try {
+            const encrypted = JSON.parse(encryptedJson);
+            const key = await deriveKey(password, fromB64(encrypted.salt));
+            await decryptVaultWithKey(encrypted, key);
+            return true;
+        } catch {
+            return false;
+        }
+    }
+
     async unlock(password) {
         const encryptedJson = localStorage.getItem('kryptolog_vault');
         if (!encryptedJson) throw new Error("No vault found");

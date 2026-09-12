@@ -9,10 +9,25 @@ export const biometricMethods = {
     },
 
     async enableBiometrics(password) {
+        // 1. Verify the password FOR REAL, before anything touches the
+        // authenticator: a wrong password should not cost the user a Face ID
+        // prompt first.
+        //
+        // The password is what gets wrapped below, so a warm key cache is not a
+        // substitute for it and `_getFullVault(password)` is not a check: with a
+        // cache it decrypts without ever looking at the password. Enabling
+        // biometrics with the null that requestPassword returns on a cache hit
+        // therefore stored a wrapped `null`, and every later unlock recovered
+        // that, handed it to unlock(), and got "Decryption failed with cached
+        // key" — a biometric setup that could never work, and that re-enabling
+        // reproduced exactly.
+        if (!(await this.verifyPassword(password))) {
+            throw new Error("Your vault password is required to enable biometric unlock.");
+        }
+
         if (!window.PublicKeyCredential) throw new Error("Biometrics not supported on this device/browser.");
 
-        // 1. Verify Password First
-        const fullVault = await this._getFullVault(password); // will throw if wrong
+        const fullVault = await this._getFullVault(password);
 
         // 2. Register Credential (PRF or Fallback)
         const activeAcct = fullVault.accounts.find(a => a.id === fullVault.activeAccountId);
