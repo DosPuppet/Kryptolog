@@ -623,3 +623,128 @@ function object, always truthy. Every password-only user therefore ran a doomed
 WebAuthn ceremony on the main login button and reached the vault modal through
 the catch, which is also why the button always wore the fingerprint icon. It is
 the only consumer of that context value; `VaultManager` keeps its own state.
+
+## Account deletion, in two modes — 2026-09-12
+
+Branch `account-deletion-2026-09`. A user can delete their own server-side
+account from the profile modal (their name, upper right). The first dialog
+offers a **choice**, because erasing a user's content and removing a user are
+different things when somebody else holds the other half of the conversation:
+
+| Mode | What it does |
+|---|---|
+| **leave** | The identity goes; every row stays attached to the key. Shows as "User removed", gone from the directory, cannot log in. **Reversible** — logging in with the same vault restores the account and its data |
+| **erase** | The user's content goes too, except what other people provably depend on. **Final** — the key can never register again |
+
+**The constraint that shapes erase.** A DM session key is wrapped for both sides
+and embedded in the **first message under that sid**, and the partner's own
+replies reuse that sid carrying `keys: null`
+(`useMessageSessions.js:113-128, 163-177`). Clients hold unwrapped keys in
+memory only. Delete the opener and the partner loses **their own authored
+history** on the next reload — silently, because an undecryptable message looks
+the same as one that was never readable. So those messages are **redacted**, not
+deleted.
+
+*Groups are different, and this was checked rather than assumed:*
+`useMessageSessions.js:143-162` documents that groups never adopt a send key
+from inbound history (audit O-1) — each client mints its own session per page
+load, so a group sid only ever covers its minter's own messages. Group redaction
+is a **consistency and UX** choice, not a cryptographic necessity: one rule, and
+a thread that says "content removed" beats one that silently loses lines.
+
+**`CRYPTO_CORE_VERSION` 2.0.0 → 2.1.0, and it is ADDITIVE — not a cutover.**
+`messageSigningBody` gains a `redacted=1` branch taken only when `ct` is absent;
+a message with a ciphertext produces byte-identical output to 2.0.0, and the
+1.4.0 golden vector is unchanged **as the proof**. If it ever needs
+regenerating, the change was a cutover. Nothing stored stops verifying.
+
+The two forms are structurally disjoint — `\nct=` is always emitted for a
+present ciphertext and `\nredacted=` never is — so no ciphertext value can spell
+a redaction. A bare `ct=null` would have collided with the literal string
+ciphertext `"null"`: one signature valid for two messages, the L-12 defect in a
+new place. This is **not** the compatibility fallback the project bans, either;
+nothing accepts an old form *instead of* a new one.
+
+Because the author signs it, **redaction is an authenticated act**, not an
+absence: a server can neither forge one on a live message nor un-redact one.
+
+**The user row is stripped, not deleted.** `users` gains `deleted_at` and
+`blocked`; deletion NULLs the username, encryption key and attestation and bumps
+`token_version`. The row survives because `users.address` is referenced by nine
+tables and both modes deliberately leave rows behind that still name it.
+Removing it would mean dropping ~10 foreign keys **and** working around
+`db.delete(instance)` first NULLing the very `sender_address`/`owner_address`
+columns the retained signatures verify against. What is left is the address,
+which is a public key already embedded in every message the identity signed.
+
+**The rule lives in `security/authorization.py`**, because this is the KRY-001
+shape exactly:
+
+> A deleted identity is **not** a valid counterparty and cannot authenticate,
+> but **is** still a directory record for display.
+
+`find_active_user` backs every counterparty lookup and `active_users` the
+directory listing, while `GET /users/{address}` and `POST /users/resolve` keep
+answering and mark the record — a message that still names the address must
+render as "user removed", not as an unknown stranger, and only the server can
+tell those apart. `displayName` in `utils/format.js` is the single renderer, so
+the label lands in one place.
+
+**What erase does not delete, and why each is someone else's property:**
+
+- **Signer rows on other people's workflows stay**, signed or not. Removing a
+  signer without touching `threshold` leaves a quorum that can never be met;
+  removing it *with* one is the multisig equivalent of forging consent.
+- **Completed workflows stay whole** — `workflow_is_deletable` already refuses
+  to delete them because the recipients' wrapped keys are their only copy.
+  Deletion must not become a way to retract a release after the fact.
+- **Messages the user only received stay.** They are the partner's own speech.
+- **Unreadable payloads are kept.** Deletion is positively scoped: only payloads
+  that parse and carry no envelope are deleted. Leaving one of the user's own
+  messages behind is visible and annoying; destroying the only copy of a session
+  key is silent and unrecoverable for everyone else.
+
+**The server builds each redacted payload; the client supplies only a
+signature.** Accepting a payload would mean diffing it field by field, and
+forgetting `keys` would turn this into a rewrite-my-past-messages API — audit
+M-8's targeted-exclusion attack with a valid signature.
+
+**Three things worth knowing before touching this:**
+
+- **Both session factories are `autoflush=False`.** Two ordering bugs came from
+  that and the tests caught both: the orphan-owner sweep re-ran succession on a
+  channel already handled, and `is_workflow_managed` saw workflows that had only
+  been *marked* deleted, which would have kept every secret alive through an
+  erase. Every ordering assumption in `account_deletion.py` is now an explicit
+  `db.flush()`.
+- **Redaction ids are namespaced** (`dm:412` / `group:412`). `messages` and
+  `group_messages` have independent id sequences, so a bare id names two rows —
+  and the signed set exists precisely so a relay cannot drop one entry and turn
+  a redaction into a deletion. As strings they also sort the same way in both
+  languages; numeric ids would not have (`[2, 10]` spells `[10, 2]` in JS).
+- **The mode is inside the signed body.** Without it a relay could downgrade an
+  erase into a leave or escalate a leave into an erase, under a signature the
+  server accepts either way.
+
+`test_authorization_drift.py` gained the strongest gate: the same group fixture
+built twice, left once through `DELETE /groups/{id}/members/{me}` and once
+through account deletion, with the resulting rows compared. Re-implementing
+succession inline in the deletion path fails **exactly one** case
+(admin-present) and no other test in the suite.
+
+Suites: backend 473 → **508**, frontend 177 → **188**, crypto-core 50 → **57**,
+extension unchanged at 96. All five lint/format/drift gates green. Every new
+gate mutation-tested individually.
+
+**Still open on this branch:**
+- Not merged, not pushed, and the end-to-end pass has not been run.
+  `E2E-RECIPE.md` §7 covers both modes and is written from the *other* account's
+  screen, because the failure this feature exists to avoid is invisible from the
+  deleting user's own.
+- `ConnectionManager.close_address` has no test. It needs `fakeredis` and the
+  `test_ws_fanout.py` harness; the HTTP side is already safe (`user_for_token`
+  refuses a deleted row and the WS handshake uses the same dependency), so what
+  is uncovered is only whether an already-open socket is hung up promptly.
+- Rolling restarts: a worker on the previous build will deliver the reserved
+  `ACCOUNT_DELETED` frame as an ordinary message and not close the socket, so
+  the SPA should treat it as "log out now" in its own right. It does not yet.
