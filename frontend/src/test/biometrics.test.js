@@ -137,3 +137,47 @@ describe('biometric vault unlock (WebAuthn PRF)', () => {
         expect(await checkPrfSupport()).toBe(false);
     });
 });
+
+// A biometric registration wraps ONE vault's password. Replacing the vault and
+// leaving the registration behind produced a fingerprint button that could
+// never work: hasBiometrics() stayed true, the ceremony handed back the OLD
+// password, and unlock() refused it — reported as a bare "Biometric Unlock
+// Failed" with no way to clear it from the login screen.
+describe('a new vault does not inherit the old vault biometrics', () => {
+    beforeEach(() => {
+        localStorage.clear();
+        vi.resetModules();
+    });
+    afterEach(() => localStorage.clear());
+
+    const stale = () => {
+        localStorage.setItem(
+            'kryptolog_biometrics',
+            JSON.stringify({ mode: 'prf', credentialId: CREDENTIAL_ID, encryptedPass: 'x', prfSalt: 'y' })
+        );
+        localStorage.setItem('kryptolog_bio_fallback_key', 'legacy');
+    };
+
+    it('setup() clears a registration left by a previous vault', async () => {
+        const { vaultService } = await import('../services/vault');
+        stale();
+        expect(vaultService.hasBiometrics()).toBe(true);
+
+        await vaultService.setup('Fresh', 'password-one');
+
+        expect(vaultService.hasBiometrics()).toBe(false);
+        expect(localStorage.getItem('kryptolog_bio_fallback_key')).toBeNull();
+    }, 30000);
+
+    it('a clean-device import clears it too', async () => {
+        const { vaultService } = await import('../services/vault');
+        await vaultService.setup('Origin', 'password-one');
+        const backup = await vaultService.exportVault('password-one');
+        localStorage.removeItem('kryptolog_vault');
+        stale();
+
+        await vaultService.importNewVault(backup, 'password-two');
+
+        expect(vaultService.hasBiometrics()).toBe(false);
+    }, 30000);
+});

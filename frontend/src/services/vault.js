@@ -152,6 +152,14 @@ class VaultService {
     async setup(name, password) {
         if (this.hasVault()) throw new Error("Vault already exists");
 
+        // A biometric registration wraps ONE vault's password, so anything left
+        // over from a previous vault on this device is not merely useless — it
+        // is actively wrong. hasBiometrics() would stay true, the ceremony would
+        // hand back the OLD password, and unlock() would refuse it: a
+        // fingerprint button that can never work and says only "Biometric Unlock
+        // Failed". Cheap to clear, and there is nothing here worth keeping.
+        this.disableBiometrics();
+
         // 1. Generate full account with keys
         const account = await generateAccount(name);
 

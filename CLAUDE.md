@@ -777,15 +777,32 @@ Three bugs, all in the seam between deletion and the login screen:
 
 Frontend suite 188 → **193**. Each fix mutation-tested.
 
-**Still open: biometric unlock reportedly asks for the password again.** Not
-reproduced, and not diagnosed — one hypothesis (that `enableBiometrics` never
-set `biometricsEnabled`, leaving it false until a reload) was checked and is
-**wrong**: `PQCContext.jsx:623` sets it. Two candidates remain and they need the
-browser console line to separate, since both `Login.handleLogin` and
-`requestPassword` log the cause:
-  1. the ceremony itself failing (any failure falls through to the password box
-     by design), or
-  2. the key-cache TTL being 0 — "always ask" — so every custody call needs a
-     *fresh* ceremony; the in-flight sharing fixed concurrent calls, but
-     sequential batches each ask again, and a device that refuses a rapid repeat
-     lands on the password box.
+**A biometric registration belongs to ONE vault, and nothing enforced that.**
+Reported as "biometric login still asks for the password"; the console line
+settled it instantly — `Biometric Unlock Failed`, thrown *after*
+`recoverPasswordWithBiometrics()` returned. So the ceremony worked and the vault
+refused the password it handed back, which can only mean the registration wraps
+a password this device no longer has.
+
+`kryptolog_biometrics` survived vault replacement: `setup()` and
+`importNewVault()` never cleared it, so a new vault inherited the old one's
+registration. `hasBiometrics()` then stayed true, the ceremony returned the OLD
+password, `unlock()` refused it, and the login screen offered a fingerprint
+button that could never work and could not be cleared from there. Pre-existing —
+the deletion flow just made it easy to reach, since erasing an account is the
+common way to end up replacing a vault.
+
+Both clean-device paths clear it now (`importEncryptedBlob` delegates to
+`importNewVault`). **`importVault` deliberately does not** — that merges into
+the existing vault under its existing password, which the registration still
+opens.
+
+Installs already in this state self-heal: a recovered password that fails to
+unlock turns biometrics off and says so, instead of the opaque
+"Biometric Unlock Failed" that left no way forward.
+
+Note the earlier hypothesis recorded here — that `enableBiometrics` never set
+`biometricsEnabled` — was **wrong**, and checking it rather than acting on it is
+what left the console line as the thing that solved this.
+
+Frontend suite 193 → **195**.

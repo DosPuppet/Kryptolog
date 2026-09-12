@@ -43,6 +43,7 @@ const vault = {
     sign: vi.fn(async () => 'signature'),
     decryptMany: vi.fn(async () => ['plaintext']),
     recoverPasswordWithBiometrics: vi.fn(),
+    disableBiometrics: vi.fn(),
 };
 vi.mock('../services/vault', () => ({ vaultService: vault }));
 
@@ -89,11 +90,18 @@ describe('logging in with biometrics', () => {
         expect(vault.sign).toHaveBeenCalledWith(expect.any(String), PASSWORD);
     });
 
-    it('still refuses when the recovered password does not open the vault', async () => {
+    it('turns itself off when the recovered password no longer opens the vault', async () => {
+        // The ceremony WORKED and the vault still said no, so the registration
+        // belongs to a vault this device no longer has — replacing a vault used
+        // to leave the old registration behind, and the result was a fingerprint
+        // button that failed every time and could not be cleared from the login
+        // screen. Dropping it is what makes the next attempt reach the password.
         vault.unlock.mockResolvedValue(false);
         await mount();
         await settle();
-        await expect(api.unlockWithBiometrics()).rejects.toThrow(/Biometric Unlock Failed/);
+
+        await expect(api.unlockWithBiometrics()).rejects.toThrow(/no longer matches this vault/);
+        expect(vault.disableBiometrics).toHaveBeenCalledTimes(1);
     });
 });
 

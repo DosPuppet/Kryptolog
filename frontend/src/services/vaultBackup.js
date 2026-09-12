@@ -25,6 +25,12 @@ export const backupMethods = {
         if (!data.accounts || !Array.isArray(data.accounts) || data.accounts.length === 0) {
             throw new Error("Invalid vault file: no accounts found");
         }
+        // Same reason as setup(): the old registration wraps the old vault's
+        // password. importEncryptedBlob comes through here too, so both
+        // clean-device paths are covered. importVault does NOT clear it — that
+        // merges into the existing vault under its existing password, which the
+        // registration still opens.
+        this.disableBiometrics();
         // Accept both the current (mlkem/mldsa) and legacy (kyber/dilithium)
         // field names from exported backups, then normalize to the new shape.
         const accounts = data.accounts.map(normalizeAccount);

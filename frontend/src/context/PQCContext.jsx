@@ -635,7 +635,20 @@ export const PQCProvider = ({ children }) => {
                 // biometrics" asked the authenticator twice for the same secret.
                 const password = await vaultService.recoverPasswordWithBiometrics();
                 const success = await vaultService.unlock(password);
-                if (!success) throw new Error("Biometric Unlock Failed");
+                if (!success) {
+                    // The ceremony worked and the vault still refused, so the
+                    // registration belongs to a vault this device no longer has
+                    // (or to a password since changed). Nothing about it can
+                    // ever succeed again, and leaving it in place leaves a
+                    // fingerprint button that fails every time with no way to
+                    // clear it from this screen — so drop it and say why.
+                    vaultService.disableBiometrics();
+                    setBiometricsEnabled(false);
+                    throw new Error(
+                        "Biometric unlock no longer matches this vault, so it has been turned off. " +
+                        "Sign in with your password, then enable it again."
+                    );
+                }
 
                 const account = vaultService.getActiveAccount();
                 const accountId = account.mldsa.publicKey;
