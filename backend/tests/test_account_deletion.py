@@ -306,7 +306,11 @@ class TestComingBack:
                 "username": "Rebirth",
             },
         )
-        assert resp.status_code == 403, resp.text
+        # 410, not 403: the invite gate answers 403 and the SPA turns that into
+        # "enter your invite code", which is advice that cannot possibly work
+        # for a key that is blocked forever.
+        assert resp.status_code == 410, resp.text
+        assert "no longer be used" in resp.json()["detail"]
 
     def test_a_fresh_key_still_registers(self, client, user1):
         """The other half: the block must name one key, not close the door."""

@@ -24,18 +24,22 @@ const vault = {
     hasBiometrics: () => false,
     biometricMode: () => null,
     getCacheTTL: () => 0,
-    getAccounts: () => [],
     clearKeyCache: vi.fn(),
     hasCachedKey: () => true, // no password prompt in the way of the assertions
     hasCachedSigningKey: () => true,
     unlock: vi.fn(async () => true),
     getActiveAccount: () => ({
+        id: 'acct-1',
         name: 'Alice',
         mldsa: { publicKey: ADDRESS },
         mlkem: { publicKey: 'b'.repeat(64) },
     }),
     sign: vi.fn(async () => 'deletion-signature'),
     signMessage: vi.fn(async () => 'redaction-signature'),
+    // Local-vault cleanup after an erase.
+    getAccounts: vi.fn(() => [{ id: 'acct-1' }]),
+    deleteAccount: vi.fn(async () => {}),
+    wipeVault: vi.fn(),
 };
 vi.mock('../services/vault', () => ({ vaultService: vault }));
 
@@ -205,5 +209,90 @@ describe('erasing', () => {
 
         await expect(api.deleteServerAccount('erase')).rejects.toThrow('user cancelled');
         expect(global.fetch.mock.calls.some(([u]) => /account\/delete/.test(String(u)))).toBe(false);
+    });
+});
+
+describe('what an erase leaves on the device', () => {
+    // The key is blocked forever, so the vault entry left behind can only ever
+    // be unlocked into a refusal — and while it is there the login screen
+    // offers nothing but "Unlock Local Vault".
+    it('removes only the erased identity when the vault holds others', async () => {
+        vault.getAccounts.mockReturnValue([{ id: 'acct-1' }, { id: 'acct-2' }]);
+        stubServer();
+        await mount();
+        await act(async () => {
+            await api.deleteServerAccount('erase', { forgetVault: true });
+        });
+
+        // A vault can hold several identities and only one of them just became
+        // useless. Wiping the lot would destroy keys the user still needs.
+        expect(vault.deleteAccount).toHaveBeenCalledWith('acct-1', null);
+        expect(vault.wipeVault).not.toHaveBeenCalled();
+    });
+
+    it('wipes the vault only when the erased identity was the last one', async () => {
+        // deleteAccount refuses to remove the final account, and an empty but
+        // present vault would still block the "create" path on the login screen.
+        vault.getAccounts.mockReturnValue([{ id: 'acct-1' }]);
+        stubServer();
+        await mount();
+        await act(async () => {
+            await api.deleteServerAccount('erase', { forgetVault: true });
+        });
+
+        expect(vault.wipeVault).toHaveBeenCalledTimes(1);
+        expect(vault.deleteAccount).not.toHaveBeenCalled();
+    });
+
+    it('touches nothing on the device unless asked', async () => {
+        stubServer();
+        await mount();
+        await act(async () => {
+            await api.deleteServerAccount('erase');
+        });
+
+        expect(vault.wipeVault).not.toHaveBeenCalled();
+        expect(vault.deleteAccount).not.toHaveBeenCalled();
+    });
+
+    it('never touches the device on a leave — the vault is what makes it reversible', async () => {
+        stubServer();
+        await mount();
+        await act(async () => {
+            await api.deleteServerAccount('leave', { forgetVault: true });
+        });
+
+        expect(vault.wipeVault).not.toHaveBeenCalled();
+        expect(vault.deleteAccount).not.toHaveBeenCalled();
+    });
+});
+
+describe('a login refused because the key was erased', () => {
+    it('is tagged ACCOUNT_DELETED, not INVITE_REQUIRED', async () => {
+        // Both used to arrive as 403, and the invite branch caught them both —
+        // so an erased key told the user to enter an invite code for a key no
+        // code could ever admit.
+        global.fetch = vi.fn(async (url) =>
+            /nonce/.test(String(url))
+                ? { ok: true, status: 200, json: async () => ({ nonce: 'N' }) }
+                : {
+                    ok: false,
+                    status: 410,
+                    json: async () => ({ detail: 'This account was deleted and this key can no longer be used.' }),
+                }
+        );
+        await act(async () => {
+            render(
+                <AuthProvider>
+                    <PQCProvider>
+                        <Probe />
+                    </PQCProvider>
+                </AuthProvider>
+            );
+        });
+
+        await expect(api.loginLocalVault(PASSWORD)).rejects.toMatchObject({
+            code: 'ACCOUNT_DELETED',
+        });
     });
 });

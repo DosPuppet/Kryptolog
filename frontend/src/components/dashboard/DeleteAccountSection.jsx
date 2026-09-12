@@ -55,6 +55,11 @@ const DeleteAccountSection = () => {
     const { deleteServerAccount } = usePQC();
     const [choosing, setChoosing] = useState(false);
     const [mode, setMode] = useState('leave');
+    // Erasing blocks the key forever, so keeping it on the device is almost
+    // never what the user wants — but it destroys the keys, so it is opt-out
+    // rather than automatic. Never offered for `leave`: the vault is precisely
+    // what makes leaving reversible.
+    const [alsoForget, setAlsoForget] = useState(true);
     const [busy, setBusy] = useState(false);
 
     const chosen = MODES.find((m) => m.id === mode);
@@ -73,7 +78,7 @@ const DeleteAccountSection = () => {
 
         setBusy(true);
         try {
-            await deleteServerAccount(mode);
+            await deleteServerAccount(mode, { forgetVault: mode === 'erase' && alsoForget });
             // Nothing to navigate to: the provider logs out, and App swaps the
             // route table back to the login screen on its own.
             toast.success(mode === 'erase' ? 'Account erased.' : 'Account removed.');
@@ -152,6 +157,24 @@ const DeleteAccountSection = () => {
                             breaking their signatures.
                         </p>
                     </div>
+
+                    {mode === 'erase' && (
+                        <label className="flex items-start gap-2 text-xs text-slate-600 dark:text-slate-400">
+                            <input
+                                type="checkbox"
+                                checked={alsoForget}
+                                onChange={(e) => setAlsoForget(e.target.checked)}
+                                className="mt-0.5"
+                            />
+                            <span>
+                                Also remove this identity from this device&apos;s vault. Recommended:
+                                the key is blocked forever, and while it is stored here the login
+                                screen can only offer to unlock it. Other identities in the vault are
+                                untouched. <strong>This destroys this identity&apos;s keys</strong> —
+                                keep a backup first if they still matter.
+                            </span>
+                        </label>
+                    )}
 
                     <div className="flex gap-2">
                         <button

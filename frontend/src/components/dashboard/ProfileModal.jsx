@@ -67,7 +67,7 @@ const ProfileModal = ({ isOpen, onClose }) => {
 
     return (
         <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 p-4">
-            <div className="bg-white dark:bg-slate-850 border border-slate-200 dark:border-slate-700 rounded-xl p-6 w-full max-w-md animate-in fade-in zoom-in-95">
+            <div className="bg-white dark:bg-slate-850 border border-slate-200 dark:border-slate-700 rounded-xl p-6 w-full max-w-md max-h-[90vh] overflow-y-auto animate-in fade-in zoom-in-95">
                 <div className="flex justify-between items-center mb-6">
                     <h3 className="text-xl font-semibold text-slate-900 dark:text-white flex items-center gap-2">
                         <User className="w-5 h-5 text-indigo-500" /> User Profile

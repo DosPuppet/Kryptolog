@@ -228,9 +228,18 @@ def _upsert_identity(
         # reason — it is unauthenticated, so answering there would turn it into
         # a "was this address deleted" oracle for anybody.
         if not authorization.may_register(user):
+            # 410, NOT 403. The invite gate below also answers 403, and the SPA
+            # turns any 403 from login into "this server is invite-only, enter
+            # your code" — so an erased key was telling the user to find an
+            # invite code for a key that can never be used again, whatever they
+            # typed. Gone is also the honest status: the identity existed and
+            # will not be available again.
             raise HTTPException(
-                status_code=403,
-                detail="This identity was deleted. Register with a new key.",
+                status_code=410,
+                detail=(
+                    "This account was deleted and this key can no longer be used. "
+                    "Create a new identity to register again."
+                ),
             )
         return _revive_user(db, login_req, address, attestation, user)
 

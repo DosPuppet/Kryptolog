@@ -315,6 +315,30 @@ class VaultService {
         this.vault.accounts = this.vault.accounts.filter(a => a.id !== id);
     }
 
+    /**
+     * Remove this device's vault entirely: keys, biometric registration, cache.
+     *
+     * Needed because `deleteAccount` refuses to remove the LAST account, which
+     * is the usual shape after erasing a server account — the identity that was
+     * just blocked forever is the only one in the vault, and leaving it there
+     * leaves the login screen offering "Unlock Local Vault" for a key the
+     * server will never admit again, with no way to create a new one.
+     *
+     * Irreversible and unrecoverable: these keys exist nowhere else unless the
+     * user exported a backup. Every caller confirms first.
+     */
+    wipeVault() {
+        localStorage.removeItem('kryptolog_vault');
+        // The biometric registration wraps THIS vault's password, so it is
+        // meaningless once the vault is gone — and leaving it behind would make
+        // hasBiometrics() true for a vault that no longer exists.
+        localStorage.removeItem('kryptolog_biometrics');
+        localStorage.removeItem('kryptolog_bio_fallback_key');
+        this.clearKeyCache();
+        this.vault = null;
+        this.isLocked = true;
+    }
+
     async sign(message, password) {
         if (this.isLocked) throw new Error("Vault locked");
 

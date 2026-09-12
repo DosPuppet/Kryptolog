@@ -1,11 +1,12 @@
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { usePQC } from '../context/PQCContext';
+import confirmDialog from '../utils/confirm';
 import { useTheme } from '../context/ThemeContext';
 import { Shield, ArrowRight, Loader2, Sun, Moon, Lock, UserPlus, X, Upload, FileJson, Smartphone } from 'lucide-react';
 
 export default function Login() {
-    const { loginTrustKeys, loginLocalVault, createLocalVault, importLocalVault, isExtensionAvailable, hasLocalVault, unlockWithBiometrics, hasBiometrics } = usePQC();
+    const { loginTrustKeys, loginLocalVault, createLocalVault, importLocalVault, isExtensionAvailable, hasLocalVault, unlockWithBiometrics, hasBiometrics, forgetLocalIdentity } = usePQC();
     const { theme, toggleTheme } = useTheme();
     const navigate = useNavigate();
     const [loading, setLoading] = useState(false);
@@ -31,6 +32,10 @@ export default function Login() {
     // *unlock* once they have a code. Reveal the field there on a 403 rather
     // than showing it to every returning user.
     const [vaultNeedsInvite, setVaultNeedsInvite] = useState(false);
+    // Set when the server says this key was erased. The vault is still on the
+    // device, so without a way out the screen would offer nothing but "Unlock
+    // Local Vault" for a key the server will never admit again.
+    const [vaultKeyDeleted, setVaultKeyDeleted] = useState(false);
 
     // Open the vault modal in a specific mode ('unlock' | 'create' | 'import').
     const openVault = (mode) => {
@@ -84,6 +89,34 @@ export default function Login() {
         }
     };
 
+    // The only way off a blocked key. Removes just that identity when the vault
+    // holds others; the vault itself goes only if it was the last one.
+    //
+    // The password the user just typed is reused rather than asked for again:
+    // the unlock SUCCEEDED here, it was the server that refused, so the vault is
+    // open and that password is known good.
+    const handleForgetIdentity = async () => {
+        const ok = await confirmDialog({
+            title: 'Remove this identity?',
+            message: 'Its keys are stored only on this device and will be destroyed. This cannot be undone.',
+            confirmText: 'Remove it',
+            danger: true,
+        });
+        if (!ok) return;
+        try {
+            const removed = await forgetLocalIdentity(password);
+            setVaultKeyDeleted(false);
+            setError(null);
+            setPassword('');
+            // Whether the screen can now create or must unlock another identity
+            // depends on whether anything is left in the vault.
+            switchVaultMode(removed === 'vault' ? 'create' : 'unlock');
+        } catch (err) {
+            console.error("Could not remove the local identity:", err);
+            setError(err.message);
+        }
+    };
+
     const switchVaultMode = (mode) => {
         setVaultMode(mode);
         setError(null);
@@ -122,7 +155,10 @@ export default function Login() {
             setVaultNeedsInvite(false);
         } catch (err) {
             console.error("Vault Action Error:", err);
-            if (err.code === 'INVITE_REQUIRED') {
+            if (err.code === 'ACCOUNT_DELETED') {
+                setVaultKeyDeleted(true);
+                setError(err.message);
+            } else if (err.code === 'INVITE_REQUIRED') {
                 // The vault is already on this device and is the right identity —
                 // only the server registration is missing. Keep the modal open on
                 // the invite field instead of dead-ending on a 403 message.
@@ -330,6 +366,28 @@ export default function Login() {
                                         placeholder={vaultMode === 'import' ? 'Set a password for this vault' : 'Enter secure password'}
                                     />
                                 </div>
+
+                                {vaultKeyDeleted && (
+                                    <div className="p-3 bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-lg space-y-2">
+                                        <p className="text-xs text-red-700 dark:text-red-300">
+                                            This key has been permanently blocked by the server.
+                                            To use this app again you need a different identity, so
+                                            this one has to be removed from the device.
+                                        </p>
+                                        <button
+                                            type="button"
+                                            onClick={handleForgetIdentity}
+                                            className="w-full px-3 py-2 bg-red-600 hover:bg-red-500 text-white rounded-lg text-xs font-medium"
+                                        >
+                                            Remove this vault and start fresh
+                                        </button>
+                                        <p className="text-[11px] text-red-600/80 dark:text-red-400/80">
+                                            Only this identity is removed — any others in the vault are
+                                            untouched. Its keys exist nowhere else, so restore a backup
+                                            first if they still matter.
+                                        </p>
+                                    </div>
+                                )}
 
                                 {(vaultMode !== 'unlock' || vaultNeedsInvite) && (
                                     <div>

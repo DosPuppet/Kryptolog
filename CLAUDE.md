@@ -748,3 +748,44 @@ gate mutation-tested individually.
 - Rolling restarts: a worker on the previous build will deliver the reserved
   `ACCOUNT_DELETED` frame as an ordinary message and not close the socket, so
   the SPA should treat it as "log out now" in its own right. It does not yet.
+
+### Found by walking the recipe — 2026-09-12
+
+Three bugs, all in the seam between deletion and the login screen:
+
+- **A blocked key was told to find an invite code.** `_upsert_identity` refused
+  with 403, and `performServerLogin` turns *any* 403 from login into
+  `INVITE_REQUIRED` — so an erased key showed "this server is invite-only, enter
+  your code", advice no code could ever satisfy. The refusal is **410 Gone**
+  now, which is both honest and disjoint from the invite gate, and the SPA tags
+  it `ACCOUNT_DELETED`.
+- **The profile modal outgrew the screen** once the danger zone was added, so
+  the button sat below the fold with no way to reach it. `max-h-[90vh]
+  overflow-y-auto`.
+- **An erased key stayed in the local vault**, and with a vault present the
+  login screen only ever offers "Unlock Local Vault" — no way to create a new
+  identity. Erase now offers (opt-out) to remove it, and the login screen offers
+  the same escape when a 410 comes back.
+
+  **Scoped to ONE identity.** A vault can hold several and only the erased one
+  became useless; `vaultService.wipeVault()` runs only when it was the last,
+  because `deleteAccount` refuses to remove the final account and an
+  empty-but-present vault still blocks the create path.
+
+  **Never on a `leave`, whatever the caller passes** — the vault is exactly what
+  makes leaving reversible. Pinned by a test.
+
+Frontend suite 188 → **193**. Each fix mutation-tested.
+
+**Still open: biometric unlock reportedly asks for the password again.** Not
+reproduced, and not diagnosed — one hypothesis (that `enableBiometrics` never
+set `biometricsEnabled`, leaving it false until a reload) was checked and is
+**wrong**: `PQCContext.jsx:623` sets it. Two candidates remain and they need the
+browser console line to separate, since both `Login.handleLogin` and
+`requestPassword` log the cause:
+  1. the ceremony itself failing (any failure falls through to the password box
+     by design), or
+  2. the key-cache TTL being 0 — "always ask" — so every custody call needs a
+     *fresh* ceremony; the in-flight sharing fixed concurrent calls, but
+     sequential batches each ask again, and a device that refuses a rapid repeat
+     lands on the password box.

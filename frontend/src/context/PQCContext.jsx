@@ -185,6 +185,11 @@ export const PQCProvider = ({ children }) => {
             // 403 from /auth/login means a new identity needs an invite code
             // (audit §5) — tag it so the UI can prompt for one and retry.
             if (loginRes.status === 403) err.code = 'INVITE_REQUIRED';
+            // 410 means this key was erased and can never register again. It
+            // needs its own code precisely because it used to arrive as a 403
+            // and inherited the branch above: the user was told to enter an
+            // invite code for a key no code could ever admit.
+            if (loginRes.status === 410) err.code = 'ACCOUNT_DELETED';
             throw err;
         }
     };
@@ -453,7 +458,44 @@ export const PQCProvider = ({ children }) => {
     // — keys kept, ciphertext dropped. Deleting those outright would take the
     // partner's OWN replies with them, since a DM epoch's key lives in the
     // first message under that sid and the replies carry keys:null.
-    const deleteServerAccount = async (mode) => {
+    /**
+     * Remove the ACTIVE identity from this device's vault.
+     *
+     * Scoped to one identity on purpose: a vault can hold several, and the one
+     * the server just deleted is the only one that has become useless. The
+     * whole vault is wiped only when that identity is the last one in it, since
+     * vaultService.deleteAccount refuses to remove the final account — and
+     * leaving an empty-but-present vault behind would keep the login screen
+     * offering "Unlock Local Vault" with no way to create a new identity.
+     *
+     * `password` is passed in by callers that already hold it (the login screen
+     * has just used it); otherwise it is asked for, or answered from the key
+     * cache. Returns which of the two happened, for the caller's message.
+     */
+    const forgetLocalIdentity = async (password = undefined) => {
+        const accounts = vaultService.getAccounts() || [];
+        const active = vaultService.getActiveAccount();
+
+        if (accounts.length > 1 && active) {
+            const pw = password !== undefined
+                ? password
+                : await requestPassword("Enter your vault password to remove this identity:");
+            await vaultService.deleteAccount(active.id, pw);
+            const next = vaultService.getActiveAccount();
+            if (next) {
+                setPqcAccount(next.mldsa.publicKey);
+                setMlkemKey(next.mlkem.publicKey);
+            }
+            return 'identity';
+        }
+
+        vaultService.wipeVault();
+        setHasLocalVault(false);
+        setBiometricsEnabled(false);
+        return 'vault';
+    };
+
+    const deleteServerAccount = async (mode, { forgetVault = false } = {}) => {
         let redactions = [];
         if (mode === 'erase') {
             // Paged to the end (audit O-3). Reading only the first page would
@@ -494,8 +536,19 @@ export const PQCProvider = ({ children }) => {
             body: { mode, nonce, signature, redactions },
         });
 
-        // The vault stays on the device: the keys are the user's, and after a
-        // `leave` they are what brings the account back.
+        // Erasing blocks the key forever, so the vault entry left behind is a
+        // key the server will never admit again — and with it present the login
+        // screen only ever offers "Unlock Local Vault", with no way to create a
+        // new identity. Removing it is the caller's explicit choice because it
+        // is unrecoverable, and it must happen only AFTER the server said yes:
+        // every redaction signature needs the key this destroys.
+        // Never on a `leave`, whatever the caller asks: the vault is exactly
+        // what makes leaving reversible, so removing it would turn the promise
+        // on that screen into a lie.
+        if (forgetVault && mode === 'erase') await forgetLocalIdentity();
+
+        // Otherwise the vault stays: the keys are the user's, and after a
+        // `leave` they are exactly what brings the account back.
         authLogout();
     };
 
@@ -553,6 +606,7 @@ export const PQCProvider = ({ children }) => {
             switchVaultAccount,
             deleteVaultAccount,
             deleteServerAccount,
+            forgetLocalIdentity,
             exportVault,
             importVault,
             exportEncryptedVault,
