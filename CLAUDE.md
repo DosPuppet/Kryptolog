@@ -1187,3 +1187,13 @@ the one thing no probe reaches: that a SECOND tab acts on the frame, and that
 the tab which asked for the sign-out stays quiet.
 
 No migration and no `CRYPTO_CORE_VERSION` bump — nothing stored changed shape.
+
+**Committed straight to `main`** (`b1e7856`, at the user's direction — no
+branch this time), with all four suites — backend **544**, frontend **223**,
+crypto-core **57**, extension **96** — both builds and every lint/format/drift
+gate green. **Not pushed yet**, so neither GitHub Actions workflow has run over
+it.
+
+**M-1 is the second finding closed from the 2026-09-11 independent audit**
+(H-1 was fixed during the audit itself). M-2…M-6 and F-1…F-10 are still open;
+the detail stays in the untracked report.
