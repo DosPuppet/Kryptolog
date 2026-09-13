@@ -737,10 +737,11 @@ extension unchanged at 96. All five lint/format/drift gates green. Every new
 gate mutation-tested individually.
 
 **Still open on this branch:**
-- Not merged, not pushed, and the end-to-end pass has not been run.
-  `E2E-RECIPE.md` §7 covers both modes and is written from the *other* account's
-  screen, because the failure this feature exists to avoid is invisible from the
-  deleting user's own.
+- ~~Not merged, not pushed, and the end-to-end pass has not been run.~~
+  **Walked and merged** — see the end of this file. `E2E-RECIPE.md` §7 covers
+  both modes and is written from the *other* account's screen, because the
+  failure this feature exists to avoid is invisible from the deleting user's
+  own.
 - ~~`ConnectionManager.close_address` has no test.~~ **Covered now** — four in
   `test_ws_fanout.py`: every socket for the address is closed (not just the
   first), the hangup reaches a socket held by *another worker* through the
@@ -750,9 +751,11 @@ gate mutation-tested individually.
   because `disconnect()` already removes each socket's own entry — the explicit
   purge exists for an entry left by a worker that died, and only a test that
   plants one can tell the difference.
-- Rolling restarts: a worker on the previous build will deliver the reserved
+- ~~Rolling restarts: a worker on the previous build will deliver the reserved
   `ACCOUNT_DELETED` frame as an ordinary message and not close the socket, so
-  the SPA should treat it as "log out now" in its own right. It does not yet.
+  the SPA should treat it as "log out now" in its own right. It does not yet.~~
+  **Done** (I-4, below), and a tab that was idle and saw no frame at all finds
+  out on its next request instead.
 
 ### Found by walking the recipe — 2026-09-12
 
@@ -1105,6 +1108,18 @@ it differently: a password box every time with a local vault (L-2), the
 extension's approval window otherwise.
 
 **Every finding in the 2026-09-12 account-deletion audit is now closed.** Five
-commits, `275c5b9`..`dfbb19f`. Suites at the end: backend **539**, frontend
-**219**, crypto-core **57**, extension **96**, all five gates green. The branch
-is still not merged and not pushed.
+commits, `275c5b9`..`dfbb19f`, and `ab5c689` recording the walk.
+
+**Merged to `main` on 2026-09-13** (fast-forward, `b75d3e7`..`ab5c689`, 16
+commits; the branch is still around at the merged commit), with all four suites
+— backend **539**, frontend **219**, crypto-core **57**, extension **96** —
+both builds and every lint/format/drift gate green at `ab5c689`.
+
+**Not pushed yet**, so neither GitHub Actions workflow has run over any of this.
+Every previous merge found something on the first push that a local pass did
+not: `js-yaml`, a runner-speed timeout. Expect the same here.
+
+**Deploying this merge runs a migration** (`c9d0e1f2a3b4`, `users` gains
+`deleted_at` and `blocked`), which both start paths do before serving. No
+cutover: `CRYPTO_CORE_VERSION` 2.1.0 is additive and every stored signature
+still verifies, so there is nothing to wipe this time.
