@@ -31,7 +31,7 @@ export const useMessengerContext = () => {
 };
 
 export const MessengerProvider = ({ children }) => {
-    const { user, token, logout } = useAuth();
+    const { user, token, logout, isAuthenticated } = useAuth();
     const { generateSessionKey, wrapSessionKey, unwrapSessionKey, unwrapManySessionKeys, mlkemKey, signMessage } = usePQC();
 
     const [conversations, setConversations] = useState([]);
@@ -155,6 +155,24 @@ export const MessengerProvider = ({ children }) => {
             // 2026-09-12 I-4).
             ACCOUNT_DELETED: () => {
                 toast.info('This account has been deleted. Signing out.');
+                logout();
+            },
+            // Same shape, different fact: the account is fine, its sessions are
+            // not — someone revoked them (websocket_manager.SESSION_REVOKED).
+            // A socket is authenticated once, at its handshake, so until the
+            // server started hanging up, "revoke all sessions" left the tab it
+            // was aimed at receiving every incoming message in real time (audit
+            // 2026-09-11 M-1). Meaningful on its own for the same two reasons
+            // ACCOUNT_DELETED is: the previous build's workers fan it out
+            // without closing anything, and the expiry backstop sends it down a
+            // single socket rather than closing the whole address.
+            //
+            // `isAuthenticated` gates the toast, not the logout: signing out
+            // from this very tab revokes this very socket, so the frame comes
+            // back to a tab that already knows. logout() is idempotent, the
+            // toast is not (the same guard AuthContext's 401 path uses).
+            SESSION_REVOKED: () => {
+                if (isAuthenticated) toast.info('Your session was ended. Please sign in again.');
                 logout();
             },
             NEW_MESSAGE: (data) => handleIncomingMessage(data.message),

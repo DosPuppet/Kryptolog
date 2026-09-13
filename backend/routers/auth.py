@@ -14,6 +14,7 @@ from security import authorization
 from security.crypto_validation import is_valid_ml_dsa_public_key, is_valid_ml_kem_public_key
 from security.usernames import InvalidUsername, normalize_username, username_taken
 from utils.clock import utcnow_naive
+from websocket_manager import SESSION_REVOKED, manager
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
@@ -326,13 +327,22 @@ def login(request: Request, login_req: schemas.LoginRequest, db: Session = Depen
 
 @router.post("/logout")
 @limiter.limit("20/minute")
-def logout(
+async def logout(
     request: Request,
     current_user: models.User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
     """Revoke all of this user's tokens by bumping their token_version.
-    Existing JWTs (carrying the old tv) stop validating immediately."""
+    Existing JWTs (carrying the old tv) stop validating immediately.
+
+    Immediately on the REST surface, that is. A WebSocket is authenticated once,
+    at its handshake, so bumping the version left an ALREADY-OPEN socket
+    delivering every incoming message in real time (audit 2026-09-11 M-1) — and
+    "revoke all sessions" is aimed precisely at a tab the user no longer
+    controls. The row has to be committed before the hangup, or a socket that
+    races the close and reconnects is re-admitted against the old version.
+    """
     current_user.token_version = (current_user.token_version or 0) + 1
     db.commit()
+    await manager.close_address(current_user.address, reason=SESSION_REVOKED)
     return {"status": "ok"}

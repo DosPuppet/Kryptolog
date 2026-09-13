@@ -42,8 +42,16 @@ export default function Dashboard({ view = 'secrets' }) {
     const currentDisplayAccount = pqcAccount;
 
     const handleLogout = async () => {
-        // Best-effort server-side revocation (bumps token_version so the JWT can't
-        // be reused even if it was exfiltrated), then clear client state regardless.
+        // Clear client state FIRST, then revoke server-side best-effort (bumping
+        // token_version so the JWT can't be reused even if it was exfiltrated).
+        //
+        // That order is not cosmetic. Revoking now also hangs up this identity's
+        // WebSockets, including this tab's (audit 2026-09-11 M-1), and the
+        // SESSION_REVOKED frame that comes back would otherwise land while this
+        // tab still believed it was signed in — announcing "your session was
+        // ended" to the person who just clicked Sign out. The request carries
+        // the token explicitly, so it is still authenticated after logout().
+        logout();
         try {
             if (token) {
                 await apiFetch(API_ENDPOINTS.AUTH.LOGOUT, token, { method: 'POST' });
@@ -51,7 +59,6 @@ export default function Dashboard({ view = 'secrets' }) {
         } catch (e) {
             console.error("Logout revocation failed", e);
         }
-        logout();
     };
 
     // Custom Hooks

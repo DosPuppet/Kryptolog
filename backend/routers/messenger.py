@@ -1,6 +1,7 @@
 import asyncio
 import json
 import logging
+import time
 
 from fastapi import (
     APIRouter,
@@ -14,6 +15,7 @@ from fastapi import (
 )
 from sqlalchemy import case, func, or_
 from sqlalchemy.orm import Session, defer, joinedload
+from starlette.concurrency import run_in_threadpool
 
 import config
 import models
@@ -24,7 +26,7 @@ from security import authorization
 from security.crypto_validation import is_usable_encryption_key
 from utils.clock import to_wire_utc
 from utils.push import display_name, notify_user_push_async
-from websocket_manager import manager
+from websocket_manager import SESSION_REVOKED, manager
 
 logger = logging.getLogger("kryptolog.messenger")
 
@@ -237,6 +239,19 @@ ws_router = APIRouter()
 # How long an accepted socket may stay unauthenticated before we close it (M2).
 WS_AUTH_TIMEOUT_SECONDS = 10.0
 
+# How often an open socket re-asks whether its token is still good (audit
+# 2026-09-11 M-1). The token was checked once, at the handshake, and nothing
+# after that would ever notice it dying: a socket outlived the JWT's 30 minutes
+# for as long as the tab stayed open, and nginx is configured for a 24h read
+# timeout.
+#
+# Revocation gets an immediate hangup from close_address, so what this interval
+# really bounds is EXPIRY — plus a backstop for a revocation whose fan-out never
+# arrived (Redis down, or the bump written by a worker mid-rolling-restart).
+# A minute costs one indexed lookup per socket per minute and is well inside the
+# granularity anyone reasons about a 30-minute token with.
+WS_REVALIDATE_SECONDS = 60.0
+
 
 def _origin_allowed(websocket: WebSocket) -> bool:
     """Whether this handshake's Origin is on the allowlist (audit M2).
@@ -254,12 +269,38 @@ def _origin_allowed(websocket: WebSocket) -> bool:
     return origin is not None and origin.rstrip("/") in allowed
 
 
-async def _authenticate_socket(websocket: WebSocket) -> str | None:
-    """Read the AUTH frame and return the caller's address, or None to reject.
+def _address_for_token(token: str) -> str | None:
+    """Whom this token speaks for right now, or None if it no longer speaks.
+
+    The ONE question both the handshake and the periodic recheck ask, answered
+    by the same `user_for_token` the HTTP dependency uses — expiry, deletion and
+    revocation all land here, and a socket must not learn any of them later than
+    a request does. Re-decoding the whole token each time rather than caching the
+    `exp`/`tv` it carried is what keeps that true: whatever the rule grows next,
+    the socket inherits it (this is the KRY-001 shape).
+
+    Synchronous: it opens its own short-lived session, since the caller's
+    request-scoped one is long gone by the time a socket is an hour old. Callers
+    hand it to a thread (audit 2026-09-12 L-4) rather than blocking the loop the
+    other sockets are served on.
+    """
+    db = SessionLocal()
+    try:
+        ws_user = user_for_token(token, db)
+        return ws_user.address.lower() if ws_user else None
+    finally:
+        db.close()
+
+
+async def _authenticate_socket(websocket: WebSocket) -> tuple[str, str] | None:
+    """Read the AUTH frame and return (address, token), or None to reject.
 
     Bounded by WS_AUTH_TIMEOUT_SECONDS (audit M2) so unauthenticated sockets
     cannot linger and pile up; clients send AUTH immediately on connect. Read
     at call time rather than captured as a default so tests can adjust it.
+
+    The token comes back with the address because the socket has to keep asking
+    the question, not just answer it once (audit M-1).
     """
     try:
         data = await asyncio.wait_for(websocket.receive_text(), timeout=WS_AUTH_TIMEOUT_SECONDS)
@@ -275,23 +316,34 @@ async def _authenticate_socket(websocket: WebSocket) -> str | None:
         return None
 
     # Validate the token AND enforce revocation (token_version), same as HTTP.
-    db = SessionLocal()
-    try:
-        ws_user = user_for_token(token, db)
-    finally:
-        db.close()
-
-    return ws_user.address.lower() if ws_user else None
+    address = await run_in_threadpool(_address_for_token, token)
+    return (address, token) if address else None
 
 
-async def _client_message_loop(websocket: WebSocket) -> None:
-    """Serve one authenticated socket until it disconnects.
+async def _client_message_loop(websocket: WebSocket, token: str) -> None:
+    """Serve one authenticated socket until it disconnects or its token dies.
 
     The only client-to-server messages are presence hints, and a malformed one
     is ignored rather than closing the socket.
+
+    Returns (rather than raising) when the token stops validating, leaving the
+    caller to hang up. The recheck rides on the receive's own timeout instead of
+    a timer task alongside it, and the timeout is computed from a DEADLINE: the
+    SPA heartbeats every 30s, so a plain per-receive timeout would be pushed
+    forward by that traffic and never fire on a tab that is merely open.
     """
+    deadline = time.monotonic() + WS_REVALIDATE_SECONDS
     while True:
-        raw = await websocket.receive_text()
+        try:
+            raw = await asyncio.wait_for(
+                websocket.receive_text(), timeout=max(0.0, deadline - time.monotonic())
+            )
+        except TimeoutError:
+            if await run_in_threadpool(_address_for_token, token) is None:
+                return
+            deadline = time.monotonic() + WS_REVALIDATE_SECONDS
+            continue
+
         try:
             msg = json.loads(raw)
             if msg.get("type") == "APP_FOCUSED":
@@ -312,15 +364,24 @@ async def websocket_endpoint(websocket: WebSocket):
     await websocket.accept()
 
     try:
-        user_address = await _authenticate_socket(websocket)
-        if user_address is None:
+        authenticated = await _authenticate_socket(websocket)
+        if authenticated is None:
             await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
             return
+        user_address, token = authenticated
 
         await manager.connect(websocket, user_address)
         try:
-            await _client_message_loop(websocket)
+            await _client_message_loop(websocket, token)
+            # The loop returned instead of raising: this socket's token stopped
+            # validating under it (audit M-1). Say so before hanging up — the
+            # client cannot tell a dead session from a dropped connection
+            # otherwise, and would spend its reconnect budget finding out.
+            await websocket.send_json({"type": SESSION_REVOKED})
+            await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
         except WebSocketDisconnect:
+            pass
+        finally:
             await manager.disconnect(websocket, user_address)
 
     except WebSocketDisconnect:

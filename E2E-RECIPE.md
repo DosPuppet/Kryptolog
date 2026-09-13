@@ -148,6 +148,31 @@ Check in the browser devtools Network tab: the `/ws` request should show status
 
 ---
 
+## 4b. Signing out ends the OTHER tab's socket
+
+Sign the same account in twice — two browser profiles, or a normal and a private
+window — and leave both on the messenger. Send a DM from the second account and
+confirm both tabs show it live. Then **Sign out in tab A only**.
+
+Tab B should land on the sign-in screen by itself, saying its session was ended.
+With B's devtools open, its `/ws` should close rather than keep retrying, and a
+DM sent afterwards must not appear in it.
+
+**Proves:** the audit 2026-09-11 M-1 fix end to end. A socket is authenticated
+once, at its handshake, so revoking every session used to leave B's socket
+delivering messages in real time while every REST call from it 401'd — and
+"revoke all sessions" is aimed precisely at a tab the user no longer controls.
+`audit/probes/probe_m1.py` drives the server half against a live stack; what is
+left for a browser is that the SPA *acts* on the frame, and that it does so in
+the tab that did NOT ask for it.
+
+**What to watch for:** tab A, the one that clicked Sign out, must NOT announce
+that its session was ended — it revoked its own socket, so the frame comes back
+to it too. A "your session was ended" message there reads as a failure of the
+thing the user just did on purpose.
+
+---
+
 ## 5. Extension lock / unlock
 
 Lock the vault from the popup, confirm signing is refused, unlock and confirm it

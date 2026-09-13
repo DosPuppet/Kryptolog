@@ -1123,3 +1123,67 @@ not: `js-yaml`, a runner-speed timeout. Expect the same here.
 `deleted_at` and `blocked`), which both start paths do before serving. No
 cutover: `CRYPTO_CORE_VERSION` 2.1.0 is additive and every stored signature
 still verifies, so there is nothing to wipe this time.
+
+## M-1: a socket that was authenticated once, and never asked again — 2026-09-13
+
+From the 2026-09-11 independent audit (`audit/AUDIT-2026-09-11-independent.md`,
+untracked). The JWT was checked at the WebSocket handshake and never again, so
+after `POST /auth/logout` the REST surface refused the token instantly while the
+socket it had opened carried on delivering `NEW_MESSAGE` frames — and a socket
+outlived the JWT's own 30 minutes for as long as the tab stayed open, nginx
+being configured for a 24h read timeout. The scenario is the one that makes it
+matter: "revoke all sessions" is aimed precisely at a tab the user no longer
+controls.
+
+**Two mechanisms, and neither covers the other.**
+
+- **Revocation hangs up immediately**, through the fan-out deletion already
+  used. `close_address` grew a `reason`, `ACCOUNT_DELETED` and the new
+  `SESSION_REVOKED` are both `HANGUP_TYPES`, and `logout` calls it after the
+  commit — before the commit, a socket that raced the close and reconnected
+  would be re-admitted against the old `token_version`.
+- **A periodic recheck catches what nobody publishes**: expiry, and a revocation
+  whose fan-out was lost (Redis down, a worker mid-rolling-restart). Every
+  `WS_REVALIDATE_SECONDS` (60) the socket re-asks `user_for_token` — the same
+  rule the HTTP dependency uses, re-decoding the whole token rather than
+  caching the `exp`/`tv` it carried, so whatever that rule grows next the socket
+  inherits (the KRY-001 shape).
+
+**The recheck is timed off a DEADLINE, not off each receive**, and that is the
+part a later edit will get wrong. The SPA heartbeats every 30s and signals focus
+changes besides, so a plain per-receive timeout is re-armed by ordinary traffic
+and never fires on the tab that is actually open — which is every tab worth
+hanging up on. It passes every other test in the file, so
+`test_client_traffic_cannot_postpone_the_recheck` exists to say so.
+
+**`SESSION_REVOKED` is a separate frame from `ACCOUNT_DELETED`**, not a shared
+"you're out" — one account is gone and one can sign straight back in, and the
+SPA says something different about each. Both must mean "log out now" in their
+own right: a worker on the previous build fans the frame out as an ordinary
+message and closes nothing, and the expiry backstop sends it down one socket
+rather than closing the whole address.
+
+**The sign-out button now clears local state BEFORE calling the endpoint.**
+Revoking hangs up this tab's own socket too, so the frame comes back to the
+person who just clicked Sign out — announcing "your session was ended" to them
+reads like a failure of the thing they did on purpose. The request carries the
+token explicitly, so it is still authenticated after `logout()`. Nothing else
+fails if that order goes back, which is why a test reads `Dashboard.jsx` and
+pins it, the way the envelope constants are pinned.
+
+**Verified live, not only in-process** — `audit/probes/probe_m1.py`, against the
+dev stack with the Redis fan-out enabled. Before: `logout` → REST `401`, socket
+**still open**, and Bob's next DM lands in it. After: `SESSION_REVOKED` then
+closed by the server, and the DM does not arrive. Phase 2 bumps `token_version`
+straight in the database so nothing is ever published, and the socket hangs up
+**after 59s** on the recheck alone.
+
+Six new gates, each mutation-tested and each killing only its own: dropping the
+hangup from `logout`, never rechecking, always failing the recheck, a
+per-receive timeout, `SESSION_REVOKED` missing from `HANGUP_TYPES`, and the
+Dashboard ordering. Backend 539 → **544**, frontend 219 → **223**; crypto-core
+and extension untouched. `E2E-RECIPE.md` §4b covers the browser half, which is
+the one thing no probe reaches: that a SECOND tab acts on the frame, and that
+the tab which asked for the sign-out stays quiet.
+
+No migration and no `CRYPTO_CORE_VERSION` bump — nothing stored changed shape.

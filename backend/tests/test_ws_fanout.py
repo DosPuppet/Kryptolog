@@ -19,7 +19,7 @@ import pytest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from websocket_manager import ConnectionManager
+from websocket_manager import SESSION_REVOKED, ConnectionManager
 
 
 @pytest.fixture
@@ -458,6 +458,48 @@ async def test_the_hangup_reaches_sockets_held_by_another_worker(addr):
         # It is told why before the socket goes, so a client on an older build
         # (which will not be closed for it) can still log itself out.
         assert ws.sent and ws.sent[-1]["type"] == "ACCOUNT_DELETED"
+    finally:
+        await mgr_a.shutdown()
+        await mgr_b.shutdown()
+
+
+@pytest.mark.anyio
+async def test_a_revocation_hangs_up_across_workers_too(addr):
+    """Revoking sessions is the second caller of the hangup (audit M-1).
+
+    It rides the same fan-out for the same reason deletion does — the revoked
+    identity's sockets may be on a worker that knows nothing about the
+    `POST /auth/logout` that killed them — and the frame differs because the
+    client says something different about each: one account is gone, the other
+    can log straight back in.
+    """
+    if not os.getenv("TEST_REDIS_URL"):
+        import fakeredis
+        import fakeredis.aioredis
+
+        server = fakeredis.FakeServer()
+
+        async def make():
+            m = ConnectionManager(redis_url="redis://fake")
+            await m.startup(
+                redis_client=fakeredis.aioredis.FakeRedis(server=server, decode_responses=True),
+                redis_sync_client=fakeredis.FakeRedis(server=server, decode_responses=True),
+            )
+            return m
+
+        mgr_a, mgr_b = await make(), await make()
+    else:
+        mgr_a, mgr_b = await _make_shared_manager(), await _make_shared_manager()
+
+    try:
+        ws = FakeWebSocket()
+        await mgr_b.connect(ws, addr)
+
+        await mgr_a.close_address(addr, reason=SESSION_REVOKED)
+
+        assert await _wait_for(lambda: ws.closed), "worker B never hung up"
+        assert ws.sent and ws.sent[-1]["type"] == SESSION_REVOKED
+        assert mgr_b.is_connected(addr) is False
     finally:
         await mgr_a.shutdown()
         await mgr_b.shutdown()
