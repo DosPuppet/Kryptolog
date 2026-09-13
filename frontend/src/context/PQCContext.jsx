@@ -463,6 +463,34 @@ export const PQCProvider = ({ children }) => {
     // partner's OWN replies with them, since a DM epoch's key lives in the
     // first message under that sid and the replies carry keys:null.
     /**
+     * Is the identity this session is signed in as the one this device's vault
+     * is currently holding open?
+     *
+     * THE predicate behind every "remove this identity from this device"
+     * decision — offered by the danger zone, acted on by forgetLocalIdentity.
+     * It lives here, once, because those two call sites disagreeing is exactly
+     * what produced the M-1 finding (audit 2026-09-12): the box was offered in
+     * a case the code then mishandled.
+     *
+     * False for an EXTENSION session, which is the case that finding is about.
+     * withCustody prefers the extension, so the identity being erased is the
+     * extension's, while a vault on the same device holds a DIFFERENT identity
+     * — one this operation has no business touching. Being locked, it also
+     * reports zero accounts, which is what sent the removal below down its
+     * "wipe the whole vault" branch.
+     *
+     * Compared by ADDRESS rather than by "is a vault present": the vault can be
+     * unlocked on an identity the user switched away from, and key material is
+     * not recoverable from a wrong guess.
+     */
+    const vaultHoldsCurrentIdentity = () => {
+        // null whenever the vault is locked or absent (vault.js getActiveAccount).
+        const active = vaultService.getActiveAccount();
+        const held = (active?.mldsa?.publicKey || '').toLowerCase();
+        return !!held && held === (pqcAccount || '').toLowerCase();
+    };
+
+    /**
      * Remove the ACTIVE identity from this device's vault.
      *
      * Scoped to one identity on purpose: a vault can hold several, and the one
@@ -474,13 +502,25 @@ export const PQCProvider = ({ children }) => {
      *
      * `password` is passed in by callers that already hold it (the login screen
      * has just used it); otherwise it is asked for, or answered from the key
-     * cache. Returns which of the two happened, for the caller's message.
+     * cache. Returns what was removed — 'identity', 'vault', or 'none'.
      */
     const forgetLocalIdentity = async (password = undefined) => {
+        // Refuse to destroy key material belonging to anyone but the identity
+        // this session signed in as (audit 2026-09-12 M-1). Returning rather
+        // than throwing: the erase path reaches here AFTER the server has
+        // already deleted the account, so raising would report a failure that
+        // did not happen — and this is a no-op, not a failed operation.
+        if (!vaultHoldsCurrentIdentity()) {
+            console.warn(
+                "Leaving this device's vault alone: it is not holding the identity being removed."
+            );
+            return 'none';
+        }
+
         const accounts = vaultService.getAccounts() || [];
         const active = vaultService.getActiveAccount();
 
-        if (accounts.length > 1 && active) {
+        if (accounts.length > 1) {
             const pw = password !== undefined
                 ? password
                 : await requestPassword("Enter your vault password to remove this identity:");
@@ -549,6 +589,9 @@ export const PQCProvider = ({ children }) => {
         // Never on a `leave`, whatever the caller asks: the vault is exactly
         // what makes leaving reversible, so removing it would turn the promise
         // on that screen into a lie.
+        // And never for an identity the vault is not holding — forgetLocalIdentity
+        // checks that itself, so a caller asking for it anyway gets a no-op
+        // rather than somebody else's keys destroyed (audit 2026-09-12 M-1).
         if (forgetVault && mode === 'erase') await forgetLocalIdentity();
 
         // Otherwise the vault stays: the keys are the user's, and after a
@@ -611,6 +654,7 @@ export const PQCProvider = ({ children }) => {
             deleteVaultAccount,
             deleteServerAccount,
             forgetLocalIdentity,
+            vaultHoldsCurrentIdentity,
             exportVault,
             importVault,
             exportEncryptedVault,

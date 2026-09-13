@@ -837,3 +837,54 @@ Three changes, each mutation-tested:
 Frontend suite 195 → **198**. The self-heal from the previous commit stays: it
 is what lets an install already holding a wrapped null recover without the
 console.
+
+### Audited — 2026-09-12
+
+A feature-scoped security audit of both deletion modes was run at `1759e16`,
+with probes against the live stack (real ML-DSA identities, Redis fan-out) and
+one vitest probe. Report and probes are **untracked** (`audit/`), as usual,
+because they enumerate what is not fixed. **No critical or high finding**; the
+signed-deletion core held under every probe. Two medium findings, both about
+the deleting user's *own* data rather than anyone else's, four low, seven
+informational — none fixed yet. The two mediums are the reason not to merge
+this branch before phase 0 of the report: one is an irreversible key loss on a
+device holding two identities, the other is an erase that stops being possible
+for the accounts with the most history.
+
+**The irreversible key loss is fixed — 2026-09-13.** Erasing an account offers
+to remove that identity from this device, and the box is checked by default.
+`forgetLocalIdentity` decided between "remove one identity" and "wipe the whole
+vault" on `vaultService.getAccounts().length > 1`, which answers **`[]` for a
+LOCKED vault** — and a session signed in through the extension never unlocks
+the local vault at all. So a device holding an extension identity *and* a local
+vault for a **different** identity wiped the second one on erasing the first:
+keys that exist nowhere else, for an account the server had not touched. That
+two-identity setup is not exotic, it is what `E2E-RECIPE.md` walks.
+
+**The rule is one predicate in the provider, `vaultHoldsCurrentIdentity()`,**
+because the two places that need it are a checkbox and the code that acts on it
+— and those disagreeing is the whole finding. It compares the vault's active
+account **by address** against the identity being erased, rather than asking
+"is a vault present":
+
+- **`authType` discriminates nothing** — `performServerLogin` records
+  `'trustkeys'` for both custody paths, so it cannot be the gate.
+- **"Is the vault open?" is not enough.** An unlocked vault can be sitting on an
+  identity the user switched away from. The locked-extension case falls out of
+  the same comparison for free, since `getActiveAccount()` answers `null`.
+- **It refuses by returning `'none'`, not by throwing.** On the erase path it
+  runs *after* the server's 204, so raising would report a failure that did not
+  happen. The login screen's own use of it treats `'none'` as a message.
+- **The checkbox is hidden when the predicate is false, and `forgetVault` is
+  computed with it too** — its state defaults to `true` and hiding a checkbox
+  does not reset it.
+
+Four tests (`accountDeletion.test.jsx`, new `deleteAccountSection.test.jsx`),
+each mutation-tested and each killing only its own gate; frontend 199 → **206**.
+The audit probe that *asserted* the bug now fails with zero wipes, which is what
+closing a finding looks like.
+
+**Deliberately not done:** for an extension session the danger zone now offers
+nothing about this device, though the erased keys do still sit in the extension.
+Clearing them belongs to TrustKeys' own account management — a feature, not a
+fix.

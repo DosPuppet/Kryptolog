@@ -105,6 +105,15 @@ export default function Login() {
         if (!ok) return;
         try {
             const removed = await forgetLocalIdentity(password);
+            if (removed === 'none') {
+                // The provider refuses to touch a vault that is not holding the
+                // identity in question (audit 2026-09-12 M-1). Unreachable from
+                // here — this button only appears after an unlock of THIS vault
+                // was refused by the server — so say so rather than switching
+                // the screen as though something had been removed.
+                setError("This device's vault is not holding that identity, so nothing was removed.");
+                return;
+            }
             setVaultKeyDeleted(false);
             setError(null);
             setPassword('');

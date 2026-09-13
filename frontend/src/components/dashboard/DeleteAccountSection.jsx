@@ -52,7 +52,7 @@ const MODES = [
  * makes the sequence a decision rather than a reflex.
  */
 const DeleteAccountSection = () => {
-    const { deleteServerAccount } = usePQC();
+    const { deleteServerAccount, vaultHoldsCurrentIdentity } = usePQC();
     const [choosing, setChoosing] = useState(false);
     const [mode, setMode] = useState('leave');
     // Erasing blocks the key forever, so keeping it on the device is almost
@@ -61,6 +61,13 @@ const DeleteAccountSection = () => {
     // what makes leaving reversible.
     const [alsoForget, setAlsoForget] = useState(true);
     const [busy, setBusy] = useState(false);
+
+    // Only when this device's vault is what holds the identity being erased
+    // (audit 2026-09-12 M-1). With the keys in the extension instead, the vault
+    // on this device belongs to SOMEBODY ELSE — offering to clear "this
+    // identity" from it described an action that would have destroyed a
+    // different, still-valid identity's keys.
+    const canForgetVault = vaultHoldsCurrentIdentity();
 
     const chosen = MODES.find((m) => m.id === mode);
 
@@ -78,7 +85,9 @@ const DeleteAccountSection = () => {
 
         setBusy(true);
         try {
-            await deleteServerAccount(mode, { forgetVault: mode === 'erase' && alsoForget });
+            await deleteServerAccount(mode, {
+                forgetVault: mode === 'erase' && alsoForget && canForgetVault,
+            });
             // Nothing to navigate to: the provider logs out, and App swaps the
             // route table back to the login screen on its own.
             toast.success(mode === 'erase' ? 'Account erased.' : 'Account removed.');
@@ -158,7 +167,7 @@ const DeleteAccountSection = () => {
                         </p>
                     </div>
 
-                    {mode === 'erase' && (
+                    {mode === 'erase' && canForgetVault && (
                         <label className="flex items-start gap-2 text-xs text-slate-600 dark:text-slate-400">
                             <input
                                 type="checkbox"

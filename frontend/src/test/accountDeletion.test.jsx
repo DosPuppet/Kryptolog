@@ -267,6 +267,102 @@ describe('what an erase leaves on the device', () => {
     });
 });
 
+describe('an erase performed with the keys in the extension', () => {
+    // A device can hold both: an identity in the TrustKeys extension, and a
+    // separate one in a local vault that has never been unlocked this session.
+    // withCustody prefers the extension, so the identity being erased is the
+    // extension's — and the vault, being locked, reports no accounts at all,
+    // which is what used to select "wipe the whole vault" (audit 2026-09-12
+    // M-1). The keys it holds are a different, still-valid identity's, and they
+    // exist nowhere else unless the user exported a backup.
+    const EXTENSION_ADDRESS = 'e'.repeat(64);
+    const localActiveAccount = vault.getActiveAccount;
+
+    afterEach(() => {
+        vault.isLocked = false;
+        vault.getActiveAccount = localActiveAccount;
+    });
+
+    const mountWithExtension = async () => {
+        window.trustkeys = {
+            connect: vi.fn(async () => true),
+            getAccount: vi.fn(async () => ({
+                mldsaPublicKey: EXTENSION_ADDRESS,
+                mlkemPublicKey: 'f'.repeat(64),
+                name: 'ext-user',
+            })),
+            sign: vi.fn(async () => 'extension-signature'),
+            signMessage: vi.fn(async () => 'extension-signature'),
+        };
+        // What vault.js answers while locked: no active account, no accounts.
+        vault.isLocked = true;
+        vault.getActiveAccount = () => null;
+        vault.getAccounts.mockReturnValue([]);
+
+        await act(async () => {
+            render(
+                <AuthProvider>
+                    <PQCProvider>
+                        <Probe />
+                    </PQCProvider>
+                </AuthProvider>
+            );
+        });
+        await act(async () => {
+            await api.loginTrustKeys();
+        });
+    };
+
+    it('leaves a local vault holding another identity untouched', async () => {
+        stubServer();
+        await mountWithExtension();
+        await act(async () => {
+            await api.deleteServerAccount('erase', { forgetVault: true });
+        });
+
+        // The extension really was custody for this erase...
+        expect(window.trustkeys.sign).toHaveBeenCalled();
+        expect(vault.sign).not.toHaveBeenCalled();
+        // ...so nothing on this device belonged to the erased identity.
+        expect(vault.wipeVault).not.toHaveBeenCalled();
+        expect(vault.deleteAccount).not.toHaveBeenCalled();
+    });
+
+    it('does not offer to clear a vault it is not holding', async () => {
+        stubServer();
+        await mountWithExtension();
+        // The danger zone asks this before showing the checkbox, so the promise
+        // on screen and what the code does cannot drift apart.
+        expect(api.vaultHoldsCurrentIdentity()).toBe(false);
+    });
+});
+
+describe('a vault open on a different identity', () => {
+    const localActiveAccount = vault.getActiveAccount;
+    afterEach(() => {
+        vault.getActiveAccount = localActiveAccount;
+    });
+
+    it('is left alone, even though it is unlocked and has accounts', async () => {
+        stubServer();
+        await mount();
+        // Unlocked, with an active account — just not the one being removed.
+        // A "is the vault open?" check passes here; only comparing the ADDRESS
+        // catches it, and the keys are not recoverable from a wrong guess.
+        vault.getActiveAccount = () => ({
+            id: 'acct-2',
+            name: 'Bob',
+            mldsa: { publicKey: 'c'.repeat(64) },
+            mlkem: { publicKey: 'd'.repeat(64) },
+        });
+        vault.getAccounts.mockReturnValue([{ id: 'acct-1' }, { id: 'acct-2' }]);
+
+        await expect(api.forgetLocalIdentity()).resolves.toBe('none');
+        expect(vault.deleteAccount).not.toHaveBeenCalled();
+        expect(vault.wipeVault).not.toHaveBeenCalled();
+    });
+});
+
 describe('a login refused because the key was erased', () => {
     it('is tagged ACCOUNT_DELETED, not INVITE_REQUIRED', async () => {
         // Both used to arrive as 403, and the invite branch caught them both —
