@@ -286,10 +286,12 @@ Then, as account A:
   secret or adding a group member and confirm they cannot be picked.
 - A group B owned has a new owner, and B is no longer a member.
 
-Then log in again as B **with the same vault**, choosing a new username (and an
-invite code if the server requires one). B's secrets and DM history must all be
-back. *Reload the page before checking* — session keys live only in memory, so a
-reload is what proves the history is genuinely readable rather than cached.
+Then log in again as B **with the same vault** (and an invite code if the server
+requires one). B keeps their old username: a leave holds the name, so nobody can
+take it while the account is away and B is not asked to choose a new one. B's
+secrets and DM history must all be back. *Reload the page before checking* —
+session keys live only in memory, so a reload is what proves the history is
+genuinely readable rather than cached.
 
 **7b. Erase (delete the history).** Repeat with a second pair of accounts, this
 time choosing *Erase — delete the history*.
@@ -306,8 +308,12 @@ As the other account, **reload first**, then check:
 - A document released to you through a completed multisig workflow still opens.
 - Their signature still appears in Proof Audit on a workflow they signed.
 
-Finally, try to log in again as the erased user with the same vault: it must be
-refused with "This identity was deleted. Register with a new key."
+Finally, try to log in again as the erased user with the same vault. It must be
+refused with **"This account was deleted and this key can no longer be used.
+Create a new identity to register again."** — and the screen must offer to remove
+that identity from the device, since with a blocked key still in the vault there
+is otherwise no way to create a new one. Anything mentioning an invite code here
+is the old defect back: no code can admit a blocked key.
 
 **An erase may take more than one approval.** One request carries at most 1000
 redaction signatures, so an account with more session epochs than that redacts a
@@ -318,8 +324,15 @@ that is the server reporting rows it refuses to guess at; it should say nothing
 of the kind for messages this app wrote.
 
 **What to watch for:** both modes are reached through the same two dialogs, and
-`ConfirmDialogHost` maps Enter to "confirm". Holding Enter should still stop at
-the signing prompt — if it does not, the sequence is not a decision.
+`ConfirmDialogHost` maps Enter to "confirm". Holding Enter must still stop at
+the signing step — with a local vault that is a password box, asked for every
+time even if the key cache is warm, and with the extension it is its approval
+window. If either can be cleared without a deliberate act, the sequence is not a
+decision.
+
+**With the extension holding the keys**, the option to remove the identity from
+this device is not offered at all, and that is correct: the vault on the device
+belongs to a different identity and is none of this deletion's business.
 
 ## Recording the result
 

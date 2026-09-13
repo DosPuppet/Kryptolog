@@ -1080,3 +1080,31 @@ Backend 533 → **539**. Every gate mutation-tested.
 **This closes the 2026-09-12 report except I-8** — walking §7 of
 `E2E-RECIPE.md` in a browser, which is the one thing here no test or probe
 substitutes for.
+
+### §7 walked, and the audit is closed — 2026-09-13
+
+**`E2E-RECIPE.md` §7 was walked in a browser and passed**, both modes, at
+`dfbb19f`. That was the last open item of the 2026-09-12 audit, and the only
+one no test or probe could stand in for: what the OTHER account sees is the
+whole point of the feature, and it is invisible from the deleting user's screen.
+
+**Two lines of the recipe were stale, from this branch's own fixes**, and are
+corrected now — a checklist that describes the previous behaviour trains the
+next walker to accept the wrong answer:
+
+- §7a said to choose a new username on the way back in. A leave **holds** the
+  name now (L-1), so B returns under it and is not asked.
+- §7b quoted a refusal message that no longer exists. The real text names the
+  key rather than the identity, and the screen offers to remove that identity
+  from the device — without which a blocked key in the vault leaves no way to
+  create a new one.
+
+§7 also now says what the signing step looks like in each custody mode, since
+"holding Enter must stop here" is the check that matters and the two modes stop
+it differently: a password box every time with a local vault (L-2), the
+extension's approval window otherwise.
+
+**Every finding in the 2026-09-12 account-deletion audit is now closed.** Five
+commits, `275c5b9`..`dfbb19f`. Suites at the end: backend **539**, frontend
+**219**, crypto-core **57**, extension **96**, all five gates green. The branch
+is still not merged and not pushed.
