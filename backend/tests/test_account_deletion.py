@@ -29,10 +29,12 @@ from conftest import (
     get_nonce,
     synthetic_address,
 )
+from fastapi import HTTPException
 
 import account_deletion
 import auth
 import models
+import routers.account as account_module
 import schemas
 from utils.clock import utcnow_naive
 
@@ -1407,3 +1409,166 @@ def test_the_deletion_endpoint_does_not_block_the_event_loop():
     """
     source = (pathlib.Path(__file__).resolve().parents[1] / "routers/account.py").read_text()
     assert "run_in_threadpool(_perform_deletion" in source
+
+
+class TestTwoDeletionsOfOneAccount:
+    """Deletions of the same account serialize against each other.
+
+    Single-process they already could not both apply — a handler body runs to
+    its first await without interleaving, and the deletion sweeps the other
+    request's challenge — but neither of those holds across WORKERS, which this
+    deployment supports (audit 2026-09-12 I-1). These drive the layer the
+    endpoint cannot reach in a single-threaded test: the guard itself.
+    """
+
+    def test_a_second_deletion_finds_the_account_already_gone(
+        self, client, db_session, user1, user2
+    ):
+        """What the other worker's request meets after the first one commits.
+        Unreachable through the endpoint — get_current_user refuses a deleted
+        row — so the request is built the way that worker would hold it, with a
+        user object loaded before the other deletion landed.
+        """
+        token1, u1 = user1
+        assert _delete(client, token1, u1["address"], "leave").status_code == 200
+
+        db_session.expire_all()
+        stale = db_session.query(models.User).filter_by(address=u1["address"]).one()
+        req = schemas.AccountDeleteRequest(
+            mode="erase",
+            nonce=get_nonce(client, u1["address"]),
+            signature=DUMMY_SIG,
+            redactions=[],
+        )
+        with pytest.raises(HTTPException) as refused:
+            account_module._perform_deletion(db_session, stale, req)
+        assert refused.value.status_code == 410
+
+    def test_a_block_is_never_lifted_by_a_later_deletion(self, db_session):
+        """The interleaving the lock exists to stop is an erase committing while
+        a leave that read the row earlier writes it back. Written as
+        `blocked = (mode == erase)` the invariant held only as long as that lock
+        did, and it is cheap enough to state outright."""
+        user = models.User(address="a" * 8, blocked=True)
+        account_deletion._strip_identity(user, account_deletion.MODE_LEAVE)
+        assert user.blocked is True
+
+    def test_an_erase_still_blocks(self, db_session):
+        user = models.User(address="b" * 8, blocked=False)
+        account_deletion._strip_identity(user, account_deletion.MODE_ERASE)
+        assert user.blocked is True
+
+
+class TestTheManifestPagesWithoutRebuildingItself:
+    """Which rows qualify is a question about the parsed payload, so it cannot
+    be asked in SQL and the whole set used to be rebuilt for every page — ten
+    full passes for one round, with the first page of a large account costing
+    as much as the last (audit 2026-09-12 I-2).
+    """
+
+    def test_a_page_reads_only_as_far_as_it_needs(self, client, db_session, user1, user2):
+        token1, u1 = user1
+        _, u2 = user2
+        db_session.bulk_insert_mappings(
+            models.Message,
+            [
+                {
+                    "sender_address": u1["address"],
+                    "recipient_address": u2["address"],
+                    "content": _dm_content(f"sid-{i}"),
+                    "is_read": False,
+                    "created_at": utcnow_naive(),
+                }
+                for i in range(300)
+            ],
+        )
+        db_session.commit()
+
+        parsed = []
+        real_payload = account_deletion._payload
+
+        def counting_payload(content):
+            parsed.append(content)
+            return real_payload(content)
+
+        with patch.object(account_deletion, "_payload", counting_payload):
+            first = account_deletion.redactable_messages(
+                db_session, u1["address"], limit=10, offset=0
+            )
+
+        assert [row["key"] for row in first] == [f"dm:{row['id']}" for row in first]
+        assert len(first) == 10
+        # Ten rows asked for, ten rows read — not three hundred.
+        assert len(parsed) == 10
+
+    def test_paging_still_walks_the_whole_manifest_exactly_once(
+        self, client, db_session, user1, user2
+    ):
+        """The property the slicing gave for free and an early stop could
+        plausibly break: no row skipped, none served twice."""
+        token1, u1 = user1
+        _, u2 = user2
+        channel = _create_group(client, token1, [u1["address"], u2["address"]])
+        # Seeded, not posted: POST /messages is capped at 20/minute and this
+        # needs more rows than that before it pages at all.
+        db_session.bulk_insert_mappings(
+            models.Message,
+            [
+                {
+                    "sender_address": u1["address"],
+                    "recipient_address": u2["address"],
+                    "content": _dm_content(f"sid-{i}"),
+                    "is_read": False,
+                    "created_at": utcnow_naive(),
+                }
+                for i in range(25)
+            ],
+        )
+        db_session.bulk_insert_mappings(
+            models.GroupMessage,
+            [
+                {
+                    "channel_id": channel,
+                    "sender_address": u1["address"],
+                    "content": _group_content(f"g-{i}", channel, [u1["address"], u2["address"]]),
+                    "created_at": utcnow_naive(),
+                }
+                for i in range(5)
+            ],
+        )
+        db_session.commit()
+
+        whole = _manifest(client, token1, want=100)
+        by_page = []
+        for offset in range(0, 40, 7):
+            by_page += client.get(
+                "/account/redactable-messages",
+                params={"limit": 7, "offset": offset},
+                headers=auth_header(token1),
+            ).json()
+
+        assert [row["key"] for row in by_page] == [row["key"] for row in whole]
+        assert len(whole) == len({row["key"] for row in whole})
+
+
+class TestComingBackIsAKeyDirectoryEvent:
+    def test_a_return_is_stamped(self, client, db_session, user1):
+        """`key_changed_at` was NULLed on the way out and never re-stamped, so a
+        leave and a return left no trace in the directory metadata at all. The
+        server cannot tell whether the key coming back is the one that left —
+        the strip removed it — so stamping is the conservative of the two
+        answers (audit 2026-09-12 I-3)."""
+        token1, u1 = user1
+        assert _delete(client, token1, u1["address"], "leave").status_code == 200
+        db_session.expire_all()
+        assert (
+            db_session.query(models.User).filter_by(address=u1["address"]).one().key_changed_at
+            is None
+        )
+
+        do_login(client, u1["address"], TEST_ENCRYPTION_KEY, None)
+
+        db_session.expire_all()
+        user = db_session.query(models.User).filter_by(address=u1["address"]).one()
+        assert user.deleted_at is None
+        assert user.key_changed_at is not None

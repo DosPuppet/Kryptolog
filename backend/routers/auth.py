@@ -187,6 +187,17 @@ def _revive_user(
     user.username = username
     user.encryption_public_key = login_req.encryption_public_key
     user.encryption_key_attestation = attestation
+    # A return is a key-directory event, and the server cannot tell whether the
+    # key coming back is the one that left: the strip NULLed it, so there is
+    # nothing to compare against. Stamping is the conservative direction of the
+    # two — contacts see "this entry changed on <date>" and can re-verify, where
+    # leaving it NULL says the key has never changed since creation, which is
+    # not something this path knows (audit 2026-09-12 I-3).
+    #
+    # It does not cry wolf at the layer that matters: the TOFU store in
+    # services/trustedKeys.js compares the actual key bytes on the client and
+    # stays quiet when they are identical.
+    user.key_changed_at = utcnow_naive()
     user.deleted_at = None
     db.add(user)
     db.flush()

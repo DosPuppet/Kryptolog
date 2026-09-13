@@ -1028,3 +1028,55 @@ Backend 521 → **533**, frontend 212 → **219**. Every gate mutation-tested.
 (harmless single-process, needed before multiple workers — see I-1 in the
 report), the manifest recomputed in full per page, `key_changed_at` lost across
 a leave and return, and the browser pass of `E2E-RECIPE.md` §7 still not walked.
+
+### The last three, and a correction to the audit itself — 2026-09-13
+
+**Two deletions of one account can no longer both apply (I-1).** The endpoint
+took `current_user` from the dependency and never locked the row. It now takes
+`SELECT … FOR UPDATE` — after the nonce claim, which commits, and a commit drops
+the lock — and re-checks `is_active` behind it, so the second request gets a
+**410** instead of racing. `blocked` is also written monotonically.
+
+**The audit's own analysis of this was half wrong, and proving it took building
+the thing it assumed.** The report claimed the race was reachable with multiple
+workers without having run multiple workers. Two uvicorn workers on one database
+(`audit/probes/two_workers.sh`) settle it:
+
+- **The interleaving is real.** Without the lock, `{'leave': 200, 'erase': 200}`
+  — both deletions apply — reproducibly, *provided the second request starts
+  inside the first one's transaction*. Firing them at the same instant does not
+  do it; one simply finishes first.
+- **The harm the report predicted is not.** A `leave` writing `blocked = False`
+  over an `erase` cannot happen: its session loaded the row with `blocked=False`,
+  SQLAlchemy only writes changed columns, and False → False is not a write at
+  all. The monotonic flag stays anyway, because the fix introduces the very
+  re-read that would make that write possible.
+
+**And the first version of that harness produced a convincing non-result.** It
+did not load `.env`, so each worker generated an **ephemeral JWT secret** and
+every cross-worker token came back `401 Could not validate credentials`. Six
+runs of "the losing request is beaten in the race" were measuring nothing but
+that. `two_workers.sh` now loads the environment the way `serve.sh` does and
+**refuses to start** if it sees the ephemeral-secret warning. Worth remembering
+for any future multi-process probe: a shared JWT secret is a precondition, and
+without it the failure mode looks exactly like a lost race.
+
+**The manifest pages at the source now (I-2).** `redactable_messages` takes
+`limit`/`offset` and stops at the page instead of building the whole list to
+slice it, and the walk is streamed. Which rows qualify is a question about the
+parsed payload, so it cannot go into SQL — but a page now costs what precedes
+it rather than what exists, which is what matters for the *first* page of a
+large account: a round reads ten pages, and that used to be ten full passes.
+
+**A return is stamped as a key-directory event (I-3).** `key_changed_at` was
+NULLed on the way out and never set again, so a leave and a return left no trace
+at all. The server cannot tell whether the key coming back is the one that left,
+since the strip removed it, so stamping is the conservative of the two answers.
+It does not cry wolf where it counts: the client-side TOFU store compares the
+actual key bytes and stays quiet when they match.
+
+Backend 533 → **539**. Every gate mutation-tested.
+
+**This closes the 2026-09-12 report except I-8** — walking §7 of
+`E2E-RECIPE.md` in a browser, which is the one thing here no test or probe
+substitutes for.

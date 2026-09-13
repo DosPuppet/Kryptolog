@@ -63,6 +63,10 @@ MODES = (MODE_LEAVE, MODE_ERASE)
 # namespaced — see `redaction_key`.
 _KINDS = {"dm": models.Message, "group": models.GroupMessage}
 
+# Rows fetched per round trip while walking a user's messages. Only the walk's
+# memory footprint, not a page size anyone sees.
+_STREAM_ROWS = 200
+
 
 def redaction_key(kind: str, message_id: int) -> str:
     """The id under which one message is named in a signed deletion request.
@@ -147,10 +151,17 @@ def _envelope_carriers(db: Session, address: str):
     rather than deleting), so testing `keys` alone would list it again on the
     next round and the loop would never end.
 
-    Ordered by id so the manifest pages deterministically.
+    Ordered by id so the manifest pages deterministically, and STREAMED: an
+    account with tens of thousands of messages should not have all of them in
+    memory to answer for a hundred (audit 2026-09-12 I-2).
     """
     for kind, model in _KINDS.items():
-        rows = db.query(model).filter(model.sender_address == address).order_by(model.id).all()
+        rows = (
+            db.query(model)
+            .filter(model.sender_address == address)
+            .order_by(model.id)
+            .yield_per(_STREAM_ROWS)
+        )
         for row in rows:
             payload = _payload(row.content)
             if payload is None or not payload.get("keys") or payload.get("ct") is None:
@@ -158,15 +169,27 @@ def _envelope_carriers(db: Session, address: str):
             yield kind, row, payload
 
 
-def redactable_messages(db: Session, address: str) -> list[dict]:
-    """The manifest: what the client has to re-sign before an erase.
+def redactable_messages(db: Session, address: str, *, limit: int, offset: int) -> list[dict]:
+    """One page of the manifest: what the client has to re-sign before an erase.
 
     Carries everything needed to rebuild the signed body and nothing the client
     gets to choose — `conv` and `gid` come from the row.
+
+    Paged HERE rather than by slicing a finished list. Which rows qualify is a
+    question about the parsed payload, so it cannot be asked in SQL, and the
+    whole set therefore used to be rebuilt — every message parsed, every key map
+    materialised — to answer for a hundred rows. A round reads ten pages, so
+    that was ten full passes, and the first page of a large account cost as much
+    as the last (audit 2026-09-12 I-2). Stopping at the page makes a page cost
+    what precedes it instead of what exists.
     """
     manifest = []
+    seen = 0
     for kind, row, payload in _envelope_carriers(db, address):
         if not _is_signable(payload):
+            continue
+        seen += 1
+        if seen <= offset:
             continue
         conv, gid = _conv_and_gid(kind, row)
         manifest.append(
@@ -180,6 +203,8 @@ def redactable_messages(db: Session, address: str) -> list[dict]:
                 "keys": payload["keys"],
             }
         )
+        if len(manifest) >= limit:
+            break
     return manifest
 
 
@@ -589,7 +614,14 @@ def _strip_identity(user: models.User, mode: str) -> None:
     user.key_changed_at = None
     user.token_version = (user.token_version or 0) + 1
     user.deleted_at = utcnow_naive()
-    user.blocked = mode == MODE_ERASE
+    # Monotonic: a block is never lifted by a later deletion. The caller takes a
+    # row lock and re-checks, so a "leave" cannot reach a row an "erase" has
+    # already blocked — but writing `blocked = (mode == erase)` made the
+    # invariant depend entirely on that check holding, and an invariant this
+    # cheap to state outright should not (audit 2026-09-12 I-1). Clearing the
+    # flag stays an operator's decision, by hand, which is the right amount of
+    # ceremony for undoing something the modal calls final.
+    user.blocked = bool(user.blocked) or mode == MODE_ERASE
 
 
 def delete_account(db: Session, user: models.User, mode: str) -> list[dict]:

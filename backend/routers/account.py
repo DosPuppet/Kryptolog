@@ -20,6 +20,7 @@ import schemas
 from database import get_db
 from dependencies import get_current_user, limiter
 from routers.auth import claim_nonce
+from security import authorization
 from utils.group_events import broadcast_removal
 from websocket_manager import manager
 
@@ -49,8 +50,9 @@ def redactable_messages(
     so the client re-signs a redacted form of each before the deletion is
     accepted. Only ever the caller's own messages.
     """
-    manifest = account_deletion.redactable_messages(db, current_user.address)
-    return manifest[offset : offset + limit]
+    return account_deletion.redactable_messages(
+        db, current_user.address, limit=limit, offset=offset
+    )
 
 
 @router.post("/delete", response_model=schemas.AccountDeleteResponse)
@@ -138,6 +140,26 @@ def _perform_deletion(db: Session, current_user: models.User, req: schemas.Accou
     signatures = {r.key: r.signature for r in req.redactions}
     if len(signatures) != len(req.redactions):
         raise HTTPException(status_code=400, detail="Duplicate redaction id")
+
+    # Serialize this account's deletions against each other, AFTER the nonce
+    # claim (which commits, and a commit drops the lock) so the lock lives for
+    # the deletion transaction below.
+    #
+    # Single-process, two deletions of one account already could not both apply:
+    # a handler body runs to its first await without interleaving, and the nonce
+    # sweep inside the deletion kills the other request's challenge. Neither of
+    # those holds across WORKERS, which is a configuration this deployment
+    # supports (audit 2026-09-12 I-1), and the interleaving to avoid is an
+    # "erase" committing while a "leave" that read the row earlier goes on to
+    # write it back.
+    #
+    # FOR UPDATE is a no-op on SQLite, which serializes writes at the file level
+    # anyway; on PostgreSQL it is what actually closes this.
+    db.refresh(current_user, with_for_update=True)
+    if not authorization.is_active(current_user):
+        # Someone else got there first. Not an error the caller can fix, and
+        # saying so plainly costs nothing: they hold the key to this account.
+        raise HTTPException(status_code=410, detail="This account has already been deleted.")
 
     message = auth.account_deletion_message(req.nonce, req.mode, signatures.keys())
     if not auth.verify_message_signature(address, message, req.signature):
