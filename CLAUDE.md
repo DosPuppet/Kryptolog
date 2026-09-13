@@ -888,3 +888,73 @@ closing a finding looks like.
 nothing about this device, though the erased keys do still sit in the extension.
 Clearing them belongs to TrustKeys' own account management — a feature, not a
 fix.
+
+**An erase is no longer bounded by one request — 2026-09-13.** The other medium
+finding. `MAX_REDACTIONS_PER_DELETE` (1000) bounded both a request *and* an
+account, and erase asks for one signature per session epoch the user ever
+opened — a group mints a fresh one **per client per page load**, so a couple of
+years of ordinary use passes it. Over the cap the request was a 422; one row
+under it, a 409. Neither had a way round, so the account could never be erased
+and nothing said why.
+
+**`POST /account/delete` now takes a round at a time**, answers **409 with what
+is left**, and only strips the identity when nothing of the user's still holds
+both a session key and its ciphertext. Four things make that work:
+
+- **`ct is not None` is what makes it terminate.** A redacted row keeps its
+  envelope — that is the whole point — so a manifest asking "does this carry
+  keys?" would list it again every round.
+- **The completion rule is a fixed point, not an equality check**, and it
+  *subsumes* the TOCTOU guard it replaces. `_delete_own_messages` never deletes
+  a carrier, so a message sent mid-erase is no longer at risk of being
+  destroyed; it just delays completion until the client redacts it too. The
+  test that pinned the old 409 still passes, now proving the stronger property.
+- **No pending-deletion table.** A round is verified and committed on its own
+  because a redaction is an authenticated statement by its author in its own
+  right, so each round is safe to keep. Progress is monotonic: an interrupted
+  erase resumes where it stopped. (A stored, pre-authorized destruction object
+  with an expiry sweep is exactly the "one more thing to get right" that got
+  the address blocklist rejected earlier.)
+- **There is deliberately no standalone "redact my messages" endpoint**, which
+  would have been simpler. Redaction bodies are `message`-context, so the
+  extension **auto-signs them with no popup**; the deletion signature is what
+  opens an approval window. A bare redaction route would let any site holding a
+  silent-signing grant wipe the content of every message the user ever sent.
+  The rounds stay behind the deletion signature for that reason alone.
+
+**What an erase cannot redact is now kept and counted, not fatal.** Two shapes
+could never be signed: a payload with no `sid` (`sid=None` in Python against
+`sid=null` in JS — a silent byte divergence *inside a signature body*), and an
+envelope `check_envelope_shape` refuses. Either one, self-inflicted by
+hand-posting a single message, used to refuse the whole erase forever. Both are
+now excluded from the manifest, kept rather than destroyed (the asymmetry rule
+in `_payload`), and counted back as `kept` so the modal can say "N message(s)
+could not be removed" — which also closes the silent half of that behaviour for
+unparseable rows. `auth.message_signing_body` additionally **raises** on a
+missing sid now: bytes the other language would never write must stop the
+operation, not get spelled.
+
+**Found by re-running the probe, not by reading the code:** the endpoint's
+3/minute limit capped an erase at three rounds, so the accounts the rounds exist
+for died on the fourth request with a bare 429. It is 10/minute now, matching
+`GET /auth/nonce/{address}` — a round spends exactly one challenge, so the two
+are consumed in lockstep and the tighter one is the only one that counts. The
+SPA turns a 429 into "everything removed so far is gone for good, wait a minute
+and start again to continue where it stopped", which is true because rounds
+commit as they land.
+
+Backend 512 → **521**, frontend 206 → **212**; every gate mutation-tested. The
+probe that reproduced the finding now erases 1001 carriers in two rounds with
+**all 1001 redacted and none deleted**.
+
+**One constant now lives in two languages**: the SPA's `REDACTION_ROUND` must
+not exceed the server's `MAX_REDACTIONS_PER_DELETE`, or the client builds a
+request the server 422s — on large accounts only, so nothing smaller would
+catch it. `test_the_spa_never_asks_for_more_redactions_than_one_request_takes`
+reads the JSX and pins the pair, the same way the envelope-size constants are
+pinned.
+
+**Still deliberately unsolved:** an erase big enough to need many rounds asks
+for many approvals with the extension (one signature per round, by design —
+each round is separately authorized). At 1000 carriers a round that is several
+thousand messages before a second prompt appears.

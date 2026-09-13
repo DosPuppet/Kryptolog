@@ -85,12 +85,24 @@ const DeleteAccountSection = () => {
 
         setBusy(true);
         try {
-            await deleteServerAccount(mode, {
+            const summary = await deleteServerAccount(mode, {
                 forgetVault: mode === 'erase' && alsoForget && canForgetVault,
             });
             // Nothing to navigate to: the provider logs out, and App swaps the
             // route table back to the login screen on its own.
-            toast.success(mode === 'erase' ? 'Account erased.' : 'Account removed.');
+            //
+            // `kept` is the server's count of the user's own messages an erase
+            // could not remove — always zero for anything this app wrote, and
+            // said out loud when it is not, because "delete my content" must
+            // not quietly mean "most of it".
+            const kept = summary?.kept || 0;
+            toast.success(
+                mode !== 'erase'
+                    ? 'Account removed.'
+                    : kept
+                        ? `Account erased. ${kept} message(s) could not be removed and were kept.`
+                        : 'Account erased.'
+            );
         } catch (e) {
             console.error('Account deletion failed', e);
             toast.error(e.message || 'Could not delete the account.');

@@ -17,6 +17,8 @@ signature the author produced, not deleted.
 
 import base64
 import json
+import pathlib
+import re
 
 import pytest
 from conftest import (
@@ -30,6 +32,8 @@ from conftest import (
 import account_deletion
 import auth
 import models
+import schemas
+from utils.clock import utcnow_naive
 
 # Right shape, wrong content: the schema checks the exact base64 length of an
 # ML-DSA-44 signature, while conftest patches the verifier itself to True for
@@ -77,10 +81,21 @@ def _create_group(client, token, members, name="Team"):
     return resp.json()["id"]
 
 
-def _manifest(client, token):
-    resp = client.get("/account/redactable-messages", headers=auth_header(token))
-    assert resp.status_code == 200, resp.text
-    return resp.json()
+def _manifest(client, token, want=100):
+    """The manifest, paged to `want` rows the way the SPA reads one round."""
+    rows, page = [], 100
+    while len(rows) < want:
+        resp = client.get(
+            "/account/redactable-messages",
+            params={"limit": page, "offset": len(rows)},
+            headers=auth_header(token),
+        )
+        assert resp.status_code == 200, resp.text
+        got = resp.json()
+        rows += got
+        if len(got) < page:
+            break
+    return rows[:want]
 
 
 def _delete(client, token, address, mode, redactions=None, signature=DUMMY_SIG):
@@ -97,10 +112,23 @@ def _delete(client, token, address, mode, redactions=None, signature=DUMMY_SIG):
     )
 
 
-def _erase(client, token, address):
-    """Erase, re-signing whatever the manifest says has to be redacted."""
-    redactions = [{"key": row["key"], "signature": DUMMY_SIG} for row in _manifest(client, token)]
-    return _delete(client, token, address, "erase", redactions)
+def _erase(client, token, address, max_rounds=10):
+    """Erase, driving the rounds the way the SPA does.
+
+    One request carries at most schemas.MAX_REDACTIONS_PER_DELETE signatures,
+    so the server answers 409-with-a-count until every carrier is redacted.
+    Nothing in this file needs more than one round; the loop is here so the
+    tests exercise the same contract the client does.
+    """
+    for _ in range(max_rounds):
+        redactions = [
+            {"key": row["key"], "signature": DUMMY_SIG}
+            for row in _manifest(client, token, want=schemas.MAX_REDACTIONS_PER_DELETE)
+        ]
+        resp = _delete(client, token, address, "erase", redactions)
+        if resp.status_code != 409:
+            return resp
+    raise AssertionError("erase never finished")
 
 
 class TestLeaveKeepsEverything:
@@ -126,7 +154,7 @@ class TestLeaveKeepsEverything:
             headers=auth_header(token1),
         )
 
-        assert _delete(client, token1, u1["address"], "leave").status_code == 204
+        assert _delete(client, token1, u1["address"], "leave").status_code == 200
 
         addr = u1["address"]
         assert db_session.query(models.Secret).filter_by(owner_address=addr).count() == 1
@@ -138,7 +166,7 @@ class TestLeaveKeepsEverything:
 
     def test_the_identity_is_stripped_but_not_blocked(self, client, db_session, user1):
         token, u1 = user1
-        assert _delete(client, token, u1["address"], "leave").status_code == 204
+        assert _delete(client, token, u1["address"], "leave").status_code == 200
 
         db_session.expire_all()
         user = db_session.query(models.User).filter_by(address=u1["address"]).one()
@@ -158,7 +186,7 @@ class TestLeaveKeepsEverything:
         _, u2 = user2
         channel = _create_group(client, token1, [u1["address"], u2["address"]])
 
-        assert _delete(client, token1, u1["address"], "leave").status_code == 204
+        assert _delete(client, token1, u1["address"], "leave").status_code == 200
 
         db_session.expire_all()
         members = db_session.query(models.GroupMember).filter_by(channel_id=channel).all()
@@ -173,7 +201,7 @@ class TestLeaveKeepsEverything:
 class TestTheIdentityDisappears:
     def test_the_session_dies_immediately(self, client, user1):
         token, u1 = user1
-        assert _delete(client, token, u1["address"], "leave").status_code == 204
+        assert _delete(client, token, u1["address"], "leave").status_code == 200
         assert client.get("/users", headers=auth_header(token)).status_code == 401
 
     def test_the_directory_stops_listing_but_still_resolves(self, client, user1, user2):
@@ -183,7 +211,7 @@ class TestTheIdentityDisappears:
         unknown stranger instead of a removed user."""
         token1, u1 = user1
         token2, _ = user2
-        assert _delete(client, token1, u1["address"], "leave").status_code == 204
+        assert _delete(client, token1, u1["address"], "leave").status_code == 200
 
         listed = client.get("/users", headers=auth_header(token2)).json()
         assert u1["address"] not in [u["address"] for u in listed]
@@ -201,7 +229,7 @@ class TestTheIdentityDisappears:
         token1, u1 = user1
         token2, u2 = user2
         gone = u1["address"]
-        assert _delete(client, token1, gone, mode).status_code == 204
+        assert _delete(client, token1, gone, mode).status_code == 200
 
         assert (
             client.post(
@@ -282,7 +310,7 @@ class TestComingBack:
             },
             headers=auth_header(token),
         )
-        assert _delete(client, token, u1["address"], "leave").status_code == 204
+        assert _delete(client, token, u1["address"], "leave").status_code == 200
 
         new_token, revived = do_login(client, u1["address"], TEST_ENCRYPTION_KEY, "BackAgain")
         assert revived["username"] == "BackAgain"
@@ -293,7 +321,7 @@ class TestComingBack:
 
     def test_an_erased_key_can_never_register_again(self, client, user1):
         token, u1 = user1
-        assert _erase(client, token, u1["address"]).status_code == 204
+        assert _erase(client, token, u1["address"]).status_code == 200
 
         nonce = get_nonce(client, u1["address"])
         resp = client.post(
@@ -315,7 +343,7 @@ class TestComingBack:
     def test_a_fresh_key_still_registers(self, client, user1):
         """The other half: the block must name one key, not close the door."""
         token, u1 = user1
-        assert _erase(client, token, u1["address"]).status_code == 204
+        assert _erase(client, token, u1["address"]).status_code == 200
         _, user = do_login(client, synthetic_address("after-erase"), TEST_ENCRYPTION_KEY, "NewOne")
         assert user["username"] == "NewOne"
 
@@ -324,7 +352,7 @@ class TestComingBack:
         address deleted?" for anybody who asks. The refusal belongs at login,
         which only the key holder reaches."""
         token, u1 = user1
-        assert _erase(client, token, u1["address"]).status_code == 204
+        assert _erase(client, token, u1["address"]).status_code == 200
         assert client.get(f"/auth/nonce/{u1['address']}").status_code == 200
 
 
@@ -343,7 +371,7 @@ class TestErasingMessages:
         opener = _send_dm(client, token1, u2["address"], _dm_content("sid-1"))
         _send_dm(client, token2, u1["address"], _dm_content("sid-1", with_keys=False))
 
-        assert _erase(client, token1, u1["address"]).status_code == 204
+        assert _erase(client, token1, u1["address"]).status_code == 200
 
         db_session.expire_all()
         row = db_session.query(models.Message).filter_by(id=opener["id"]).one()
@@ -361,7 +389,7 @@ class TestErasingMessages:
         _send_dm(client, token1, u2["address"], _dm_content("sid-1"))
         plain = _send_dm(client, token1, u2["address"], _dm_content("sid-1", with_keys=False))
 
-        assert _erase(client, token1, u1["address"]).status_code == 204
+        assert _erase(client, token1, u1["address"]).status_code == 200
 
         db_session.expire_all()
         assert db_session.query(models.Message).filter_by(id=plain["id"]).first() is None
@@ -375,7 +403,7 @@ class TestErasingMessages:
         _, u2 = user2
         legacy = _send_dm(client, token1, u2["address"], "not json at all")
 
-        assert _erase(client, token1, u1["address"]).status_code == 204
+        assert _erase(client, token1, u1["address"]).status_code == 200
         db_session.expire_all()
         assert db_session.query(models.Message).filter_by(id=legacy["id"]).first() is not None
 
@@ -395,7 +423,7 @@ class TestErasingMessages:
             headers=auth_header(token1),
         ).json()
 
-        assert _erase(client, token1, u1["address"]).status_code == 204
+        assert _erase(client, token1, u1["address"]).status_code == 200
 
         db_session.expire_all()
         kept = db_session.query(models.GroupMessage).filter_by(id=opener["id"]).one()
@@ -474,7 +502,7 @@ class TestErasingTheRest:
             headers=auth_header(token1),
         )
 
-        assert _erase(client, token1, u1["address"]).status_code == 204
+        assert _erase(client, token1, u1["address"]).status_code == 200
 
         db_session.expire_all()
         assert db_session.query(models.Secret).filter_by(id=secret["id"]).first() is None
@@ -514,7 +542,7 @@ class TestErasingTheRest:
         )
         assert signed.status_code == 200, signed.text
 
-        assert _erase(client, token1, u1["address"]).status_code == 204
+        assert _erase(client, token1, u1["address"]).status_code == 200
 
         db_session.expire_all()
         assert db_session.query(models.MultisigWorkflow).filter_by(id=workflow_id).first()
@@ -543,7 +571,7 @@ class TestErasingTheRest:
         )
         workflow_id, secret_id = resp.json()["id"], resp.json()["secret"]["id"]
 
-        assert _erase(client, token1, u1["address"]).status_code == 204
+        assert _erase(client, token1, u1["address"]).status_code == 200
 
         db_session.expire_all()
         assert db_session.query(models.MultisigWorkflow).filter_by(id=workflow_id).first() is None
@@ -581,7 +609,7 @@ class TestErasingTheRest:
             headers=auth_header(token1),
         )
 
-        assert _erase(client, token1, u1["address"]).status_code == 204
+        assert _erase(client, token1, u1["address"]).status_code == 200
 
         db_session.expire_all()
         signer = (
@@ -604,7 +632,7 @@ class TestErasingTheRest:
         )
         db_session.commit()
 
-        assert _erase(client, token, u1["address"]).status_code == 204
+        assert _erase(client, token, u1["address"]).status_code == 200
 
         db_session.expire_all()
         handed = db_session.query(models.InviteCode).filter_by(code="HANDED-OUT").one()
@@ -666,7 +694,7 @@ class TestAuthorizingTheDeletion:
                 json={"mode": "leave", "nonce": nonce, "signature": good, "redactions": []},
                 headers=auth_header(token),
             )
-            assert resp.status_code == 204, resp.text
+            assert resp.status_code == 200, resp.text
 
     @pytest.mark.real_signatures
     def test_a_leave_signature_cannot_be_replayed_as_an_erase(self, client, db_session):
@@ -769,14 +797,14 @@ class TestAuthorizingTheDeletion:
                 },
                 headers=auth_header(token),
             )
-            assert resp.status_code == 204, resp.text
+            assert resp.status_code == 200, resp.text
 
     def test_a_replayed_nonce_is_refused(self, client, user1):
         token, u1 = user1
         nonce = get_nonce(client, u1["address"])
         body = {"mode": "leave", "nonce": nonce, "signature": DUMMY_SIG, "redactions": []}
         assert (
-            client.post("/account/delete", json=body, headers=auth_header(token)).status_code == 204
+            client.post("/account/delete", json=body, headers=auth_header(token)).status_code == 200
         )
         # The account is gone, so this 401s on the token before the nonce even
         # matters — which is itself the point: a deletion is not repeatable.
@@ -809,7 +837,7 @@ class TestTheRedactionEndpointIsNotAnEditor:
         opener = _send_dm(client, token1, u2["address"], _dm_content("sid-1"))
 
         redactions = [{"key": f"dm:{opener['id']}", "signature": DUMMY_SIG}]
-        assert _delete(client, token1, u1["address"], "erase", redactions).status_code == 204
+        assert _delete(client, token1, u1["address"], "erase", redactions).status_code == 200
 
         db_session.expire_all()
         payload = json.loads(
@@ -817,11 +845,16 @@ class TestTheRedactionEndpointIsNotAnEditor:
         )
         assert payload["keys"] == {"recip": _wrapped("recip"), "sender": _wrapped("sender")}
 
-    def test_a_redaction_for_someone_elses_message_is_ignored(
+    def test_a_redaction_for_someone_elses_message_is_refused(
         self, client, db_session, user1, user2
     ):
-        """The set is recomputed from rows the caller actually sent, so an id
-        that is not theirs cannot match it."""
+        """Ownership is re-attested from the row, not trusted from the id.
+
+        Each round names its own rows now, so this is the check that a caller
+        cannot name a row that is not theirs — and "no such message" and "not
+        yours" answer identically, so it cannot be used to probe which ids
+        exist either.
+        """
         token1, u1 = user1
         token2, u2 = user2
         theirs = _send_dm(client, token2, u1["address"], _dm_content("sid-x"))
@@ -833,7 +866,14 @@ class TestTheRedactionEndpointIsNotAnEditor:
             "erase",
             [{"key": f"dm:{theirs['id']}", "signature": DUMMY_SIG}],
         )
-        assert resp.status_code == 409, resp.text
+        assert resp.status_code == 400, resp.text
+        assert "not one of your messages" in resp.json()["detail"]
+        missing = _delete(
+            client, token1, u1["address"], "erase", [{"key": "dm:999999", "signature": DUMMY_SIG}]
+        )
+        assert missing.json()["detail"] == resp.json()["detail"].replace(
+            f"dm:{theirs['id']}", "dm:999999"
+        )
         db_session.expire_all()
         assert (
             json.loads(db_session.query(models.Message).filter_by(id=theirs["id"]).one().content)[
@@ -845,4 +885,232 @@ class TestTheRedactionEndpointIsNotAnEditor:
 
 def test_the_module_refuses_an_unknown_mode(db_session):
     with pytest.raises(ValueError):
-        account_deletion.delete_account(db_session, models.User(address="x"), "nuke", {})
+        account_deletion.delete_account(db_session, models.User(address="x"), "nuke")
+
+
+class TestAnEraseIsNotBoundedByOneRequest:
+    """`MAX_REDACTIONS_PER_DELETE` bounds a REQUEST, not an account.
+
+    It used to bound both, which made an account permanently un-erasable once
+    it passed the cap: over it the request was a 422, and one row short of it a
+    409, with no way round either. Erase asks for one signature per session
+    epoch the user ever opened and a group mints a fresh one per client per
+    page load, so ordinary use reaches this in a couple of years (audit
+    2026-09-12 M-2a).
+
+    Seeded straight into the table: the point is the count, and posting a
+    thousand messages through a 20/minute endpoint would test the rate limiter.
+    """
+
+    def _seed_carriers(self, db_session, sender, recipient, count):
+        db_session.bulk_insert_mappings(
+            models.Message,
+            [
+                {
+                    "sender_address": sender,
+                    "recipient_address": recipient,
+                    "content": _dm_content(f"sid-{i}"),
+                    "is_read": False,
+                    "created_at": utcnow_naive(),
+                }
+                for i in range(count)
+            ],
+        )
+        db_session.commit()
+
+    def test_a_round_that_leaves_carriers_behind_reports_what_is_left(
+        self, client, db_session, user1, user2
+    ):
+        """The 409 is progress, not a refusal: this round's redactions stand,
+        so the next one is strictly smaller and the loop always terminates."""
+        token1, u1 = user1
+        _, u2 = user2
+        over = schemas.MAX_REDACTIONS_PER_DELETE + 1
+        self._seed_carriers(db_session, u1["address"], u2["address"], over)
+
+        first = [
+            {"key": row["key"], "signature": DUMMY_SIG}
+            for row in _manifest(client, token1, want=schemas.MAX_REDACTIONS_PER_DELETE)
+        ]
+        assert len(first) == schemas.MAX_REDACTIONS_PER_DELETE
+
+        resp = _delete(client, token1, u1["address"], "erase", first)
+        assert resp.status_code == 409, resp.text
+        body = resp.json()
+        assert body["status"] == "redacting"
+        assert body["redacted"] == schemas.MAX_REDACTIONS_PER_DELETE
+        assert body["remaining"] == 1
+
+        db_session.expire_all()
+        # The account is untouched — it is not half-deleted while this runs.
+        assert (
+            db_session.query(models.User).filter_by(address=u1["address"]).one().deleted_at is None
+        )
+        # ...and the round's work was kept, so the manifest has shrunk to what
+        # is left rather than starting over.
+        assert len(_manifest(client, token1, want=over)) == 1
+
+    def test_an_account_past_the_ceiling_still_erases_completely(
+        self, client, db_session, user1, user2
+    ):
+        token1, u1 = user1
+        _, u2 = user2
+        over = schemas.MAX_REDACTIONS_PER_DELETE + 1
+        self._seed_carriers(db_session, u1["address"], u2["address"], over)
+
+        resp = _erase(client, token1, u1["address"])
+        assert resp.status_code == 200, resp.text
+        assert resp.json() == {"status": "deleted", "redacted": 1, "kept": 0, "remaining": 0}
+
+        db_session.expire_all()
+        rows = db_session.query(models.Message).filter_by(sender_address=u1["address"]).all()
+        # Every one redacted rather than deleted: each opened an epoch, and the
+        # partner's own replies under that sid need the envelope.
+        assert len(rows) == over
+        assert all(json.loads(r.content)["ct"] is None for r in rows)
+        assert all(json.loads(r.content)["keys"] for r in rows)
+        assert db_session.query(models.User).filter_by(address=u1["address"]).one().blocked is True
+
+    def test_a_redacted_message_is_not_offered_for_redaction_again(
+        self, client, db_session, user1, user2
+    ):
+        """What makes the rounds terminate. A redacted row KEEPS its envelope,
+        so a manifest that asked "does this carry keys?" would list it forever
+        and the erase would never reach its fixed point."""
+        token1, u1 = user1
+        _, u2 = user2
+        _send_dm(client, token1, u2["address"], _dm_content("sid-1"))
+
+        assert _erase(client, token1, u1["address"]).status_code == 200
+        db_session.expire_all()
+        row = db_session.query(models.Message).filter_by(sender_address=u1["address"]).one()
+        assert json.loads(row.content)["ct"] is None
+        assert json.loads(row.content)["keys"]
+
+
+class TestWhatAnEraseCannotRedactIsKeptAndCounted:
+    """Two shapes cannot be signed for redaction, and each one used to refuse
+    the WHOLE erase — permanently, since the account could not be deleted and
+    the row could not be fixed (audit 2026-09-12 M-2b/M-2c).
+
+    Both are now kept, like a row that does not parse, and counted back to the
+    caller so "delete my content" does not quietly mean "most of it".
+    """
+
+    def _raw_dm(self, db_session, sender, recipient, payload):
+        row = models.Message(
+            sender_address=sender,
+            recipient_address=recipient,
+            content=json.dumps(payload),
+            is_read=False,
+        )
+        db_session.add(row)
+        db_session.commit()
+        return row.id
+
+    def test_an_envelope_the_two_languages_would_spell_differently(
+        self, client, db_session, user1, user2
+    ):
+        token1, u1 = user1
+        _, u2 = user2
+        # One non-ASCII character: Python escapes it by default where JS does
+        # not, so the two would hash different bytes. check_envelope_shape
+        # refuses to guess — correctly — and that refusal used to be a 400 for
+        # the entire deletion.
+        odd = {"recip": {"kem": "clé", "iv": "iv", "encKey": "k"}, "sender": _wrapped("s")}
+        stuck = self._raw_dm(
+            db_session,
+            u1["address"],
+            u2["address"],
+            {"v": 1, "sid": "sid-odd", "keys": odd, "ct": "cipher", "sig": DUMMY_SIG},
+        )
+
+        assert [r["id"] for r in _manifest(client, token1)] == []
+
+        resp = _erase(client, token1, u1["address"])
+        assert resp.status_code == 200, resp.text
+        assert resp.json()["kept"] == 1
+
+        db_session.expire_all()
+        kept = db_session.query(models.Message).filter_by(id=stuck).one()
+        assert json.loads(kept.content)["ct"] == "cipher"
+        assert db_session.query(models.User).filter_by(address=u1["address"]).one().blocked is True
+
+    def test_a_carrier_with_no_session_id(self, client, db_session, user1, user2):
+        token1, u1 = user1
+        _, u2 = user2
+        # `sid=None` in Python against `sid=null` in JS — a silent divergence
+        # inside a signature body. No client can adopt a session from such a
+        # row either, since the key cache is addressed by (conversation, sid).
+        stuck = self._raw_dm(
+            db_session,
+            u1["address"],
+            u2["address"],
+            {"v": 1, "keys": {"recip": _wrapped("r")}, "ct": "cipher", "sig": DUMMY_SIG},
+        )
+
+        assert [r["id"] for r in _manifest(client, token1)] == []
+
+        resp = _erase(client, token1, u1["address"])
+        assert resp.status_code == 200, resp.text
+        assert resp.json()["kept"] == 1
+
+        db_session.expire_all()
+        assert (
+            json.loads(db_session.query(models.Message).filter_by(id=stuck).one().content)["ct"]
+            == "cipher"
+        )
+
+    def test_naming_one_of_them_in_a_round_is_refused(self, client, db_session, user1, user2):
+        """They are excluded from the manifest, so a client asking to redact
+        one is working from something other than the manifest. Fail closed
+        rather than build a body the signature cannot have covered."""
+        token1, u1 = user1
+        _, u2 = user2
+        stuck = self._raw_dm(
+            db_session,
+            u1["address"],
+            u2["address"],
+            {"v": 1, "keys": {"recip": _wrapped("r")}, "ct": "cipher", "sig": DUMMY_SIG},
+        )
+
+        resp = _delete(
+            client,
+            token1,
+            u1["address"],
+            "erase",
+            [{"key": f"dm:{stuck}", "signature": DUMMY_SIG}],
+        )
+        assert resp.status_code == 400, resp.text
+        assert "not a message this erase can redact" in resp.json()["detail"]
+
+    def test_an_unreadable_row_is_counted_too(self, client, db_session, user1, user2):
+        """Already the behaviour — `_payload` never guesses at a row it cannot
+        read — but it was silent. Deletion is the one operation where the user
+        cannot come back and check."""
+        token1, u1 = user1
+        _, u2 = user2
+        row = models.Message(
+            sender_address=u1["address"],
+            recipient_address=u2["address"],
+            content="not json at all",
+            is_read=False,
+        )
+        db_session.add(row)
+        db_session.commit()
+
+        assert _erase(client, token1, u1["address"]).json()["kept"] == 1
+
+
+def test_the_spa_never_asks_for_more_redactions_than_one_request_takes():
+    """The client's round size and the server's per-request cap are two
+    constants in two languages. The client asking for more would 422 — on
+    exactly the large accounts the rounds exist for, and nowhere else, so
+    nothing smaller would catch it.
+    """
+    source = (
+        pathlib.Path(__file__).resolve().parents[2] / "frontend/src/context/PQCContext.jsx"
+    ).read_text()
+    match = re.search(r"const REDACTION_ROUND = (\d+);", source)
+    assert match, "REDACTION_ROUND is gone from PQCContext.jsx"
+    assert int(match.group(1)) <= schemas.MAX_REDACTIONS_PER_DELETE

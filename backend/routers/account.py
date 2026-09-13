@@ -7,6 +7,7 @@ only ever the caller.
 """
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from fastapi.responses import JSONResponse
 from sqlalchemy.orm import Session
 
 import account_deletion
@@ -47,8 +48,18 @@ def redactable_messages(
     return manifest[offset : offset + limit]
 
 
-@router.post("/delete", status_code=204)
-@limiter.limit("3/minute")
+@router.post("/delete", response_model=schemas.AccountDeleteResponse)
+# 10/minute, matching GET /auth/nonce/{address} — a round spends exactly one
+# challenge, so the two limits are consumed in lockstep and the tighter of them
+# is the only one that counts. At 3/minute this was the tighter one, and it
+# capped an erase at three rounds: the accounts the rounds exist for (audit
+# 2026-09-12 M-2a) failed on the fourth request with a 429 rather than a reason.
+# Found by re-running the probe, not by reading the code.
+#
+# Still a hard bound on an expensive call, and not the only one: each request
+# needs a fresh challenge AND a valid ML-DSA signature over it, so this is not
+# reachable by anyone but the key holder.
+@limiter.limit("10/minute")
 async def delete_account(
     request: Request,
     req: schemas.AccountDeleteRequest,
@@ -60,6 +71,13 @@ async def delete_account(
     Authorized by a fresh ML-DSA signature over a domain-separated challenge as
     well as by the session: a stolen token alone must not be able to destroy an
     account, and a signature alone must not either.
+
+    An erase may take SEVERAL of these. One request carries at most
+    `MAX_REDACTIONS_PER_DELETE` signatures — a bound on one request, not on how
+    much an account may erase — so a long-lived account redacts a round at a
+    time and this answers **409 with what is left** until none is. Each round
+    is separately signed, and the account is not touched until the last one
+    (audit 2026-09-12 M-2a).
     """
     address = current_user.address
 
@@ -77,26 +95,55 @@ async def delete_account(
     if not auth.verify_message_signature(address, message, req.signature):
         raise HTTPException(status_code=401, detail="Invalid deletion signature")
 
+    redacted = 0
     if req.mode == account_deletion.MODE_LEAVE:
         if signatures:
             raise HTTPException(status_code=400, detail="Leaving redacts nothing")
     else:
-        # Recomputed here, inside the transaction that does the deleting, not
-        # taken from the signed set. A message sent between the client reading
-        # the manifest and this request landing would otherwise be DELETED
-        # rather than redacted — and if it opened an epoch, the partner loses
-        # their own history. Fail closed and make the client re-read.
-        if account_deletion.redaction_keys(db, address) != set(signatures):
-            raise HTTPException(
+        try:
+            redacted = account_deletion.apply_redactions(db, address, signatures)
+        except account_deletion.RedactionRefused as exc:
+            db.rollback()
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+        # Recomputed here, inside the transaction, never taken from the signed
+        # set: the erase finishes only when nothing of the user's still holds
+        # both a session key and its ciphertext. A message sent while the
+        # client was working through its manifest therefore delays the
+        # deletion instead of being caught by it — `_delete_own_messages` never
+        # deletes a carrier, so the row that used to be at risk of destroying
+        # the partner's history now simply keeps this from completing.
+        remaining = len(account_deletion.redaction_keys(db, address))
+        if remaining:
+            # This round's redactions stand. They are authenticated statements
+            # by the author in their own right, and keeping them means the next
+            # round is strictly smaller — an erase that cannot finish in one
+            # request still always makes progress.
+            db.commit()
+            return JSONResponse(
                 status_code=409,
-                detail="Your messages changed since the manifest was read. Retry the deletion.",
+                content={
+                    "status": "redacting",
+                    "redacted": redacted,
+                    "kept": 0,
+                    "remaining": remaining,
+                    "detail": (
+                        f"{remaining} more message(s) still have to be redacted. "
+                        "Read the manifest again and sign the next round."
+                    ),
+                },
             )
 
-    try:
-        departures = account_deletion.delete_account(db, current_user, req.mode, signatures)
-    except account_deletion.RedactionRefused as exc:
-        db.rollback()
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    # Counted before the deletion runs, though it counts only rows the deletion
+    # leaves alone either way — those are exactly the ones it refuses to guess
+    # at.
+    kept = (
+        account_deletion.kept_messages(db, address)
+        if req.mode == account_deletion.MODE_ERASE
+        else 0
+    )
+
+    departures = account_deletion.delete_account(db, current_user, req.mode)
 
     db.commit()
 
@@ -115,3 +162,5 @@ async def delete_account(
     # the WebSocket handshake goes through the same dependency, so nothing can
     # reconnect. Sockets already open are not closed by a database write.
     await manager.close_address(address)
+
+    return {"status": "deleted", "redacted": redacted, "kept": kept, "remaining": 0}

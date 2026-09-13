@@ -309,6 +309,14 @@ As the other account, **reload first**, then check:
 Finally, try to log in again as the erased user with the same vault: it must be
 refused with "This identity was deleted. Register with a new key."
 
+**An erase may take more than one approval.** One request carries at most 1000
+redaction signatures, so an account with more session epochs than that redacts a
+round at a time, each with its own signing prompt. Nothing in a fresh test
+account will reach that — note it only so several prompts read as normal rather
+than as a stuck screen. If the toast says "N message(s) could not be removed",
+that is the server reporting rows it refuses to guess at; it should say nothing
+of the kind for messages this app wrote.
+
 **What to watch for:** both modes are reached through the same two dialogs, and
 `ConfirmDialogHost` maps Enter to "confirm". Holding Enter should still stop at
 the signing prompt — if it does not, the sequence is not a decision.

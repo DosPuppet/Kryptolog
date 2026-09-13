@@ -78,7 +78,8 @@ def redaction_key(kind: str, message_id: int) -> str:
 def _payload(content) -> dict | None:
     """Parse a stored message payload, or None if it is not one.
 
-    A row this cannot read is never deleted by an erase — see `_erase_messages`.
+    A row this cannot read is never deleted by an erase — see
+    `_delete_own_messages`, and `kept_messages` for how it is reported.
     Fail safe: nothing in the current wire format hides a key envelope outside
     JSON, but the cost of being wrong is asymmetric. Leaving one of the
     departing user's own messages behind is visible and annoying; destroying
@@ -106,17 +107,53 @@ def _conv_and_gid(kind: str, row) -> tuple[str, str]:
     return row.channel_id or "", row.channel_id or ""
 
 
-def _envelope_carriers(db: Session, address: str):
-    """Every message the user sent that carries a wrapped session key.
+def _is_signable(payload: dict) -> bool:
+    """Can the author be asked for a signature over this message's redacted form?
 
-    These are the ones that cannot simply be deleted. Ordered by id so the
-    manifest pages deterministically.
+    Two shapes cannot be, and both are KEPT rather than deleted — the same
+    fail-safe `_payload` applies to a row that does not parse at all:
+
+    * **No `sid`.** The signed body interpolates it, and a missing one spells
+      `sid=None` in Python against `sid=null` in JS: a silent byte divergence
+      inside a SIGNATURE body, which is the exact class of defect the shared
+      fixture exists to catch. Such a row is not a session carrier anyway — the
+      key cache is addressed by (conversation, sid), so no client can ever
+      adopt from it (`useMessageSessions` requires `parsed.sid`).
+    * **An envelope the Python mirror will not hash.** `check_envelope_shape`
+      refuses anything the two languages would not spell identically, so asking
+      for a signature over a digest this side cannot reproduce would only
+      produce one it then rejects.
+
+    Neither is reachable through the shipped clients; both are reachable by
+    hand-posting a message. Before this, ONE such row — of the user's own
+    making — refused the entire erase, permanently, with no way to complete it
+    and nothing saying which row was to blame (audit 2026-09-12 M-2b/M-2c).
+    """
+    if not isinstance(payload.get("sid"), str) or not payload["sid"]:
+        return False
+    try:
+        auth.check_envelope_shape(payload["keys"])
+    except auth.NonCanonicalKeyEnvelope:
+        return False
+    return True
+
+
+def _envelope_carriers(db: Session, address: str):
+    """Every message the user sent still holding BOTH a wrapped session key and
+    its ciphertext — everything an erase has left to deal with.
+
+    `ct is not None` is what makes an erase resumable across requests: a
+    redacted row KEEPS its envelope (that is the whole point of redacting
+    rather than deleting), so testing `keys` alone would list it again on the
+    next round and the loop would never end.
+
+    Ordered by id so the manifest pages deterministically.
     """
     for kind, model in _KINDS.items():
         rows = db.query(model).filter(model.sender_address == address).order_by(model.id).all()
         for row in rows:
             payload = _payload(row.content)
-            if payload is None or not payload.get("keys"):
+            if payload is None or not payload.get("keys") or payload.get("ct") is None:
                 continue
             yield kind, row, payload
 
@@ -129,6 +166,8 @@ def redactable_messages(db: Session, address: str) -> list[dict]:
     """
     manifest = []
     for kind, row, payload in _envelope_carriers(db, address):
+        if not _is_signable(payload):
+            continue
         conv, gid = _conv_and_gid(kind, row)
         manifest.append(
             {
@@ -147,12 +186,48 @@ def redactable_messages(db: Session, address: str) -> list[dict]:
 def redaction_keys(db: Session, address: str) -> set[str]:
     """The same set as `redactable_messages`, as ids only.
 
-    Recomputed inside the deletion transaction and compared against the signed
-    set: a message sent between reading the manifest and committing the
-    deletion would otherwise be DELETED rather than redacted, and if it opened
-    an epoch the partner loses their own history. Fails closed.
+    Recomputed inside the deletion transaction, and an erase only COMPLETES
+    when it is empty. That is a fixed point rather than an equality check
+    against the signed set, and the difference is what makes a large account
+    erasable at all: one request carries at most
+    `schemas.MAX_REDACTIONS_PER_DELETE` signatures, so an account holding more
+    carriers than that simply takes another round (audit 2026-09-12 M-2a).
+
+    It still closes the same gap the equality check did — a message sent
+    between reading the manifest and committing must not be DELETED rather than
+    redacted, since if it opened an epoch the partner loses their own history.
+    Now it cannot be: it is a carrier, `_delete_own_messages` only ever deletes
+    NON-carriers, and its presence here keeps the deletion from finishing until
+    the client has redacted it too.
     """
-    return {redaction_key(kind, row.id) for kind, row, _ in _envelope_carriers(db, address)}
+    return {
+        redaction_key(kind, row.id)
+        for kind, row, payload in _envelope_carriers(db, address)
+        if _is_signable(payload)
+    }
+
+
+def kept_messages(db: Session, address: str) -> int:
+    """How many of the user's own messages an erase leaves holding their content.
+
+    Always zero for a message any shipped client wrote. Non-zero means a row
+    this module refuses to guess at — one that does not parse, or one
+    `_is_signable` rejects — and refusing to guess is the right call in both
+    cases. Reported back to the caller because "delete my content" quietly
+    meaning "most of it" is the kind of promise a deletion feature must not
+    break silently (audit 2026-09-12, I-7).
+    """
+    kept = 0
+    for _kind, model in _KINDS.items():
+        for row in db.query(model).filter(model.sender_address == address).all():
+            payload = _payload(row.content)
+            if payload is None:
+                kept += 1
+            elif (
+                payload.get("keys") and payload.get("ct") is not None and not _is_signable(payload)
+            ):
+                kept += 1
+    return kept
 
 
 class RedactionRefused(ValueError):
@@ -180,19 +255,50 @@ def _redacted_content(kind: str, payload: dict, signature: str) -> str:
     return json.dumps(content)
 
 
-def _verified_redactions(db: Session, address: str, signatures: dict[str, str]) -> list:
-    """Verify every redaction before applying any of them.
+def _redactable_row(db: Session, address: str, key: str):
+    """The row one signed redaction names, refusing anything it may not touch.
 
-    All-or-nothing on purpose: verifying and applying one at a time would leave
-    an account half-erased when the tenth signature is bad, with no way for the
-    caller to tell which half.
+    Looked up from the SUBMITTED key rather than walked from the server's own
+    list, because a round carries only part of that list now. Ownership is
+    re-attested here rather than trusted from the manifest the client read.
+
+    "No such message" and "not yours" answer identically, so this cannot be
+    used to probe which message ids exist.
+    """
+    kind, separator, raw_id = key.partition(":")
+    model = _KINDS.get(kind)
+    if not separator or model is None or not raw_id.isdigit():
+        raise RedactionRefused(f"{key} is not a message id")
+
+    row = db.query(model).filter(model.id == int(raw_id), model.sender_address == address).first()
+    if row is None:
+        raise RedactionRefused(f"{key} is not one of your messages")
+
+    payload = _payload(row.content)
+    if (
+        payload is None
+        or not payload.get("keys")
+        or payload.get("ct") is None
+        or not _is_signable(payload)
+    ):
+        # Already redacted, never a carrier, or a shape no signature can cover.
+        raise RedactionRefused(f"{key} is not a message this erase can redact")
+    return kind, row, payload
+
+
+def _verified_redactions(db: Session, address: str, signatures: dict[str, str]) -> list:
+    """Verify every redaction in this round before applying any of them.
+
+    All-or-nothing within the round on purpose: verifying and applying one at a
+    time would leave an account half-erased when the tenth signature is bad,
+    with no way for the caller to tell which half. Rounds themselves are safe
+    to interrupt — each one only ever turns carriers into redacted carriers,
+    and the erase does not complete until none are left.
     """
     pending = []
-    for kind, row, payload in _envelope_carriers(db, address):
-        key = redaction_key(kind, row.id)
-        signature = signatures.get(key)
-        if not signature:
-            raise RedactionRefused(f"missing redaction signature for {key}")
+    for key in sorted(signatures):
+        signature = signatures[key]
+        kind, row, payload = _redactable_row(db, address, key)
 
         conv, gid = _conv_and_gid(kind, row)
         if kind == "group" and payload.get("gid") and payload["gid"] != row.channel_id:
@@ -209,8 +315,11 @@ def _verified_redactions(db: Session, address: str, signatures: dict[str, str]) 
                 ct=None,
                 keys=payload["keys"],
             )
-        except auth.NonCanonicalKeyEnvelope as exc:
-            raise RedactionRefused(f"{key} has an unsupported key envelope: {exc}") from exc
+        except auth.NonCanonicalSignedBody as exc:
+            # Unreachable through `_redactable_row`, which asks `_is_signable`
+            # the same questions. Kept because the two live in different
+            # modules: this one must fail closed whatever that one lets past.
+            raise RedactionRefused(f"{key} cannot be signed for redaction: {exc}") from exc
 
         if not auth.verify_message_signature(address, body, signature):
             raise RedactionRefused(f"invalid redaction signature for {key}")
@@ -219,17 +328,40 @@ def _verified_redactions(db: Session, address: str, signatures: dict[str, str]) 
     return pending
 
 
-def _erase_messages(db: Session, address: str, signatures: dict[str, str]) -> None:
-    """Redact what carries a key envelope, delete the rest."""
-    for _kind, row, content in _verified_redactions(db, address, signatures):
+def apply_redactions(db: Session, address: str, signatures: dict[str, str]) -> int:
+    """Apply ONE round of author-signed redactions. Returns how many landed.
+
+    Separate from `delete_account` because an erase is now resumable: a round
+    carries at most `schemas.MAX_REDACTIONS_PER_DELETE` signatures, and an
+    account with more carriers than that takes several. Each round is
+    individually authorized by the popup-gated deletion signature covering
+    exactly the keys it carries — which is why this is NOT an endpoint of its
+    own. A bare "redact my messages" route would be reachable by any site
+    holding a silent-signing grant in the extension, since a redaction body is
+    `message`-context and auto-signed; the deletion signature is not.
+    """
+    pending = _verified_redactions(db, address, signatures)
+    for _kind, row, content in pending:
         row.content = content
         db.add(row)
+    # autoflush is off, so `redaction_keys` would otherwise recount the rows
+    # this round just redacted and the erase could never reach its fixed point.
+    db.flush()
+    return len(pending)
 
-    # Delete only what is PROVABLY safe to delete: a payload that parses and
-    # carries no key envelope. Carriers have just been redacted, and anything
-    # this cannot read is left alone — see `_payload`. So the deletable set is
-    # computed positively rather than as "everything except the carriers",
-    # which would have swept up the unreadable rows as well.
+
+def _delete_own_messages(db: Session, address: str) -> None:
+    """Delete the user's messages that carry nobody else's session key.
+
+    Every carrier has been redacted by `apply_redactions` before this runs —
+    the caller does not get here while `redaction_keys` is non-empty.
+
+    Deletes only what is PROVABLY safe to delete: a payload that parses and
+    carries no key envelope. Anything this cannot read is left alone — see
+    `_payload` — so the deletable set is computed positively rather than as
+    "everything except the carriers", which would have swept up the unreadable
+    rows as well. `kept_messages` counts what that leaves behind.
+    """
     for kind, model in _KINDS.items():
         deletable = [
             row.id
@@ -422,10 +554,13 @@ def _strip_identity(user: models.User, *, blocked: bool) -> None:
     user.blocked = blocked
 
 
-def delete_account(
-    db: Session, user: models.User, mode: str, signatures: dict[str, str] | None = None
-) -> list[dict]:
+def delete_account(db: Session, user: models.User, mode: str) -> list[dict]:
     """Apply a deletion. The caller has already authorized it and commits after.
+
+    For an erase the caller has also driven `apply_redactions` until
+    `redaction_keys` came back empty, so every message of the user's that holds
+    somebody else's session key already carries its author-signed redacted
+    form. This step is what is left: deleting the rest.
 
     Returns the group departures to broadcast once the transaction lands.
     Broadcasting before the commit would tell everyone a user left a group that
@@ -437,10 +572,10 @@ def delete_account(
     address = user.address
 
     # Messages before groups: tearing down a channel whose last member is
-    # leaving cascades its group_messages, and redacting a row that is about to
-    # disappear is wasted work at best.
+    # leaving cascades its group_messages, so doing this first keeps the two
+    # from racing over the same rows.
     if mode == MODE_ERASE:
-        _erase_messages(db, address, signatures or {})
+        _delete_own_messages(db, address)
 
     departures = _leave_all_groups(db, address)
 

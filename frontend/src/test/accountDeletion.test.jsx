@@ -64,25 +64,56 @@ const carrier = (id) => ({
     keys: { recip: { kem: 'k', iv: 'i', encKey: 'e' }, sender: null },
 });
 
-/** `total` carriers, served 100 per page the way utils/paging walks them. */
-const stubServer = ({ total = 0 } = {}) => {
+/**
+ * A server holding `total` carriers, served 100 per page the way utils/paging
+ * walks them — and, like the real one, dropping a row from the manifest once it
+ * has been redacted. `perRound` caps how many redactions one request accepts,
+ * so a manifest larger than that takes several rounds and the ones in between
+ * answer 409 (audit 2026-09-12 M-2a).
+ */
+const stubServer = ({ total = 0, perRound = Infinity } = {}) => {
+    let pending = Array.from({ length: total }, (_, i) => carrier(i + 1));
     global.fetch = vi.fn(async (url, init) => {
         const href = String(url);
         if (/redactable-messages/.test(href)) {
             const offset = Number(new URL(href).searchParams.get('offset'));
             const limit = Number(new URL(href).searchParams.get('limit'));
-            const rows = Array.from({ length: total }, (_, i) => carrier(i + 1)).slice(
-                offset,
-                offset + limit
-            );
-            return { ok: true, status: 200, json: async () => rows };
+            return { ok: true, status: 200, json: async () => pending.slice(offset, offset + limit) };
         }
         if (/nonce/.test(href)) return { ok: true, status: 200, json: async () => ({ nonce: 'N' }) };
-        if (/account\/delete/.test(href)) return { ok: true, status: 204, json: async () => null };
+        if (/account\/delete/.test(href)) {
+            const body = JSON.parse(init.body);
+            if (body.redactions.length > perRound) {
+                return { ok: false, status: 422, json: async () => ({ detail: 'too many' }) };
+            }
+            const done = new Set(body.redactions.map((r) => r.key));
+            pending = pending.filter((row) => !done.has(row.key));
+            if (pending.length) {
+                return {
+                    ok: false,
+                    status: 409,
+                    json: async () => ({
+                        status: 'redacting',
+                        redacted: done.size,
+                        remaining: pending.length,
+                        detail: 'more to redact',
+                    }),
+                };
+            }
+            return {
+                ok: true,
+                status: 200,
+                json: async () => ({ status: 'deleted', redacted: done.size, kept: 0 }),
+            };
+        }
         return { ok: true, status: 200, json: async () => ({}) };
     });
     return global.fetch;
 };
+
+/** Every deletion request the run made, newest last. */
+const deleteCalls = () =>
+    global.fetch.mock.calls.filter(([url]) => /account\/delete/.test(String(url)));
 
 // By URL, not just "the first POST": mounting logs in first, and that is a
 // POST with a body too.
@@ -200,6 +231,152 @@ describe('erasing', () => {
             await accountDeletionBody('N', 'erase', ['dm:1', 'dm:2']),
             null
         );
+    });
+
+    it('keeps going when one request cannot carry every redaction', async () => {
+        // 2500 carriers against a server taking 1000 per request. This used to
+        // be the un-erasable account: over the cap the request was a 422, and
+        // one row under it a 409, with no way round either (audit M-2a).
+        stubServer({ total: 2500, perRound: 1000 });
+        await mount();
+        await act(async () => {
+            await api.deleteServerAccount('erase');
+        });
+
+        const rounds = deleteCalls().map(([, init]) => JSON.parse(init.body));
+        expect(rounds).toHaveLength(3);
+        expect(rounds.map((r) => r.redactions.length)).toEqual([1000, 1000, 500]);
+        // Every carrier signed exactly once, none dropped between rounds.
+        const keys = rounds.flatMap((r) => r.redactions.map((x) => x.key));
+        expect(new Set(keys).size).toBe(2500);
+    });
+
+    it('signs each round over just that round\'s keys, with its own challenge', async () => {
+        // 1500 against a 1000-per-request server: two rounds. The sizes have
+        // to match the client's own REDACTION_ROUND — a stub that refused at
+        // 100 would only prove the client had been told the wrong cap, which
+        // is what the backend's constant-pinning test is for.
+        stubServer({ total: 1500, perRound: 1000 });
+        await mount();
+        await act(async () => {
+            await api.deleteServerAccount('erase');
+        });
+
+        const rounds = deleteCalls().map(([, init]) => JSON.parse(init.body));
+        // A signature covering the whole set would let a relay move redactions
+        // between rounds; one covering nothing would let it drop them.
+        for (const round of rounds) {
+            expect(vault.sign).toHaveBeenCalledWith(
+                await accountDeletionBody('N', 'erase', round.redactions.map((r) => r.key)),
+                null
+            );
+        }
+        expect(rounds).toHaveLength(2);
+    });
+
+    it('stops instead of looping when the server asks for redactions it cannot make', async () => {
+        // Manifest empty, server still unsatisfied: the two have drifted apart,
+        // and spinning on empty rounds forever is the worst possible answer.
+        global.fetch = vi.fn(async (url) => {
+            const href = String(url);
+            if (/redactable-messages/.test(href)) return { ok: true, status: 200, json: async () => [] };
+            if (/nonce/.test(href)) return { ok: true, status: 200, json: async () => ({ nonce: 'N' }) };
+            if (/account\/delete/.test(href)) {
+                return {
+                    ok: false,
+                    status: 409,
+                    json: async () => ({ status: 'redacting', remaining: 7, detail: 'more' }),
+                };
+            }
+            return { ok: true, status: 200, json: async () => ({}) };
+        });
+        await mount();
+
+        await expect(api.deleteServerAccount('erase')).rejects.toThrow(
+            /cannot redact/i
+        );
+    });
+
+    it('gives up after a bounded number of rounds', async () => {
+        // A manifest that never shrinks. Without the guard this is an infinite
+        // loop of signing and posting.
+        global.fetch = vi.fn(async (url) => {
+            const href = String(url);
+            if (/redactable-messages/.test(href)) {
+                const offset = Number(new URL(href).searchParams.get('offset'));
+                return { ok: true, status: 200, json: async () => (offset ? [] : [carrier(1)]) };
+            }
+            if (/nonce/.test(href)) return { ok: true, status: 200, json: async () => ({ nonce: 'N' }) };
+            if (/account\/delete/.test(href)) {
+                return {
+                    ok: false,
+                    status: 409,
+                    json: async () => ({ status: 'redacting', remaining: 1, detail: 'more' }),
+                };
+            }
+            return { ok: true, status: 200, json: async () => ({}) };
+        });
+        await mount();
+
+        await expect(api.deleteServerAccount('erase')).rejects.toThrow(/keeps asking/i);
+        expect(deleteCalls().length).toBeLessThan(60);
+    });
+
+    it('says a rate limit cost time, not work', async () => {
+        // Rounds are committed as they land, so a 429 half-way through a long
+        // erase is resumable. A bare "Deletion failed (429)" would read like a
+        // half-deleted account instead.
+        let round = 0;
+        global.fetch = vi.fn(async (url) => {
+            const href = String(url);
+            if (/redactable-messages/.test(href)) {
+                const offset = Number(new URL(href).searchParams.get('offset'));
+                return { ok: true, status: 200, json: async () => (offset ? [] : [carrier(1)]) };
+            }
+            if (/nonce/.test(href)) return { ok: true, status: 200, json: async () => ({ nonce: 'N' }) };
+            if (/account\/delete/.test(href)) {
+                round += 1;
+                return round === 1
+                    ? {
+                        ok: false,
+                        status: 409,
+                        json: async () => ({ status: 'redacting', remaining: 1, detail: 'more' }),
+                    }
+                    : {
+                        ok: false,
+                        status: 429,
+                        json: async () => ({ error: 'Rate limit exceeded: 10 per 1 minute' }),
+                    };
+            }
+            return { ok: true, status: 200, json: async () => ({}) };
+        });
+        await mount();
+
+        await expect(api.deleteServerAccount('erase')).rejects.toThrow(/continue where it stopped/i);
+    });
+
+    it('hands back what the server kept, so the user is told', async () => {
+        global.fetch = vi.fn(async (url) => {
+            const href = String(url);
+            if (/redactable-messages/.test(href)) return { ok: true, status: 200, json: async () => [] };
+            if (/nonce/.test(href)) return { ok: true, status: 200, json: async () => ({ nonce: 'N' }) };
+            if (/account\/delete/.test(href)) {
+                return {
+                    ok: true,
+                    status: 200,
+                    json: async () => ({ status: 'deleted', redacted: 0, kept: 3 }),
+                };
+            }
+            return { ok: true, status: 200, json: async () => ({}) };
+        });
+        await mount();
+
+        let summary;
+        await act(async () => {
+            summary = await api.deleteServerAccount('erase');
+        });
+        // "Delete my content" must not quietly mean "most of it".
+        expect(summary.kept).toBe(3);
     });
 
     it('does not delete anything when the signing step fails', async () => {

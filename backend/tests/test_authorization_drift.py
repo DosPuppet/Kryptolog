@@ -401,7 +401,7 @@ class TestLeavingHasOneSpelling:
             },
             headers=auth_header(token1),
         )
-        assert deleted.status_code == 204, deleted.text
+        assert deleted.status_code == 200, deleted.text
         db_session.expire_all()
         via_deletion = self._members(db_session, deletion_channel)
 
@@ -439,7 +439,7 @@ class TestLeavingHasOneSpelling:
                 },
                 headers=auth_header(token1),
             ).status_code
-            == 204
+            == 200
         )
 
         db_session.expire_all()

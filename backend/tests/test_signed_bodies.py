@@ -173,6 +173,31 @@ class TestTheVectorsAreWhatWeThinkTheyAre:
         for ct in ("null", "None", "redacted=1", "", "1"):
             assert auth.message_signing_body(ct=ct, **common) != redacted
 
+    def test_a_body_with_no_session_id_is_refused_rather_than_spelled(self):
+        """The one field of a signed body that comes straight out of a
+        client-written payload, and the two languages disagree about a missing
+        one: Python renders `sid=None`, JS renders `sid=null`. Neither side can
+        verify the other's, and nothing says why — so this refuses instead,
+        the same way check_envelope_shape refuses a digest it cannot promise
+        to reproduce (audit 2026-09-12 M-2c).
+        """
+        v = _vectors()
+        common = dict(
+            from_=v["message_from"],
+            conv=v["message_conv"],
+            gid=v["message_gid"],
+            keys=v["message_keys"],
+            ct=None,
+        )
+        for missing in (None, "", 0):
+            with pytest.raises(auth.NonCanonicalSignedBody):
+                auth.message_signing_body(sid=missing, **common)
+        # The real one still builds, unchanged.
+        assert (
+            auth.message_signing_body(sid=v["message_sid"], **common)
+            == (v["bodies"]["message_redacted"])
+        )
+
     def test_the_key_envelope_digest_is_independently_reproducible(self):
         """Guards the fixture: agreement with a file both sides regenerate would
         pass for any value, including a broken one."""

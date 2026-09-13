@@ -528,12 +528,17 @@ class PushSubscriptionResponse(PushSubscriptionCreate):
 # redacted form of that message's body. The signature dominates the size: 3228
 # base64 characters against a couple of dozen for the id.
 #
-# The cap is a DoS bound, not a protocol limit. Erase asks the client to
-# re-sign one message per session epoch it ever opened, so a long-lived account
-# in many conversations can legitimately submit hundreds. At the cap the body
-# is roughly 3.3 MB and the server performs 1000 ML-DSA-44 verifications,
-# ~0.05 s of CPU — expensive enough to bound, cheap enough not to refuse a real
-# account.
+# A bound on ONE REQUEST, not on how much an account may erase. At the cap the
+# body is roughly 3.3 MB and the server performs 1000 ML-DSA-44 verifications,
+# ~0.05 s of CPU.
+#
+# It used to be both, and that made accounts permanently un-erasable: erase
+# asks for one signature per session epoch the user ever opened, and a group
+# mints a fresh one per client per page load, so a few years of ordinary use
+# passes 1000. Over it, the request was a 422 and one row short of it a 409 —
+# with no way round either (audit 2026-09-12 M-2a). `POST /account/delete`
+# takes a round at a time now and answers 409-with-a-count until none is left,
+# so this number costs a long-lived account extra requests and nothing else.
 MAX_REDACTIONS_PER_DELETE = 1_000
 # "dm:" / "group:" plus a 64-bit id, with room to spare.
 MAX_REDACTION_KEY_LEN = 32
@@ -571,6 +576,23 @@ class AccountDeleteRequest(BaseModel):
         if not is_valid_ml_dsa_signature(v):
             raise ValueError("signature must be a canonical base64 ML-DSA-44 signature")
         return v
+
+
+class AccountDeleteResponse(BaseModel):
+    """What one `POST /account/delete` did.
+
+    `status` is "deleted" when the account is gone, and "redacting" (alongside
+    409) when this round's redactions landed but more remain — see the
+    endpoint. `kept` counts the caller's own messages an erase left holding
+    their content because it refuses to guess at them: one that does not parse,
+    or one whose signed form the two languages would spell differently. Zero
+    for anything a shipped client wrote.
+    """
+
+    status: Literal["deleted", "redacting"]
+    redacted: int
+    kept: int
+    remaining: int = 0
 
 
 class RedactableMessageResponse(BaseModel):

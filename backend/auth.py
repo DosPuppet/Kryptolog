@@ -129,7 +129,17 @@ _CTX_MESSAGE = "message"
 _CTX_ACCOUNT_DELETION = "account-deletion"
 
 
-class NonCanonicalKeyEnvelope(ValueError):
+class NonCanonicalSignedBody(ValueError):
+    """A value the two languages would not spell identically inside a signed body.
+
+    Raised rather than guessed at. A signed body only means anything if the
+    signer and the verifier build the same bytes, so a value whose rendering
+    differs between Python and JS must stop the operation, not produce bytes
+    one side would never have written.
+    """
+
+
+class NonCanonicalKeyEnvelope(NonCanonicalSignedBody):
     """A key envelope whose shape the two languages would not agree on."""
 
 
@@ -216,6 +226,15 @@ def message_signing_body(*, from_: str, conv: str, sid: str, ct, gid: str = "", 
     """
     if keys is not None:
         check_envelope_shape(keys)
+    # A missing sid renders as `sid=None` here and `sid=null` in JS — the same
+    # class of silent divergence `check_envelope_shape` guards the digest
+    # against, in the one field that comes straight out of a client-written
+    # payload. No legitimate message has one: the session cache is addressed by
+    # (conversation, sid), so a payload without it is not a session at all.
+    # Refused rather than spelled, because the two spellings would verify on
+    # neither side (audit 2026-09-12 M-2c).
+    if not isinstance(sid, str) or not sid:
+        raise NonCanonicalSignedBody("a signed message body needs a session id")
     tail = "\nredacted=1" if ct is None else f"\nct={_canonical_ciphertext(ct)}"
     keysh = hashlib.sha256(_canonical_json(keys).encode("utf-8")).hexdigest()
     body = f"from={from_}\nconv={conv}\ngid={gid or ''}\nsid={sid}\nkeysh={keysh}" + tail
