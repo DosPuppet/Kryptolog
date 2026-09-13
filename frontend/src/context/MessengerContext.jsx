@@ -31,7 +31,7 @@ export const useMessengerContext = () => {
 };
 
 export const MessengerProvider = ({ children }) => {
-    const { user, token } = useAuth();
+    const { user, token, logout } = useAuth();
     const { generateSessionKey, wrapSessionKey, unwrapSessionKey, unwrapManySessionKeys, mlkemKey, signMessage } = usePQC();
 
     const [conversations, setConversations] = useState([]);
@@ -143,6 +143,20 @@ export const MessengerProvider = ({ children }) => {
         user,
         token,
         handlers: {
+            // Not a message: the server telling this identity's sockets to hang
+            // up because the account is gone (websocket_manager.ACCOUNT_DELETED).
+            //
+            // Acting on it matters in two cases the socket close does not cover.
+            // A worker on the PREVIOUS build fans this out as an ordinary frame
+            // and never closes anything, which is the whole reason it has to be
+            // meaningful in its own right during a rolling restart. And a second
+            // tab of the deleted account would otherwise sit there showing its
+            // secrets and conversations until something made it reload (audit
+            // 2026-09-12 I-4).
+            ACCOUNT_DELETED: () => {
+                toast.info('This account has been deleted. Signing out.');
+                logout();
+            },
             NEW_MESSAGE: (data) => handleIncomingMessage(data.message),
             NEW_GROUP_MESSAGE: (data) => handleIncomingGroupMessage(data.message),
             SECRET_SHARED: (data) => setLastEvent({ type: 'SECRET_SHARED', timestamp: Date.now(), data: data }),

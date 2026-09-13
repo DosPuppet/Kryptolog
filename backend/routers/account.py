@@ -6,7 +6,10 @@ answers questions about other people. Everything here is about the caller, and
 only ever the caller.
 """
 
+import logging
+
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import JSONResponse
 from sqlalchemy.orm import Session
 
@@ -19,6 +22,8 @@ from dependencies import get_current_user, limiter
 from routers.auth import claim_nonce
 from utils.group_events import broadcast_removal
 from websocket_manager import manager
+
+logger = logging.getLogger("kryptolog.account")
 
 router = APIRouter(prefix="/account", tags=["account"])
 
@@ -81,71 +86,21 @@ async def delete_account(
     """
     address = current_user.address
 
-    # Claim first, verify second (KRY-004): a failed verification must not hand
-    # back a replayable challenge. This COMMITS, deliberately outside the
-    # deletion transaction below — the nonce is spent whatever happens next.
-    if not claim_nonce(db, address, req.nonce):
-        raise HTTPException(status_code=400, detail="Invalid or expired nonce.")
+    # Everything up to and including the commit runs in a worker thread. It is
+    # all synchronous — three walks of the user's messages, up to
+    # MAX_REDACTIONS_PER_DELETE ML-DSA verifications, then the writes — and on
+    # the event loop it blocked every other request on this process: measured at
+    # 500 carriers, an unrelated GET went from 3 ms to 239 ms (audit 2026-09-12
+    # L-4). A plain `def` endpoint would get this for free, but the tail below
+    # has to await, so it is asked for explicitly.
+    #
+    # A Session is not thread-safe but is fine to use FROM another thread while
+    # only one touches it, which is exactly what FastAPI does for every `def`
+    # endpoint. HTTPException raised in there propagates normally.
+    outcome, payload, departures = await run_in_threadpool(_perform_deletion, db, current_user, req)
 
-    signatures = {r.key: r.signature for r in req.redactions}
-    if len(signatures) != len(req.redactions):
-        raise HTTPException(status_code=400, detail="Duplicate redaction id")
-
-    message = auth.account_deletion_message(req.nonce, req.mode, signatures.keys())
-    if not auth.verify_message_signature(address, message, req.signature):
-        raise HTTPException(status_code=401, detail="Invalid deletion signature")
-
-    redacted = 0
-    if req.mode == account_deletion.MODE_LEAVE:
-        if signatures:
-            raise HTTPException(status_code=400, detail="Leaving redacts nothing")
-    else:
-        try:
-            redacted = account_deletion.apply_redactions(db, address, signatures)
-        except account_deletion.RedactionRefused as exc:
-            db.rollback()
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
-
-        # Recomputed here, inside the transaction, never taken from the signed
-        # set: the erase finishes only when nothing of the user's still holds
-        # both a session key and its ciphertext. A message sent while the
-        # client was working through its manifest therefore delays the
-        # deletion instead of being caught by it — `_delete_own_messages` never
-        # deletes a carrier, so the row that used to be at risk of destroying
-        # the partner's history now simply keeps this from completing.
-        remaining = len(account_deletion.redaction_keys(db, address))
-        if remaining:
-            # This round's redactions stand. They are authenticated statements
-            # by the author in their own right, and keeping them means the next
-            # round is strictly smaller — an erase that cannot finish in one
-            # request still always makes progress.
-            db.commit()
-            return JSONResponse(
-                status_code=409,
-                content={
-                    "status": "redacting",
-                    "redacted": redacted,
-                    "kept": 0,
-                    "remaining": remaining,
-                    "detail": (
-                        f"{remaining} more message(s) still have to be redacted. "
-                        "Read the manifest again and sign the next round."
-                    ),
-                },
-            )
-
-    # Counted before the deletion runs, though it counts only rows the deletion
-    # leaves alone either way — those are exactly the ones it refuses to guess
-    # at.
-    kept = (
-        account_deletion.kept_messages(db, address)
-        if req.mode == account_deletion.MODE_ERASE
-        else 0
-    )
-
-    departures = account_deletion.delete_account(db, current_user, req.mode)
-
-    db.commit()
+    if outcome == "redacting":
+        return JSONResponse(status_code=409, content=payload)
 
     # Everything below is after the commit and best-effort: telling a group
     # someone left, then rolling back, would be worse than telling them late.
@@ -163,4 +118,112 @@ async def delete_account(
     # reconnect. Sockets already open are not closed by a database write.
     await manager.close_address(address)
 
-    return {"status": "deleted", "redacted": redacted, "kept": kept, "remaining": 0}
+    return payload
+
+
+def _perform_deletion(db: Session, current_user: models.User, req: schemas.AccountDeleteRequest):
+    """The synchronous half of a deletion: authorize, apply, commit.
+
+    Returns (outcome, response payload, departures to broadcast). Split out of
+    the endpoint so it can run off the event loop, not because it is reusable.
+    """
+    address = current_user.address
+
+    # Claim first, verify second (KRY-004): a failed verification must not hand
+    # back a replayable challenge. This COMMITS, deliberately outside the
+    # deletion transaction below — the nonce is spent whatever happens next.
+    if not claim_nonce(db, address, req.nonce):
+        raise HTTPException(status_code=400, detail="Invalid or expired nonce.")
+
+    signatures = {r.key: r.signature for r in req.redactions}
+    if len(signatures) != len(req.redactions):
+        raise HTTPException(status_code=400, detail="Duplicate redaction id")
+
+    message = auth.account_deletion_message(req.nonce, req.mode, signatures.keys())
+    if not auth.verify_message_signature(address, message, req.signature):
+        # The one refusal worth a line of its own: somebody holding a live
+        # session for this account asked to destroy it and could not prove they
+        # hold the key. Nothing about the attempt is secret — the address is a
+        # public key — and the signature itself is deliberately not logged.
+        logger.warning("Account deletion refused for %s: invalid signature", address)
+        raise HTTPException(status_code=401, detail="Invalid deletion signature")
+
+    redacted = 0
+    if req.mode == account_deletion.MODE_LEAVE:
+        if signatures:
+            raise HTTPException(status_code=400, detail="Leaving redacts nothing")
+    else:
+        try:
+            redacted = account_deletion.apply_redactions(db, address, signatures)
+        except account_deletion.RedactionRefused as exc:
+            db.rollback()
+            logger.warning("Account deletion refused for %s: %s", address, exc)
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+        # Recomputed here, inside the transaction, never taken from the signed
+        # set: the erase finishes only when nothing of the user's still holds
+        # both a session key and its ciphertext. A message sent while the
+        # client was working through its manifest therefore delays the
+        # deletion instead of being caught by it — `_delete_own_messages` never
+        # deletes a carrier, so the row that used to be at risk of destroying
+        # the partner's history now simply keeps this from completing.
+        remaining = len(account_deletion.redaction_keys(db, address))
+        if remaining:
+            # This round's redactions stand. They are authenticated statements
+            # by the author in their own right, and keeping them means the next
+            # round is strictly smaller — an erase that cannot finish in one
+            # request still always makes progress.
+            db.commit()
+            logger.info(
+                "Account erase in progress for %s: redacted %d this round, %d left",
+                address,
+                redacted,
+                remaining,
+            )
+            return (
+                "redacting",
+                {
+                    "status": "redacting",
+                    "redacted": redacted,
+                    "kept": 0,
+                    "remaining": remaining,
+                    "detail": (
+                        f"{remaining} more message(s) still have to be redacted. "
+                        "Read the manifest again and sign the next round."
+                    ),
+                },
+                [],
+            )
+
+    # Counted before the deletion runs, though it counts only rows the deletion
+    # leaves alone either way — those are exactly the ones it refuses to guess
+    # at.
+    kept = (
+        account_deletion.kept_messages(db, address)
+        if req.mode == account_deletion.MODE_ERASE
+        else 0
+    )
+
+    departures = account_deletion.delete_account(db, current_user, req.mode)
+
+    db.commit()
+
+    # The one event in this application that cannot be undone or reconstructed
+    # from anything else it stores (audit 2026-09-12 L-3, an instance of the
+    # standing "no security log" finding). Enough to answer "was this account
+    # deleted, when, which way, and did it leave anything behind" — and nothing
+    # about the content, which the server cannot read anyway.
+    logger.info(
+        "Account deleted: %s mode=%s redacted=%d kept=%d groups_left=%d",
+        address,
+        req.mode,
+        redacted,
+        kept,
+        len(departures),
+    )
+
+    return (
+        "deleted",
+        {"status": "deleted", "redacted": redacted, "kept": kept, "remaining": 0},
+        departures,
+    )

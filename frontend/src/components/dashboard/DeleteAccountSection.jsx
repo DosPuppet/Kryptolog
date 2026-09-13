@@ -17,11 +17,12 @@ const MODES = [
             'Secrets, files, documents and workflows stay on the server, attached to your key.',
             'Your messages stay readable to the people you sent them to.',
             'You can come back: logging in with this same vault restores the account and its data.',
+            'Your username is held for you — nobody else can take it while you are away.',
         ],
         costs: [
             'You disappear from the directory and show as "User removed" to everyone.',
             'You are removed from every group, and have to be re-added to return.',
-            'You will choose a new username, and an invite code if the server needs one.',
+            'You will need an invite code to come back, if the server requires one.',
         ],
     },
     {

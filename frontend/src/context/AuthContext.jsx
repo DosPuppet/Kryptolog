@@ -1,6 +1,7 @@
 import { createContext, useState, useContext, useEffect, useRef, useCallback } from 'react';
 import { isTokenExpired } from '../utils/jwt';
 import { toast } from '../utils/toast';
+import { setUnauthorizedHandler } from '../services/api';
 
 const AuthContext = createContext();
 
@@ -37,6 +38,22 @@ export const AuthProvider = ({ children }) => {
     const updateUser = (userData) => {
         setUser(userData);
     };
+
+    // A 401 from any authenticated call means this session is over — revoked,
+    // or belonging to an account that has just been deleted from somewhere
+    // else. The expiry guard below only notices what the CLOCK can prove, and a
+    // revoked token looks perfectly valid to it (audit 2026-09-12 I-4).
+    useEffect(() => {
+        return setUnauthorizedHandler(() => {
+            // Nothing to say for a caller that is already signed out, and
+            // nothing to do: logout() is idempotent but the toast is not.
+            setIsAuthenticated((signedIn) => {
+                if (signedIn) toast.info('Your session is no longer valid. Please sign in again.');
+                return signedIn;
+            });
+            logout();
+        });
+    }, [logout]);
 
     // Session guard: when the app is backgrounded (PWA/tab) past the JWT's
     // lifetime, the in-memory session is still flagged authenticated but the

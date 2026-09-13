@@ -13,7 +13,7 @@
  * page had been missed.
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { render, act } from '@testing-library/react';
+import { render, act, fireEvent } from '@testing-library/react';
 
 const PASSWORD = 'correct horse battery staple';
 const ADDRESS = 'a'.repeat(64);
@@ -122,6 +122,51 @@ const deleteCall = () =>
 
 const deleteBody = () => JSON.parse(deleteCall()[1].body);
 
+/**
+ * Run something that deletes, answering the password prompts it raises.
+ *
+ * The deletion signature forces a prompt even when the key cache is warm
+ * (audit 2026-09-12 L-2), and an erase raises one PER ROUND, so a test that
+ * does not answer them simply hangs. Answering them here is not scaffolding
+ * around the feature — it is the feature: the prompt is what makes the two
+ * Enter-clearable confirmations into a decision.
+ */
+let promptsAnswered = 0;
+const withPasswordPrompts = async (run) => {
+    promptsAnswered = 0;
+    let settled = false;
+    let outcome;
+    const promise = run().then(
+        (value) => { settled = true; outcome = { value }; },
+        (error) => { settled = true; outcome = { error }; }
+    );
+    // Budget, not a pace: an erase of 50 rounds needs a few hundred turns and
+    // the count varies with how the runner schedules them, so a tight bound
+    // here passes a file run alone and times out in the full suite.
+    const TURNS = 20_000;
+    let turn = 0;
+    for (; turn < TURNS && !settled; turn++) {
+        // One act() per turn, not one around the loop: React commits its queued
+        // work when act settles, so a loop *inside* a single act would never
+        // see the modal reach the DOM.
+        await act(async () => { await Promise.resolve(); });
+        const input = document.querySelector('input[type="password"]');
+        if (input) {
+            promptsAnswered += 1;
+                await act(async () => {
+                fireEvent.change(input, { target: { value: PASSWORD } });
+                fireEvent.submit(input.closest('form'));
+            });
+        }
+    }
+    if (turn >= TURNS) {
+        throw new Error('withPasswordPrompts: the operation never settled');
+    }
+    await act(async () => { await promise; });
+    if (outcome.error) throw outcome.error;
+    return outcome.value;
+};
+
 const mount = async () => {
     await act(async () => {
         render(
@@ -151,9 +196,7 @@ describe('leaving', () => {
     it('sends the mode, redacts nothing, and logs out', async () => {
         stubServer();
         await mount();
-        await act(async () => {
-            await api.deleteServerAccount('leave');
-        });
+        await withPasswordPrompts(() => api.deleteServerAccount('leave'));
 
         const body = deleteBody();
         expect(body.mode).toBe('leave');
@@ -166,14 +209,20 @@ describe('leaving', () => {
     it('signs the mode it is performing, not a fixed one', async () => {
         stubServer();
         await mount();
-        await act(async () => {
-            await api.deleteServerAccount('leave');
-        });
+        await withPasswordPrompts(() => api.deleteServerAccount('leave'));
 
         // Without the mode inside the signed body a relay could escalate this
         // into an erase — destroying data the user asked to keep — under a
         // signature the server accepts either way.
-        expect(vault.sign).toHaveBeenCalledWith(await accountDeletionBody('N', 'leave', []), null);
+        //
+        // The second argument is the password the user just typed, not `null`:
+        // `null` is what requestPassword answers from a warm key cache, and
+        // this one operation refuses that shortcut (audit L-2).
+        expect(vault.sign).toHaveBeenCalledWith(
+            await accountDeletionBody('N', 'leave', []),
+            PASSWORD
+        );
+        expect(promptsAnswered).toBe(1);
     });
 });
 
@@ -183,9 +232,7 @@ describe('erasing', () => {
         // only the first would delete the other 50 instead of redacting them.
         stubServer({ total: 150 });
         await mount();
-        await act(async () => {
-            await api.deleteServerAccount('erase');
-        });
+        await withPasswordPrompts(() => api.deleteServerAccount('erase'));
 
         const body = deleteBody();
         expect(body.mode).toBe('erase');
@@ -197,9 +244,7 @@ describe('erasing', () => {
     it('signs the redacted form of each message, from the server-supplied conversation', async () => {
         stubServer({ total: 1 });
         await mount();
-        await act(async () => {
-            await api.deleteServerAccount('erase');
-        });
+        await withPasswordPrompts(() => api.deleteServerAccount('erase'));
 
         // ct: null is the redaction, and `conv` comes from the row the server
         // delivered the message under (audit F-1) — signing a conversation of
@@ -221,15 +266,13 @@ describe('erasing', () => {
     it('binds the whole redaction set into the deletion signature', async () => {
         stubServer({ total: 2 });
         await mount();
-        await act(async () => {
-            await api.deleteServerAccount('erase');
-        });
+        await withPasswordPrompts(() => api.deleteServerAccount('erase'));
 
         // Dropping one id en route turns that redaction into a deletion, which
         // takes the partner's own history with it.
         expect(vault.sign).toHaveBeenCalledWith(
             await accountDeletionBody('N', 'erase', ['dm:1', 'dm:2']),
-            null
+            PASSWORD
         );
     });
 
@@ -239,9 +282,7 @@ describe('erasing', () => {
         // one row under it a 409, with no way round either (audit M-2a).
         stubServer({ total: 2500, perRound: 1000 });
         await mount();
-        await act(async () => {
-            await api.deleteServerAccount('erase');
-        });
+        await withPasswordPrompts(() => api.deleteServerAccount('erase'));
 
         const rounds = deleteCalls().map(([, init]) => JSON.parse(init.body));
         expect(rounds).toHaveLength(3);
@@ -258,9 +299,7 @@ describe('erasing', () => {
         // is what the backend's constant-pinning test is for.
         stubServer({ total: 1500, perRound: 1000 });
         await mount();
-        await act(async () => {
-            await api.deleteServerAccount('erase');
-        });
+        await withPasswordPrompts(() => api.deleteServerAccount('erase'));
 
         const rounds = deleteCalls().map(([, init]) => JSON.parse(init.body));
         // A signature covering the whole set would let a relay move redactions
@@ -268,10 +307,12 @@ describe('erasing', () => {
         for (const round of rounds) {
             expect(vault.sign).toHaveBeenCalledWith(
                 await accountDeletionBody('N', 'erase', round.redactions.map((r) => r.key)),
-                null
+                PASSWORD
             );
         }
         expect(rounds).toHaveLength(2);
+        // Each round is separately authorized, so each asks again.
+        expect(promptsAnswered).toBe(2);
     });
 
     it('stops instead of looping when the server asks for redactions it cannot make', async () => {
@@ -292,7 +333,7 @@ describe('erasing', () => {
         });
         await mount();
 
-        await expect(api.deleteServerAccount('erase')).rejects.toThrow(
+        await expect(withPasswordPrompts(() => api.deleteServerAccount('erase'))).rejects.toThrow(
             /cannot redact/i
         );
     });
@@ -318,7 +359,9 @@ describe('erasing', () => {
         });
         await mount();
 
-        await expect(api.deleteServerAccount('erase')).rejects.toThrow(/keeps asking/i);
+        await expect(withPasswordPrompts(() => api.deleteServerAccount('erase'))).rejects.toThrow(
+            /keeps asking/i
+        );
         expect(deleteCalls().length).toBeLessThan(60);
     });
 
@@ -352,7 +395,9 @@ describe('erasing', () => {
         });
         await mount();
 
-        await expect(api.deleteServerAccount('erase')).rejects.toThrow(/continue where it stopped/i);
+        await expect(withPasswordPrompts(() => api.deleteServerAccount('erase'))).rejects.toThrow(
+            /continue where it stopped/i
+        );
     });
 
     it('hands back what the server kept, so the user is told', async () => {
@@ -371,10 +416,7 @@ describe('erasing', () => {
         });
         await mount();
 
-        let summary;
-        await act(async () => {
-            summary = await api.deleteServerAccount('erase');
-        });
+        const summary = await withPasswordPrompts(() => api.deleteServerAccount('erase'));
         // "Delete my content" must not quietly mean "most of it".
         expect(summary.kept).toBe(3);
     });
@@ -384,7 +426,9 @@ describe('erasing', () => {
         vault.signMessage.mockRejectedValueOnce(new Error('user cancelled'));
         await mount();
 
-        await expect(api.deleteServerAccount('erase')).rejects.toThrow('user cancelled');
+        await expect(withPasswordPrompts(() => api.deleteServerAccount('erase'))).rejects.toThrow(
+            'user cancelled'
+        );
         expect(global.fetch.mock.calls.some(([u]) => /account\/delete/.test(String(u)))).toBe(false);
     });
 });
@@ -397,9 +441,7 @@ describe('what an erase leaves on the device', () => {
         vault.getAccounts.mockReturnValue([{ id: 'acct-1' }, { id: 'acct-2' }]);
         stubServer();
         await mount();
-        await act(async () => {
-            await api.deleteServerAccount('erase', { forgetVault: true });
-        });
+        await withPasswordPrompts(() => api.deleteServerAccount('erase', { forgetVault: true }));
 
         // A vault can hold several identities and only one of them just became
         // useless. Wiping the lot would destroy keys the user still needs.
@@ -413,9 +455,7 @@ describe('what an erase leaves on the device', () => {
         vault.getAccounts.mockReturnValue([{ id: 'acct-1' }]);
         stubServer();
         await mount();
-        await act(async () => {
-            await api.deleteServerAccount('erase', { forgetVault: true });
-        });
+        await withPasswordPrompts(() => api.deleteServerAccount('erase', { forgetVault: true }));
 
         expect(vault.wipeVault).toHaveBeenCalledTimes(1);
         expect(vault.deleteAccount).not.toHaveBeenCalled();
@@ -424,9 +464,7 @@ describe('what an erase leaves on the device', () => {
     it('touches nothing on the device unless asked', async () => {
         stubServer();
         await mount();
-        await act(async () => {
-            await api.deleteServerAccount('erase');
-        });
+        await withPasswordPrompts(() => api.deleteServerAccount('erase'));
 
         expect(vault.wipeVault).not.toHaveBeenCalled();
         expect(vault.deleteAccount).not.toHaveBeenCalled();
@@ -435,9 +473,7 @@ describe('what an erase leaves on the device', () => {
     it('never touches the device on a leave — the vault is what makes it reversible', async () => {
         stubServer();
         await mount();
-        await act(async () => {
-            await api.deleteServerAccount('leave', { forgetVault: true });
-        });
+        await withPasswordPrompts(() => api.deleteServerAccount('leave', { forgetVault: true }));
 
         expect(vault.wipeVault).not.toHaveBeenCalled();
         expect(vault.deleteAccount).not.toHaveBeenCalled();
@@ -493,9 +529,7 @@ describe('an erase performed with the keys in the extension', () => {
     it('leaves a local vault holding another identity untouched', async () => {
         stubServer();
         await mountWithExtension();
-        await act(async () => {
-            await api.deleteServerAccount('erase', { forgetVault: true });
-        });
+        await withPasswordPrompts(() => api.deleteServerAccount('erase', { forgetVault: true }));
 
         // The extension really was custody for this erase...
         expect(window.trustkeys.sign).toHaveBeenCalled();
@@ -567,5 +601,36 @@ describe('a login refused because the key was erased', () => {
         await expect(api.loginLocalVault(PASSWORD)).rejects.toMatchObject({
             code: 'ACCOUNT_DELETED',
         });
+    });
+});
+
+describe('the password prompt is the decision', () => {
+    it('asks even when the key cache would have answered', async () => {
+        // Two confirmations precede this, and ConfirmDialogHost maps Enter to
+        // "confirm" — so with a cache TTL set, an account went in two
+        // keypresses and the claim that "the signing prompt is what makes the
+        // sequence a decision" was true only at the default TTL of 0 (audit
+        // 2026-09-12 L-2).
+        vault.hasCachedKey = () => true;
+        stubServer();
+        await mount();
+
+        await withPasswordPrompts(() => api.deleteServerAccount('leave'));
+
+        expect(promptsAnswered).toBe(1);
+        expect(vault.sign).toHaveBeenCalledWith(expect.any(String), PASSWORD);
+    });
+
+    it('does not ask once per redaction, only once per round', async () => {
+        // The redactions go through signMessage, which stays silent on a warm
+        // signing key — otherwise erasing an account with a thousand epochs
+        // would be a thousand prompts.
+        stubServer({ total: 150 });
+        await mount();
+
+        await withPasswordPrompts(() => api.deleteServerAccount('erase'));
+
+        expect(vault.signMessage).toHaveBeenCalledTimes(150);
+        expect(promptsAnswered).toBe(1);
     });
 });

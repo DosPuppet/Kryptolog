@@ -234,7 +234,7 @@ class RedactionRefused(ValueError):
     """A redaction the server will not store. Never partially applied."""
 
 
-def _redacted_content(kind: str, payload: dict, signature: str) -> str:
+def _redacted_content(kind: str, payload: dict, signature: str, gid: str = "") -> str:
     """Build the stored payload for a redacted message.
 
     Everything but the ciphertext is copied from the row the server already
@@ -242,6 +242,14 @@ def _redacted_content(kind: str, payload: dict, signature: str) -> str:
     the group binding — that would be audit M-8's targeted-exclusion attack
     executed with a valid signature. The client supplies one thing: a signature
     over the form the server built.
+
+    `gid` is the group id as SIGNED, which is not always the one the payload
+    declared: the verification below falls back to the delivered channel when a
+    payload carries none. Storing the payload's own value would leave a message
+    whose stored gid and signed gid disagree, so every reader would rebuild the
+    wrong bytes and show an author-signed redaction as an invalid signature —
+    the F-2 "suspicious" badge, on the one message that most needs to read as
+    deliberate (audit 2026-09-12 I-5).
     """
     content = {
         "v": payload.get("v"),
@@ -251,7 +259,7 @@ def _redacted_content(kind: str, payload: dict, signature: str) -> str:
         "sig": signature,
     }
     if kind == "group":
-        content["gid"] = payload.get("gid")
+        content["gid"] = gid
     return json.dumps(content)
 
 
@@ -306,11 +314,14 @@ def _verified_redactions(db: Session, address: str, signatures: dict[str, str]) 
             # was delivered under — the same refusal verifyMessage.js makes.
             raise RedactionRefused(f"{key} declares a group it was not delivered under")
 
+        # The gid the signature covers, and therefore the one to store: the
+        # payload's own when it declares one, the delivered channel otherwise.
+        signed_gid = (payload.get("gid") or gid) if kind == "group" else ""
         try:
             body = auth.message_signing_body(
                 from_=address,
                 conv=conv,
-                gid=payload.get("gid") or gid if kind == "group" else "",
+                gid=signed_gid,
                 sid=payload.get("sid"),
                 ct=None,
                 keys=payload["keys"],
@@ -324,7 +335,7 @@ def _verified_redactions(db: Session, address: str, signatures: dict[str, str]) 
         if not auth.verify_message_signature(address, body, signature):
             raise RedactionRefused(f"invalid redaction signature for {key}")
 
-        pending.append((kind, row, _redacted_content(kind, payload, signature)))
+        pending.append((kind, row, _redacted_content(kind, payload, signature, signed_gid)))
     return pending
 
 
@@ -480,12 +491,25 @@ def _erase_multisig(db: Session, address: str) -> None:
             )
             db.delete(secret)
 
-    # Recipient rows on OTHER people's workflows hold a key wrapped to a user
-    # who can no longer read it. Deleted rather than blanked: a recipient with
-    # a NULL key makes the workflow permanently uncompletable (the L-2 dead
-    # end), where removing the row lets it complete for everyone else.
+    # Recipient rows on OTHER people's workflows, on everything NOT yet
+    # released. They hold a key wrapped to a user who can no longer read it, and
+    # deleting the row is better than blanking the key: a recipient with a NULL
+    # key makes the workflow permanently uncompletable (the L-2 dead end), where
+    # removing it lets the workflow complete for everyone else.
+    #
+    # A COMPLETED workflow is different, and the reason the two were treated
+    # alike did not survive being written down (audit 2026-09-12 I-6): there is
+    # no completion left to block, and the row is the owner's record that the
+    # document was released to this address. Deleting it would let a departing
+    # recipient erase the evidence of a release they received — the same thing
+    # `workflow_is_deletable` already refuses the OWNER a few lines above. The
+    # key it holds is wrapped to a public key nobody else can use.
+    released = db.query(models.MultisigWorkflow.id).filter(
+        models.MultisigWorkflow.status == "completed"
+    )
     db.query(models.MultisigWorkflowRecipient).filter(
-        models.MultisigWorkflowRecipient.user_address == address
+        models.MultisigWorkflowRecipient.user_address == address,
+        ~models.MultisigWorkflowRecipient.workflow_id.in_(released),
     ).delete(synchronize_session=False)
 
     # autoflush is off, so the workflows deleted above are still only marked.
@@ -535,23 +559,37 @@ def _erase_invite_codes(db: Session, address: str) -> None:
     )
 
 
-def _strip_identity(user: models.User, *, blocked: bool) -> None:
+def _strip_identity(user: models.User, mode: str) -> None:
     """Everything the row held about the person, gone; the address remains.
 
     The address is an ML-DSA public key that is already embedded in every
     message this identity ever signed, so keeping it discloses nothing new —
     and dropping it would break the signatures on the rows both modes retain.
 
+    **The username survives a `leave`, and only a `leave`.** Freeing it the
+    moment someone stepped away made the reversibility this mode promises
+    conditional on nobody having taken the name in the meantime — and on an
+    open-signup server anybody could, deliberately, the moment they noticed
+    (audit 2026-09-12 L-1). Worse than losing a name: contacts who look the
+    account up by name to share a secret would find the squatter. Erase frees
+    it, because that identity is never coming back.
+
+    The reservation costs nothing visible. `active_users` already hides deleted
+    rows from the directory and its search, and `UserResponse` withholds the
+    username of a deleted identity, so the reserved name is enforced in
+    `username_taken` and is not readable anywhere.
+
     `token_version` is bumped so any JWT already in flight stops working, on
     top of `user_for_token` refusing a deleted row outright.
     """
-    user.username = None
+    if mode == MODE_ERASE:
+        user.username = None
     user.encryption_public_key = None
     user.encryption_key_attestation = None
     user.key_changed_at = None
     user.token_version = (user.token_version or 0) + 1
     user.deleted_at = utcnow_naive()
-    user.blocked = blocked
+    user.blocked = mode == MODE_ERASE
 
 
 def delete_account(db: Session, user: models.User, mode: str) -> list[dict]:
@@ -589,6 +627,6 @@ def delete_account(db: Session, user: models.User, mode: str) -> list[dict]:
     ).delete(synchronize_session=False)
     db.query(models.Nonce).filter(models.Nonce.address == address).delete(synchronize_session=False)
 
-    _strip_identity(user, blocked=(mode == MODE_ERASE))
+    _strip_identity(user, mode)
     db.add(user)
     return departures

@@ -323,17 +323,21 @@ export const PQCProvider = ({ children }) => {
     // approval window. Omit it for operations the vault can do without
     // unlocking a private key, or pass a function to decide per call — chat
     // message signing skips the prompt once the signing key is cached.
-    const withCustody = (viaExtension, viaVault, prompt) => async (...args) => {
-        if (isExtensionAvailable && window.trustkeys) {
-            return viaExtension(...args);
-        }
-        if (!vaultService.isLocked) {
-            const ask = typeof prompt === 'function' ? prompt(...args) : prompt;
-            const password = ask ? await requestPassword(ask) : undefined;
-            return viaVault(password, ...args);
-        }
-        throw new Error("PQC Provider not ready (Locked or Missing)");
-    };
+    // `forcePrompt` makes the vault path ask for the password even when a
+    // derived key is cached — for the one operation where the prompt IS the
+    // authorization rather than a way to unlock the key.
+    const withCustody = (viaExtension, viaVault, prompt, { forcePrompt = false } = {}) =>
+        async (...args) => {
+            if (isExtensionAvailable && window.trustkeys) {
+                return viaExtension(...args);
+            }
+            if (!vaultService.isLocked) {
+                const ask = typeof prompt === 'function' ? prompt(...args) : prompt;
+                const password = ask ? await requestPassword(ask, { forcePrompt }) : undefined;
+                return viaVault(password, ...args);
+            }
+            throw new Error("PQC Provider not ready (Locked or Missing)");
+        };
 
     const generateSessionKey = withCustody(
         () => window.trustkeys.generateSessionKey(),
@@ -387,6 +391,25 @@ export const PQCProvider = ({ children }) => {
         (message) => window.trustkeys.sign(message),
         (password, message) => vaultService.sign(message, password),
         "Enter password to sign document:",
+    );
+
+    // Deleting an account, and nothing else, asks for the password EVERY time.
+    //
+    // The modal chain before it is two dialogs that ConfirmDialogHost clears on
+    // Enter, so the claim that "the signing prompt is what makes the sequence a
+    // decision" held only while the key cache was cold — which is the default
+    // (TTL 0) and nothing else. With a TTL set, `requestPassword` answers null
+    // from the cache and an account is destroyed by two keypresses (audit
+    // 2026-09-12 L-2).
+    //
+    // Nothing to do for the extension: its approval window is not skippable,
+    // which is why account deletion carries its own signing context in the
+    // first place.
+    const signDeletion = withCustody(
+        (message) => window.trustkeys.sign(message),
+        (password, message) => vaultService.sign(message, password),
+        "Enter your vault password to confirm deleting this account:",
+        { forcePrompt: true }
     );
 
     // Sign a chat message (audit S1). Distinct from sign() so it can stay SILENT
@@ -611,9 +634,11 @@ export const PQCProvider = ({ children }) => {
         if (!nonceRes.ok) throw new Error("Failed to fetch nonce");
         const { nonce } = await nonceRes.json();
 
-        // sign(), not signMessage(): this deliberately carries its own context,
-        // so the extension shows an approval window instead of auto-signing it.
-        const signature = await sign(
+        // signDeletion(), not signMessage(): this deliberately carries its own
+        // context, so the extension shows an approval window instead of
+        // auto-signing it — and the vault asks for the password even when a
+        // derived key is cached.
+        const signature = await signDeletion(
             await accountDeletionBody(nonce, mode, redactions.map((r) => r.key))
         );
 

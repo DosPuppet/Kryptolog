@@ -8,6 +8,7 @@ from pydantic import (
     PlainSerializer,
     WithJsonSchema,
     field_validator,
+    model_validator,
 )
 
 from security.crypto_validation import is_b64, is_valid_ml_dsa_signature
@@ -145,6 +146,23 @@ class UserResponse(UserBase):
     deleted: bool = False
 
     model_config = ConfigDict(from_attributes=True)
+
+    @model_validator(mode="after")
+    def _withhold_a_deleted_identitys_name(self):
+        """A deleted identity has no name on the wire, whatever the row holds.
+
+        A "leave" now KEEPS the username on the row, reserved, so that returning
+        finds it still available (audit 2026-09-12 L-1). That reservation must
+        not turn into a disclosure: the two by-address lookups answer for
+        deleted identities on purpose, so without this they would report who
+        left and under what name, which is more than they said before.
+
+        The clients never needed it either — `displayName` renders "User
+        removed" from the flag, not from the name.
+        """
+        if self.deleted:
+            self.username = None
+        return self
 
 
 class SecretBase(BaseModel):

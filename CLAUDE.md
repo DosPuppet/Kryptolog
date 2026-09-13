@@ -958,3 +958,73 @@ pinned.
 for many approvals with the extension (one signature per round, by design —
 each round is separately authorized). At 1000 carriers a round that is several
 thousand messages before a second prompt appears.
+
+### The rest of the audit's tier, closed — 2026-09-13
+
+Four low findings and three informational ones, in one pass. Each is small; the
+two that changed a contract are worth knowing about.
+
+**A leave holds the username instead of freeing it (L-1).** `leave` is sold as
+reversible, and dropping the name the moment somebody stepped away made that
+reversibility conditional on nobody having taken it meanwhile — which, on an
+open-signup server, anybody could do deliberately the moment they noticed. The
+damage is not the lost name: a contact searching for the account to share a
+secret would find the squatter. `erase` still frees it; that identity is not
+coming back.
+
+**Reserving a name must not disclose it**, and that is the half worth
+remembering. The two by-address lookups answer for deleted identities on
+purpose, so keeping the name on the row would have made them report who left
+and under what name — more than they said before. `UserResponse` therefore
+withholds the username of a deleted identity on the wire, and the clients never
+needed it (`displayName` renders "User removed" from the flag). The probe
+confirms both halves: a stranger claiming the name gets a 409 where it used to
+get 200, and the record still reads `username: null`.
+
+**The deletion signature now always asks for the password (L-2).** `sign()` goes
+through `requestPassword`, which answers **null** from a warm derived-key cache
+— so the claim that "the signing prompt is what makes the sequence a decision"
+held only at the default TTL of 0. With a TTL set, two Enter presses on dialogs
+`ConfirmDialogHost` clears on Enter destroyed an account. `withCustody` takes a
+`forcePrompt` option and one dedicated dispatcher uses it. Redactions still go
+through `signMessage` and stay silent, so a thousand-epoch erase is one prompt
+per round, not a thousand.
+
+That change made ten deletion tests hang, which is the correct failure: nothing
+was answering the prompt. They answer it now, and two assertions that checked
+`sign(body, null)` check the typed password instead.
+
+**Deletion is logged (L-3), and the handler is off the event loop (L-4).**
+`kryptolog.account` records a completed deletion (address, mode, redactions,
+residue, groups left), each intermediate round, and both refusal paths — never
+the content, never the signature. And the whole synchronous core moved into
+`run_in_threadpool`: an unrelated `GET` during a 1000-carrier erase now peaks at
+**2 ms**, against 239 ms before. A `def` endpoint would have got the thread for
+free, but the broadcast tail has to await, so it is asked for explicitly and a
+grep-style test keeps a future edit from dropping it quietly.
+
+**The SPA acts on a session ending underneath it (I-4).** Two paths, neither
+covering the other. `ACCOUNT_DELETED` now means "log out now" — which matters
+because a worker on the *previous* build fans that frame out as an ordinary
+message and never closes the socket. And a tab that is idle when the account
+goes sees no frame at all, so `apiFetch` treats a **401** as the end of the
+session, `raw: true` callers included. AuthContext's expiry guard could never
+have caught this: a *revoked* token still looks valid to a clock.
+
+**Two smaller ones.** A redacted group message now stores the gid that was
+actually **signed** rather than the one the payload declared, so a reader
+rebuilds the right bytes instead of showing the F-2 "suspicious" badge on the
+one message that most needs to read as deliberate (I-5). And recipient rows on
+*completed* workflows survive an erase (I-6): the reason for deleting them —
+an unusable key would make a workflow uncompletable — says nothing about one
+already released, where the row is the owner's record that the document reached
+that address. Deleting it would let a departing recipient erase the evidence of
+a release, which is exactly the retraction `workflow_is_deletable` already
+denies the workflow's owner.
+
+Backend 521 → **533**, frontend 212 → **219**. Every gate mutation-tested.
+
+**What the audit leaves open**, all informational: no row lock on the deletion
+(harmless single-process, needed before multiple workers — see I-1 in the
+report), the manifest recomputed in full per page, `key_changed_at` lost across
+a leave and return, and the browser pass of `E2E-RECIPE.md` §7 still not walked.

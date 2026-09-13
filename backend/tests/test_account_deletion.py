@@ -19,6 +19,7 @@ import base64
 import json
 import pathlib
 import re
+from unittest.mock import patch
 
 import pytest
 from conftest import (
@@ -172,9 +173,27 @@ class TestLeaveKeepsEverything:
         user = db_session.query(models.User).filter_by(address=u1["address"]).one()
         assert user.deleted_at is not None
         assert user.blocked is False
-        assert user.username is None
         assert user.encryption_public_key is None
         assert user.encryption_key_attestation is None
+        # The username stays on the row, reserved — see TestALeaveReservesTheName.
+        assert user.username == u1["username"]
+
+    def test_the_reserved_name_is_not_readable_by_anyone(self, client, db_session, user1, user2):
+        """Reserving the name must not turn into disclosing it. The by-address
+        lookups answer for deleted identities on purpose, so they would
+        otherwise report who left and under what name — more than they said
+        before the name was kept."""
+        token1, u1 = user1
+        token2, _ = user2
+        assert _delete(client, token1, u1["address"], "leave").status_code == 200
+
+        seen = client.get(f"/users/{u1['address']}", headers=auth_header(token2)).json()
+        assert seen["deleted"] is True
+        assert seen["username"] is None
+        resolved = client.post(
+            "/users/resolve", json={"address": u1["address"]}, headers=auth_header(token2)
+        ).json()
+        assert resolved["username"] is None
 
     def test_group_membership_goes_and_ownership_is_handed_over(
         self, client, db_session, user1, user2
@@ -1114,3 +1133,277 @@ def test_the_spa_never_asks_for_more_redactions_than_one_request_takes():
     match = re.search(r"const REDACTION_ROUND = (\d+);", source)
     assert match, "REDACTION_ROUND is gone from PQCContext.jsx"
     assert int(match.group(1)) <= schemas.MAX_REDACTIONS_PER_DELETE
+
+
+class TestALeaveReservesTheName:
+    """A leave is sold as reversible, and freeing the username the moment
+    somebody stepped away made that conditional on nobody taking it meanwhile.
+
+    On an open-signup server anybody could, the moment they noticed — and the
+    damage is not just a lost name: a contact looking the account up by name to
+    share a secret would find the squatter (audit 2026-09-12 L-1).
+    """
+
+    def _login(self, client, address, username=None):
+        """A raw login attempt — conftest's do_login asserts 200, and half of
+        what this class checks must not be."""
+        body = {
+            "address": address,
+            "signature": "fake_signature_for_testing",
+            "nonce": get_nonce(client, address),
+            "encryption_public_key": TEST_ENCRYPTION_KEY,
+        }
+        if username:
+            body["username"] = username
+        return client.post("/auth/login", json=body)
+
+    def _register(self, client, username):
+        return self._login(client, synthetic_address(f"sq-{username}"), username)
+
+    def test_a_stranger_cannot_take_the_name_while_the_account_is_away(
+        self, client, db_session, user1
+    ):
+        token1, u1 = user1
+        assert _delete(client, token1, u1["address"], "leave").status_code == 200
+
+        resp = self._register(client, u1["username"])
+        assert resp.status_code == 409, resp.text
+        assert "already taken" in resp.json()["detail"]
+
+    def test_an_erased_name_is_released(self, client, db_session, user1):
+        """Erase is final, so holding its name forever would be a slow leak of
+        the directory to accounts that no longer exist."""
+        token1, u1 = user1
+        assert _erase(client, token1, u1["address"]).status_code == 200
+
+        resp = self._register(client, u1["username"])
+        assert resp.status_code == 200, resp.text
+
+    def test_coming_back_keeps_the_name_without_asking_for_it(self, client, db_session, user1):
+        """The returning client sends whatever its vault is called, which need
+        not be the account's name. Reserving it and then renaming the account to
+        a truncated address on the way back in would have been pointless."""
+        token1, u1 = user1
+        assert _delete(client, token1, u1["address"], "leave").status_code == 200
+
+        resp = self._login(client, u1["address"])
+        assert resp.status_code == 200, resp.text
+        back = resp.json()["user"]
+        assert back["username"] == u1["username"]
+        assert back["deleted"] is False
+
+    def test_coming_back_may_still_choose_a_different_name(self, client, db_session, user1):
+        token1, u1 = user1
+        assert _delete(client, token1, u1["address"], "leave").status_code == 200
+
+        resp = self._login(client, u1["address"], "renamed")
+        assert resp.status_code == 200, resp.text
+        assert resp.json()["user"]["username"] == "renamed"
+        # ...and the old one is free again, since nothing holds it now.
+        assert self._register(client, u1["username"]).status_code == 200
+
+    def test_a_name_someone_else_took_first_is_still_refused_on_return(
+        self, client, db_session, user1
+    ):
+        """The reservation is an ordinary row, so it cannot outrank a name this
+        address never held: asking for somebody else's still 409s."""
+        token1, u1 = user1
+        assert self._register(client, "taken").status_code == 200
+        assert _delete(client, token1, u1["address"], "leave").status_code == 200
+
+        resp = self._login(client, u1["address"], "taken")
+        assert resp.status_code == 409, resp.text
+
+
+class TestWhatADepartingRecipientLeavesBehind:
+    """Recipient rows are deleted on workflows still in flight and kept on ones
+    already released (audit 2026-09-12 I-6).
+
+    The reason for deleting them — a recipient with no usable key would make a
+    workflow permanently uncompletable — has nothing to say about a workflow
+    that has already completed. There the row is the owner's record that the
+    document was released to this address, and deleting it would let a
+    departing recipient erase the evidence of a release they received: the same
+    retraction `workflow_is_deletable` already denies the workflow's OWNER.
+    """
+
+    def _workflow(self, client, owner_token, signer, recipient, *, name="w"):
+        resp = client.post(
+            "/multisig/workflow",
+            json={
+                "name": name,
+                "secret_data": {
+                    "name": "doc",
+                    "type": "standard",
+                    "encrypted_data": "blob",
+                    "encrypted_key": "k",
+                },
+                "signers": [signer],
+                "recipients": [recipient],
+                "signer_keys": {signer: "k"},
+                "recipient_keys": {recipient: "k"},
+                "threshold": 1,
+            },
+            headers=auth_header(owner_token),
+        )
+        assert resp.status_code == 200, resp.text
+        return resp.json()["id"]
+
+    def test_a_release_already_made_is_still_on_the_record(self, client, db_session, user1, user2):
+        token1, u1 = user1
+        token2, u2 = user2
+        # user2 owns it, user1 receives it, and it completes.
+        workflow = self._workflow(client, token2, u2["address"], u1["address"])
+        assert (
+            client.post(
+                f"/multisig/workflow/{workflow}/sign",
+                json={"signature": DUMMY_SIG},
+                headers=auth_header(token2),
+            ).status_code
+            == 200
+        )
+
+        assert _erase(client, token1, u1["address"]).status_code == 200
+
+        db_session.expire_all()
+        assert (
+            db_session.query(models.MultisigWorkflowRecipient)
+            .filter_by(workflow_id=workflow, user_address=u1["address"])
+            .first()
+            is not None
+        )
+
+    def test_a_workflow_still_in_flight_can_still_complete(self, client, db_session, user1, user2):
+        """The original reason, unchanged: leaving the row would wrap a key to
+        an identity that can never read it."""
+        token1, u1 = user1
+        token2, u2 = user2
+        workflow = self._workflow(client, token2, u2["address"], u1["address"])
+
+        assert _erase(client, token1, u1["address"]).status_code == 200
+
+        db_session.expire_all()
+        assert (
+            db_session.query(models.MultisigWorkflowRecipient)
+            .filter_by(workflow_id=workflow, user_address=u1["address"])
+            .first()
+            is None
+        )
+        # ...and the owner can still finish it.
+        assert (
+            client.post(
+                f"/multisig/workflow/{workflow}/sign",
+                json={"signature": DUMMY_SIG},
+                headers=auth_header(token2),
+            ).status_code
+            == 200
+        )
+
+
+class TestARedactedGroupMessageStillVerifies:
+    def test_the_stored_group_id_is_the_one_that_was_signed(self, client, db_session, user1, user2):
+        """The signed body falls back to the delivered channel when a payload
+        declares no gid, but the stored payload used to keep the payload's own
+        value. Where those differ, every reader rebuilds the wrong bytes and an
+        author-signed redaction renders with the F-2 "suspicious" badge — on the
+        one message that most needs to read as deliberate (audit 2026-09-12
+        I-5).
+        """
+        token1, u1 = user1
+        _, u2 = user2
+        channel = _create_group(client, token1, [u1["address"], u2["address"]])
+        # A payload with a key envelope and NO self-declared gid.
+        payload = {
+            "v": 2,
+            "sid": "g-sid",
+            "keys": {a: _wrapped(a[:8]) for a in (u1["address"], u2["address"])},
+            "ct": "cipher",
+            "sig": DUMMY_SIG,
+        }
+        assert (
+            client.post(
+                f"/groups/{channel}/messages",
+                json={"content": json.dumps(payload)},
+                headers=auth_header(token1),
+            ).status_code
+            == 200
+        )
+
+        assert _erase(client, token1, u1["address"]).status_code == 200
+
+        db_session.expire_all()
+        stored = json.loads(
+            db_session.query(models.GroupMessage).filter_by(channel_id=channel).one().content
+        )
+        assert stored["ct"] is None
+        # What a reader rebuilds must equal what the author signed.
+        assert stored["gid"] == channel
+        assert auth.message_signing_body(
+            from_=u1["address"],
+            conv=channel,
+            gid=stored["gid"] or "",
+            sid=stored["sid"],
+            keys=stored["keys"],
+            ct=None,
+        ) == auth.message_signing_body(
+            from_=u1["address"],
+            conv=channel,
+            gid=channel,
+            sid="g-sid",
+            keys=payload["keys"],
+            ct=None,
+        )
+
+
+class TestTheOneEventThatCannotBeReconstructed:
+    """Deletion is the only thing this application does that leaves nothing
+    behind to infer it from — the rows are gone and the row that remains says
+    only that it is gone (audit 2026-09-12 L-3, an instance of the standing
+    "no security log" finding).
+
+    Enough to answer "was this account deleted, when, which way, and did it
+    leave anything behind". Nothing about content: the server cannot read it,
+    and the signature is deliberately not logged either.
+    """
+
+    def test_a_completed_deletion_says_what_it_did(self, client, caplog, user1, user2):
+        token1, u1 = user1
+        _, u2 = user2
+        _send_dm(client, token1, u2["address"], _dm_content("sid-1"))
+
+        with caplog.at_level("INFO", logger="kryptolog.account"):
+            assert _erase(client, token1, u1["address"]).status_code == 200
+
+        line = next(r.getMessage() for r in caplog.records if "Account deleted" in r.getMessage())
+        assert u1["address"] in line
+        assert "mode=erase" in line
+        assert "redacted=1" in line
+
+    def test_a_refused_signature_is_worth_a_line_of_its_own(self, client, caplog, user1):
+        """Somebody holding a live session asked to destroy the account and
+        could not prove they hold the key."""
+        token1, u1 = user1
+        with caplog.at_level("WARNING", logger="kryptolog.account"):
+            with patch("auth.verify_message_signature", return_value=False):
+                assert _delete(client, token1, u1["address"], "leave").status_code == 401
+
+        assert any("refused" in r.getMessage() for r in caplog.records)
+        # The signature itself never reaches the log.
+        assert not any(DUMMY_SIG[:32] in r.getMessage() for r in caplog.records)
+
+
+def test_the_deletion_endpoint_does_not_block_the_event_loop():
+    """A grep, like test_wire_datetimes greps for a bare `.isoformat()`, and for
+    the same reason: the property is structural and nothing about the failure
+    points at it.
+
+    `POST /account/delete` walks the user's messages three times and verifies up
+    to MAX_REDACTIONS_PER_DELETE signatures. On the event loop that blocked
+    every other request on the process — measured at 500 carriers, an unrelated
+    GET went from 3 ms to 239 ms (audit 2026-09-12 L-4). A `def` endpoint would
+    get a worker thread for free, but this one has to await its broadcast tail,
+    so it asks for the thread explicitly and a future edit must not quietly drop
+    that.
+    """
+    source = (pathlib.Path(__file__).resolve().parents[1] / "routers/account.py").read_text()
+    assert "run_in_threadpool(_perform_deletion" in source

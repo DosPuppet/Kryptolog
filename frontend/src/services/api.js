@@ -34,6 +34,28 @@ const describeDetail = (detail) => {
         .join('; ');
 };
 
+// What to do when the server says the session is no longer valid.
+//
+// AuthContext registers its `logout` here at mount. Without it a 401 was just
+// another failed request: the token is dead, every later call fails the same
+// way, and the app sits there showing stale data with no way to tell the user
+// why (audit 2026-09-12 I-4). The expiry guard in AuthContext catches the
+// common case from the CLOCK, but not a token revoked early — which is exactly
+// what deleting an account does, to every other tab it is signed in on.
+//
+// A module-level slot rather than a parameter: every call site would otherwise
+// have to remember to pass it, and the ones that forgot would be the ones that
+// kept the stale session alive.
+let onUnauthorized = null;
+
+/** Register the handler for a 401. Returns a function that unregisters it. */
+export function setUnauthorizedHandler(handler) {
+    onUnauthorized = handler;
+    return () => {
+        if (onUnauthorized === handler) onUnauthorized = null;
+    };
+}
+
 /** Authorization header for `token`, merged with any extras. */
 export const authHeaders = (token, extra) => ({
     Authorization: `Bearer ${token}`,
@@ -72,6 +94,11 @@ export async function apiFetch(url, token, opts = {}) {
         }),
         ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
     });
+
+    // A 401 ends the session whatever the caller does with the response, `raw`
+    // included — the token is dead for every other call too, so leaving the app
+    // signed in just produces a series of identical failures.
+    if (res.status === 401 && onUnauthorized) onUnauthorized();
 
     if (raw) return res;
 

@@ -119,17 +119,27 @@ def _verify_login_payload(login_req: schemas.LoginRequest, address: str) -> None
             raise HTTPException(status_code=400, detail="Invalid encryption key attestation")
 
 
-def _claim_username(db: Session, login_req: schemas.LoginRequest, address: str) -> str:
-    """The username a new or revived identity will hold."""
+def _claim_username(
+    db: Session, login_req: schemas.LoginRequest, address: str, *, current: str | None = None
+) -> str:
+    """The username a new or revived identity will hold.
+
+    `current` is what this address already holds — the name a "leave" left
+    reserved for it. A revived identity that asks for nothing keeps it rather
+    than being renamed to a truncated address, which is the whole point of
+    reserving it (audit 2026-09-12 L-1).
+    """
     try:
-        default_username = normalize_username(login_req.username) or address[:7]
+        default_username = normalize_username(login_req.username) or current or address[:7]
     except InvalidUsername as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     # Uniqueness is case-insensitive, so the directory can't hold "alice" and
     # "Alice" as two identities. Checked before consuming any invite, so a name
-    # clash doesn't burn the code.
-    if username_taken(db, default_username):
+    # clash doesn't burn the code. Excluding this address is what lets a revived
+    # identity reclaim the name it reserved on the way out; for a brand-new one
+    # there is no row to exclude, so it changes nothing.
+    if username_taken(db, default_username, exclude_address=address):
         raise HTTPException(
             status_code=409,
             detail=f"Username '{default_username}' is already taken. Please choose a different one.",
@@ -162,12 +172,17 @@ def _revive_user(
     Every row the account owned is still attached to this address — nothing was
     ever detached — so reviving the row restores the account with its data.
 
-    It is still an ADMISSION, not a plain login: the username was freed on the
-    way out and may now belong to somebody else, and an invite-only server
-    charges a fresh code. Deleting and returning must not be a way around the
+    It is still an ADMISSION, not a plain login: an invite-only server charges a
+    fresh code, because deleting and returning must not be a way around the
     access filter.
+
+    The username is NOT re-contested, though. A "leave" keeps it reserved on
+    the row, so returning finds it waiting — it used to be freed on the way
+    out, which meant any stranger could take it while the account was away and
+    the reversibility this mode promises depended on nobody having bothered
+    (audit 2026-09-12 L-1).
     """
-    username = _claim_username(db, login_req, address)
+    username = _claim_username(db, login_req, address, current=user.username)
 
     user.username = username
     user.encryption_public_key = login_req.encryption_public_key
