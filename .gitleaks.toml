@@ -23,14 +23,31 @@ useDefault = true
 
 [allowlist]
 description = """
-Golden test vector, not a credential: sha256("null") — the digest of an absent key
-envelope in the v1.4.0 message signing body (audit M-8), asserted in
-packages/crypto-core/test/byte-compat.test.js. It is the fixed output of a public
-function over a public input; the assertion on the next line recomputes it with
-createHash to prove exactly that. High entropy over a 64-hex constant is what trips
+Golden test vectors, not credentials. Each entry below is a SHA-256 digest of
+PUBLIC input — the data the digest is taken over sits in plaintext in the same
+fixture — and each is asserted byte-for-byte by the suites, which is the whole
+reason it is committed at all. High entropy over a 64-hex constant is what trips
 the generic-api-key rule.
 
-Scoped to this literal value, so a real key committed to that same test file is
+Scoped to the literal values, so a real key committed to those same files is
 still caught.
 """
-regexes = ['''74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b''']
+regexes = [
+  # sha256("null") — the digest of an ABSENT key envelope in the v1.4.0 message
+  # signing body (audit M-8), asserted in
+  # packages/crypto-core/test/byte-compat.test.js. The assertion on the next line
+  # there recomputes it with createHash, which proves exactly what this claims.
+  '''74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b''',
+
+  # sha256(canonical_json(message_keys)) — the `keysh` of the PRESENT envelope in
+  # the same body, in tests/fixtures/signed_bodies.json. Two hits, one value: the
+  # plain and redacted forms (lines 13, 14) commit to the same envelope, which is
+  # the 2.1.0 additive-cutover property. What it digests is `message_keys` in that
+  # very file — four fields of 3- and 4-byte stand-ins — so recomputing it with
+  # backend/auth.py's _canonical_json checks this claim in one line.
+  #
+  # It cannot be masked or removed instead: the fixture exists so that neither
+  # language can be the one that is right about the bytes, and both
+  # backend/tests/test_signed_bodies.py and crypto-core's byte-compat suite pin it.
+  '''ecbda0b6fa46f4617545cc91738d3c701b16f52c2de63403c15a5bf3de97d9f6''',
+]
