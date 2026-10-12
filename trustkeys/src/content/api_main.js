@@ -47,6 +47,11 @@
                 type: 'TRUSTKEYS_SIGN_ACCOUNT_DELETION', nonce, mode, redactionKeys, deployment,
             });
         },
+        signConversationErase: async ({ nonce, kind, conversation, redactionKeys, deployment }) => {
+            return postMessagePromise({
+                type: 'TRUSTKEYS_SIGN_CONVERSATION_ERASE', nonce, kind, conversation, redactionKeys, deployment,
+            });
+        },
         signMultisigApproval: async ({ workflowId, secretId, ciphertextSha256 }) => {
             return postMessagePromise({
                 type: 'TRUSTKEYS_SIGN_MULTISIG_APPROVAL', workflowId, secretId, ciphertextSha256,

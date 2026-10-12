@@ -121,6 +121,39 @@ class TestSignedBodiesMatchTheSharedFixture:
             == v["bodies"]["account_deletion"]
         )
 
+    @pytest.mark.parametrize(
+        ("kind", "key_field"), [("dm", "erase_partner"), ("group", "erase_group")]
+    )
+    def test_conversation_erase(self, kind, key_field):
+        """crypto-core 3.1.0, additive (audit 2026-09-11 M-6)."""
+        v = _vectors()
+        assert (
+            auth.conversation_erase_message(
+                v["nonce"],
+                kind,
+                v[key_field],
+                v["redaction_keys"],
+                origin=v["origin"],
+                deployment=v["deployment"],
+            )
+            == v["bodies"][f"conversation_erase_{kind}"]
+        )
+
+    def test_a_conversation_erase_names_its_conversation_and_nothing_else_spells_it(self):
+        v = _vectors()
+        common = dict(origin=v["origin"], deployment=v["deployment"])
+        dm = auth.conversation_erase_message(v["nonce"], "dm", "ab", ["dm:1"], **common)
+        assert dm != auth.conversation_erase_message(v["nonce"], "dm", "ac", ["dm:1"], **common)
+        assert dm != auth.conversation_erase_message(v["nonce"], "group", "ab", ["dm:1"], **common)
+        for kind, conversation in (
+            ("dm", "AB"),
+            ("dm", "ab\nnonce=00"),
+            ("group", "x y"),
+            ("x", "ab"),
+        ):
+            with pytest.raises(auth.NonCanonicalSignedBody):
+                auth.conversation_erase_message(v["nonce"], kind, conversation, [], **common)
+
     def test_the_redaction_set_is_order_independent_and_namespaced(self):
         """Namespaced ids, and a sort both languages spell the same way.
 
@@ -185,6 +218,7 @@ class TestTheVectorsAreWhatWeThinkTheyAre:
             "context=multisig-approval",
             "context=message",
             "context=account-deletion",
+            "context=conversation-erase",
         }
 
     def test_a_redaction_differs_from_the_live_message_in_its_last_line_only(self):

@@ -246,6 +246,11 @@ const HANDLERS = {
         fn: ({ request, sender, sendResponse }) =>
             crypto.handleSignAccountDeletionAsync(request, sender, sendResponse),
     },
+    SIGN_CONVERSATION_ERASE: {
+        raw: true,
+        fn: ({ request, sender, sendResponse }) =>
+            crypto.handleSignConversationEraseAsync(request, sender, sendResponse),
+    },
     SIGN_MULTISIG_APPROVAL: {
         raw: true,
         fn: ({ request, sender, sendResponse }) =>

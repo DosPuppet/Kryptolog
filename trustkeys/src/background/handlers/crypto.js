@@ -1,7 +1,7 @@
 import {
     signMessage, encryptMessage, decryptMessage, verifySignature, generateSessionKey, wrapSessionKey,
     unwrapSessionKey, attestEncryptionKey, MESSAGE_SIGNING_PREFIX, SIGNING_CONTEXT, domainSeparate,
-    loginChallengeBody, accountDeletionBody, multisigApprovalMessage,
+    loginChallengeBody, accountDeletionBody, conversationEraseBody, multisigApprovalMessage,
 } from '../../utils/crypto.js';
 import { state, requireUnlocked, requireActiveAccount, activeAccount, requireConnectedOrigin } from '../state.js';
 import { isInternalSender, getSenderOrigin, isDevOrigin } from '../utils.js';
@@ -114,6 +114,39 @@ export const handleSignAccountDeletionAsync = async (request, sender, sendRespon
     await requestSignature({
         sender, sendResponse, kind: 'account-deletion',
         details: { mode: request.mode, redactions: keys.length, deployment: request.deployment },
+        body,
+    });
+};
+
+// Erasing one's own messages in ONE conversation (crypto-core 3.1.0, audit
+// 2026-09-11 M-6). Built here like the account deletion — the origin is the
+// one Chrome attaches — and always asked about: the redactions it authorizes
+// are message bodies this extension signs silently, which is the whole reason
+// this signature exists.
+export const handleSignConversationEraseAsync = async (request, sender, sendResponse) => {
+    requireUnlocked();
+    const keys = request.redactionKeys ?? [];
+    if (!Array.isArray(keys) || keys.length > MAX_REDACTIONS || !keys.every((k) => REDACTION_KEY.test(k))) {
+        throw new Error("Invalid redaction list");
+    }
+    const body = await conversationEraseBody({
+        nonce: request.nonce,
+        kind: request.kind,
+        conversation: request.conversation,
+        redactionKeys: keys,
+        origin: getSenderOrigin(sender),
+        deployment: request.deployment,
+    });
+    await requestSignature({
+        sender, sendResponse, kind: 'conversation-erase',
+        details: {
+            conversationKind: request.kind,
+            // A partner is named by a 2 624-character key; the window shows enough
+            // of it to compare with the safety number, not all of it.
+            conversation: request.kind === 'dm' ? `${request.conversation.slice(0, 16)}…` : request.conversation,
+            redactions: keys.length,
+            deployment: request.deployment,
+        },
         body,
     });
 };

@@ -83,6 +83,26 @@ def api_docs_settings() -> dict:
     return {}
 
 
+def message_retention_days() -> int | None:
+    """How many days messages are kept, or None to keep them indefinitely.
+
+    Unset by default (audit 2026-09-11 M-6): how long a deployment keeps
+    conversations is a policy for whoever runs it to choose, not a number this
+    code gets to pick on their behalf. A value that is not a positive integer
+    refuses to start rather than being read as "keep forever" — the operator
+    asked for a policy, and silently running without one is the failure here.
+    """
+    raw = (os.getenv("KRYPTOLOG_MESSAGE_RETENTION_DAYS") or "").strip()
+    if not raw:
+        return None
+    if not raw.isdigit() or int(raw) < 1:
+        raise RuntimeError(
+            "Refusing to start: KRYPTOLOG_MESSAGE_RETENTION_DAYS must be a whole number of "
+            f"days, at least 1 (got {raw!r})"
+        )
+    return int(raw)
+
+
 def check_production_settings() -> None:
     """Refuse to start a production server on a policy nobody chose.
 
@@ -96,8 +116,10 @@ def check_production_settings() -> None:
       Origin check (routers/messenger._origin_allowed) accepts everything,
       since it only applies when an allowlist exists.
 
-    No-op outside production, so development and the test suite are unaffected.
+    No-op outside production, so development and the test suite are unaffected
+    — except for a malformed retention setting, which is refused everywhere.
     """
+    message_retention_days()
     if not is_production():
         return
     problems = []

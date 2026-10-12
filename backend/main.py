@@ -1,3 +1,4 @@
+import asyncio
 import logging
 import os
 from contextlib import asynccontextmanager
@@ -19,7 +20,9 @@ from dependencies import limiter
 from routers import (
     account,
     auth,
+    conversations,
     groups,
+    health,
     messenger,
     multisig,
     notifications,
@@ -38,7 +41,20 @@ async def _lifespan(app: FastAPI):
     from websocket_manager import manager as ws_manager
 
     await ws_manager.startup()
+    # Message retention (audit 2026-09-11 M-6): a no-op loop unless
+    # KRYPTOLOG_MESSAGE_RETENTION_DAYS is set. Not started for a configuration
+    # without it, so the common case costs nothing.
+    import retention
+    from database import SessionLocal
+
+    purge_task = (
+        asyncio.create_task(retention.run_forever(SessionLocal))
+        if config.message_retention_days() is not None
+        else None
+    )
     yield
+    if purge_task:
+        purge_task.cancel()
     await ws_manager.shutdown()
 
 
@@ -123,7 +139,17 @@ app.add_middleware(
     allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
+    # The correlation id is only useful if the SPA can read it off a failure.
+    expose_headers=["X-Request-ID"],
 )
+
+# Outermost, so it sees every refusal, the limiter's and CORS's included, and
+# stamps every response with the id its audit lines carry (audit 2026-09-11 M-3).
+from security import audit_log  # noqa: E402
+from security.request_audit import RequestAuditMiddleware  # noqa: E402
+
+audit_log.configure()
+app.add_middleware(RequestAuditMiddleware)
 
 # ── Database migrations ─────────────────────────────────────────
 #
@@ -156,8 +182,10 @@ config.check_production_settings()
 
 # ── Routers ─────────────────────────────────────────────────────
 
+app.include_router(health.router)
 app.include_router(auth.router)
 app.include_router(account.router)
+app.include_router(conversations.router)
 app.include_router(users.router)
 app.include_router(secrets.router)
 app.include_router(multisig.router)

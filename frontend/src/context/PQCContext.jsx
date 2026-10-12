@@ -2,7 +2,7 @@ import { createContext, useContext, useState, useEffect, useRef } from 'react';
 import API_ENDPOINTS from '../config';
 import { useAuth } from './AuthContext';
 import { vaultService } from '../services/vault';
-import { loginChallengeBody, encryptionKeyAttestationBody, messageSigningBody, accountDeletionBody, multisigApprovalMessage } from '../utils/crypto';
+import { loginChallengeBody, encryptionKeyAttestationBody, messageSigningBody, accountDeletionBody, conversationEraseBody, multisigApprovalMessage } from '../utils/crypto';
 import { toast } from '../utils/toast';
 import { apiFetch } from '../services/api';
 import { PAGE_SIZE as MANIFEST_PAGE, pageUrl } from '../utils/paging';
@@ -434,6 +434,18 @@ export const PQCProvider = ({ children }) => {
         { forcePrompt: true }
     );
 
+    // Erasing one's own messages in ONE conversation (crypto-core 3.1.0, audit
+    // 2026-09-11 M-6): the account erase, scoped, and authorized the same way —
+    // an approval window in the extension, the password every time with a
+    // vault — because the redactions it covers are signed silently.
+    const signConversationErase = withCustody(
+        ({ nonce, kind, conversation, redactionKeys, deployment }) =>
+            window.trustkeys.signConversationErase({ nonce, kind, conversation, redactionKeys, deployment }),
+        async (password, args) => vaultService.sign(await conversationEraseBody(args), password),
+        "Enter your vault password to confirm erasing your messages in this conversation:",
+        { forcePrompt: true }
+    );
+
     // Approving a multisig workflow: the extension builds the approval body and
     // names the workflow in its window rather than showing a hash in context
     // (K-03); the vault signs the same bytes here.
@@ -617,7 +629,7 @@ export const PQCProvider = ({ children }) => {
      * each round's read starts where the last one finished without either side
      * tracking an offset.
      */
-    const readRedactionRound = async () => {
+    const readRedactionRound = async (manifestUrl = API_ENDPOINTS.ACCOUNT.REDACTABLE) => {
         const rows = [];
         while (rows.length < REDACTION_ROUND) {
             // Ask for only what is left of the round, so over-reading is
@@ -626,7 +638,7 @@ export const PQCProvider = ({ children }) => {
             // the round size.
             const limit = Math.min(MANIFEST_PAGE, REDACTION_ROUND - rows.length);
             const got = await apiFetch(
-                pageUrl(API_ENDPOINTS.ACCOUNT.REDACTABLE, { limit, offset: rows.length }),
+                pageUrl(manifestUrl, { limit, offset: rows.length }),
                 token
             );
             if (!Array.isArray(got) || got.length === 0) break;
@@ -684,6 +696,15 @@ export const PQCProvider = ({ children }) => {
             body: { mode, nonce, origin, deployment, signature, redactions },
             raw: true,
         });
+        return roundOutcome(res, redactions, 'Deletion');
+    };
+
+    /**
+     * What one signed round answered: the summary, or null for "more to
+     * redact first" (409). Shared by the account and the conversation erase,
+     * which follow the same contract.
+     */
+    const roundOutcome = async (res, redactions, what) => {
         const summary = await res.json().catch(() => null);
         if (res.ok) return summary || { redacted: redactions.length, kept: 0 };
         // 409 is not a failure here: this round's redactions landed and the
@@ -695,11 +716,59 @@ export const PQCProvider = ({ children }) => {
         if (res.status === 429) {
             throw new Error(
                 'Too many requests while erasing. Everything removed so far is gone for good — ' +
-                'wait a minute and start the deletion again to continue where it stopped.'
+                'wait a minute and start again to continue where it stopped.'
             );
         }
-        throw new Error(summary?.detail || `Deletion failed (${res.status})`);
+        throw new Error(summary?.detail || `${what} failed (${res.status})`);
     };
+
+    /**
+     * Drive signed rounds until the server says done. Every round strictly
+     * shrinks the manifest, so this terminates; the guards are for the case
+     * where it does not, which would mean the two sides disagree about what is
+     * redactable rather than that there is a lot of it.
+     */
+    const runErase = async (manifestUrl, submitRound) => {
+        for (let round = 0; ; round++) {
+            if (round >= MAX_REDACTION_ROUNDS) {
+                throw new Error('Could not finish erasing: the server keeps asking for more redactions.');
+            }
+            const rows = await readRedactionRound(manifestUrl);
+            const summary = await submitRound(await signRedactions(rows));
+            if (summary !== null) return summary;
+            if (rows.length === 0) {
+                // Nothing left to sign and the server still wants more: looping
+                // on an empty round forever is the worst answer.
+                throw new Error(
+                    'Could not finish erasing: the server is holding messages this app cannot redact.'
+                );
+            }
+        }
+    };
+
+    /**
+     * Erase the caller's own messages in one conversation, then return the
+     * server's summary ({ redacted, deleted, kept }). The other side's
+     * messages are not touched — that is the server's rule, not this loop's.
+     */
+    const eraseConversation = (kind, conversation) => runErase(
+        API_ENDPOINTS.CONVERSATIONS.REDACTABLE(kind, conversation),
+        async (redactions) => {
+            const nonceRes = await fetch(API_ENDPOINTS.AUTH.NONCE(pqcAccount));
+            if (!nonceRes.ok) throw new Error("Failed to fetch nonce");
+            const { nonce, deployment } = await nonceRes.json();
+            const origin = window.location.origin;
+            const signature = await signConversationErase({
+                nonce, kind, conversation, redactionKeys: redactions.map((r) => r.key), origin, deployment,
+            });
+            const res = await apiFetch(API_ENDPOINTS.CONVERSATIONS.ERASE(kind, conversation), token, {
+                method: 'POST',
+                body: { nonce, origin, deployment, signature, redactions },
+                raw: true,
+            });
+            return roundOutcome(res, redactions, 'Erasing');
+        }
+    );
 
     const deleteServerAccount = async (mode, { forgetVault = false } = {}) => {
         let summary = null;
@@ -709,27 +778,8 @@ export const PQCProvider = ({ children }) => {
         } else {
             // An account holding more carriers than one request may carry takes
             // several rounds, each separately signed and approved (audit
-            // 2026-09-12 M-2a). Every round strictly shrinks the manifest, so
-            // this terminates; the guard is for the case where it does not,
-            // which would mean the two sides disagree about what is redactable
-            // rather than that the account is large.
-            for (let round = 0; summary === null; round++) {
-                if (round >= MAX_REDACTION_ROUNDS) {
-                    throw new Error(
-                        'Could not finish erasing: the server keeps asking for more redactions.'
-                    );
-                }
-                const rows = await readRedactionRound();
-                summary = await submitDeletion(mode, await signRedactions(rows));
-                if (summary === null && rows.length === 0) {
-                    // Nothing left to sign and the server still wants more: the
-                    // manifest and the completion rule have drifted apart, and
-                    // looping on an empty round forever is the worst answer.
-                    throw new Error(
-                        'Could not finish erasing: the server is holding messages this app cannot redact.'
-                    );
-                }
-            }
+            // 2026-09-12 M-2a).
+            summary = await runErase(API_ENDPOINTS.ACCOUNT.REDACTABLE, (r) => submitDeletion(mode, r));
         }
 
         // Erasing blocks the key forever, so the vault entry left behind is a
@@ -807,6 +857,7 @@ export const PQCProvider = ({ children }) => {
             switchVaultAccount,
             deleteVaultAccount,
             deleteServerAccount,
+            eraseConversation,
             forgetLocalIdentity,
             vaultHoldsCurrentIdentity,
             exportVault,

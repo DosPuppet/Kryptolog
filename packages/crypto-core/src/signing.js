@@ -24,6 +24,7 @@ export const SIGNING_CONTEXT = Object.freeze({
     MESSAGE: 'message',
     KEY_ATTESTATION: 'key-attestation',
     ACCOUNT_DELETION: 'account-deletion',
+    CONVERSATION_ERASE: 'conversation-erase',
 });
 const DS_HEADER = 'Kryptolog Signed Message v1';
 export const domainSeparate = (context, body) => `${DS_HEADER}\ncontext=${context}\n${body}`;
@@ -203,6 +204,35 @@ export const accountDeletionBody = async ({ nonce, mode, redactionKeys = [], ori
     need(isSignedIdentifier(deployment), 'deployment');
     return domainSeparate(SIGNING_CONTEXT.ACCOUNT_DELETION,
         `origin=${origin}\ndeployment=${deployment}\nnonce=${nonce}\nmode=${mode}` +
+        `\nredactions=${await sha256Hex(canonicalJson([...redactionKeys].sort()))}`);
+};
+
+// Erasing one's OWN messages in ONE conversation (crypto-core 3.1.0, additive;
+// audit 2026-09-11 M-6). The account erase, scoped: the server redacts the
+// session carriers this signature names and deletes the rest of the caller's
+// messages in that conversation — never the other side's.
+//
+// Its own context, outside `message`, for the reason the account erase has
+// one: TrustKeys signs `message` bodies SILENTLY for a site holding a grant,
+// and the per-message redactions are exactly such bodies. Without a separate,
+// popup-gated authorization, any connected site could wipe a user's side of
+// any conversation. The conversation is named in full — `dm:<partner address>`
+// or `group:<channel id>` — so a relay cannot carry an approval for one
+// conversation over to another.
+export const conversationEraseBody = async ({
+    nonce, kind, conversation, redactionKeys = [], origin, deployment,
+}) => {
+    need(typeof nonce === 'string' && HEX_RE.test(nonce), 'nonce');
+    need(
+        (kind === 'dm' && typeof conversation === 'string' && HEX_RE.test(conversation)) ||
+        (kind === 'group' && isSignedIdentifier(conversation)),
+        'conversation'
+    );
+    need(isCanonicalOrigin(origin), 'origin');
+    need(isSignedIdentifier(deployment), 'deployment');
+    return domainSeparate(SIGNING_CONTEXT.CONVERSATION_ERASE,
+        `origin=${origin}\ndeployment=${deployment}\nnonce=${nonce}` +
+        `\nconversation=${kind}:${conversation}` +
         `\nredactions=${await sha256Hex(canonicalJson([...redactionKeys].sort()))}`);
 };
 

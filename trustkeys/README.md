@@ -188,6 +188,11 @@ message is fixed and names nothing the page chose.
 Authorize deleting the account on this origin. `mode` is `"leave"` or `"erase"`;
 the window states which, and how many messages an erase redacts.
 
+#### `signConversationErase({ nonce, kind, conversation, redactionKeys, deployment })`
+Authorize erasing your own messages in one conversation on this origin. `kind` is
+`"dm"` (conversation = partner address) or `"group"` (conversation = channel id);
+the window names the conversation and how many messages are redacted.
+
 #### `signMultisigApproval({ workflowId, secretId, ciphertextSha256 })`
 Approve a multisig workflow; the window names the workflow.
 

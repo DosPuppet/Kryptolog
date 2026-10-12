@@ -68,6 +68,30 @@ _KINDS = {"dm": models.Message, "group": models.GroupMessage}
 _STREAM_ROWS = 200
 
 
+# A conversation, for erasing one's messages in it rather than in the whole
+# account (audit 2026-09-11 M-6): ("dm", partner address) or ("group", channel
+# id). None means every conversation — the account erase. Every walk below
+# takes one, so the two erases cannot disagree about what "my messages" means.
+Scope = tuple[str, str] | None
+
+
+def _scoped(scope: Scope):
+    """(kind, model, filter on that model) for every table `scope` reaches."""
+    for kind, model in _KINDS.items():
+        if scope is None:
+            yield kind, model, model.sender_address.isnot(None)
+        elif scope[0] == kind:
+            column = model.recipient_address if kind == "dm" else model.channel_id
+            yield kind, model, column == scope[1]
+
+
+def _in_scope(kind: str, row, scope: Scope) -> bool:
+    if scope is None:
+        return True
+    target = row.recipient_address if kind == "dm" else row.channel_id
+    return scope[0] == kind and (target or "") == scope[1]
+
+
 def redaction_key(kind: str, message_id: int) -> str:
     """The id under which one message is named in a signed deletion request.
 
@@ -83,7 +107,7 @@ def _payload(content) -> dict | None:
     """Parse a stored message payload, or None if it is not one.
 
     A row this cannot read is never deleted by an erase — see
-    `_delete_own_messages`, and `kept_messages` for how it is reported.
+    `delete_own_messages`, and `kept_messages` for how it is reported.
     Fail safe: nothing in the current wire format hides a key envelope outside
     JSON, but the cost of being wrong is asymmetric. Leaving one of the
     departing user's own messages behind is visible and annoying; destroying
@@ -148,7 +172,7 @@ def _is_signable(payload: dict) -> bool:
     return True
 
 
-def _envelope_carriers(db: Session, address: str):
+def _envelope_carriers(db: Session, address: str, scope: Scope = None):
     """Every message the user sent still holding BOTH a wrapped session key and
     its ciphertext — everything an erase has left to deal with.
 
@@ -161,10 +185,10 @@ def _envelope_carriers(db: Session, address: str):
     account with tens of thousands of messages should not have all of them in
     memory to answer for a hundred (audit 2026-09-12 I-2).
     """
-    for kind, model in _KINDS.items():
+    for kind, model, in_scope in _scoped(scope):
         rows = (
             db.query(model)
-            .filter(model.sender_address == address)
+            .filter(model.sender_address == address, in_scope)
             .order_by(model.id)
             .yield_per(_STREAM_ROWS)
         )
@@ -175,7 +199,9 @@ def _envelope_carriers(db: Session, address: str):
             yield kind, row, payload
 
 
-def redactable_messages(db: Session, address: str, *, limit: int, offset: int) -> list[dict]:
+def redactable_messages(
+    db: Session, address: str, *, limit: int, offset: int, scope: Scope = None
+) -> list[dict]:
     """One page of the manifest: what the client has to re-sign before an erase.
 
     Carries everything needed to rebuild the signed body and nothing the client
@@ -191,7 +217,7 @@ def redactable_messages(db: Session, address: str, *, limit: int, offset: int) -
     """
     manifest = []
     seen = 0
-    for kind, row, payload in _envelope_carriers(db, address):
+    for kind, row, payload in _envelope_carriers(db, address, scope):
         if not _is_signable(payload):
             continue
         seen += 1
@@ -216,7 +242,7 @@ def redactable_messages(db: Session, address: str, *, limit: int, offset: int) -
     return manifest
 
 
-def redaction_keys(db: Session, address: str) -> set[str]:
+def redaction_keys(db: Session, address: str, scope: Scope = None) -> set[str]:
     """The same set as `redactable_messages`, as ids only.
 
     Recomputed inside the deletion transaction, and an erase only COMPLETES
@@ -229,18 +255,18 @@ def redaction_keys(db: Session, address: str) -> set[str]:
     It still closes the same gap the equality check did — a message sent
     between reading the manifest and committing must not be DELETED rather than
     redacted, since if it opened an epoch the partner loses their own history.
-    Now it cannot be: it is a carrier, `_delete_own_messages` only ever deletes
+    Now it cannot be: it is a carrier, `delete_own_messages` only ever deletes
     NON-carriers, and its presence here keeps the deletion from finishing until
     the client has redacted it too.
     """
     return {
         redaction_key(kind, row.id)
-        for kind, row, payload in _envelope_carriers(db, address)
+        for kind, row, payload in _envelope_carriers(db, address, scope)
         if _is_signable(payload)
     }
 
 
-def kept_messages(db: Session, address: str) -> int:
+def kept_messages(db: Session, address: str, scope: Scope = None) -> int:
     """How many of the user's own messages an erase leaves holding their content.
 
     Always zero for a message any shipped client wrote. Non-zero means a row
@@ -251,8 +277,8 @@ def kept_messages(db: Session, address: str) -> int:
     break silently (audit 2026-09-12, I-7).
     """
     kept = 0
-    for _kind, model in _KINDS.items():
-        for row in db.query(model).filter(model.sender_address == address).all():
+    for _kind, model, in_scope in _scoped(scope):
+        for row in db.query(model).filter(model.sender_address == address, in_scope).all():
             payload = _payload(row.content)
             if payload is None:
                 kept += 1
@@ -298,7 +324,7 @@ def _redacted_content(kind: str, payload: dict, signature: str, gid: str = "") -
     return json.dumps(content)
 
 
-def _redactable_row(db: Session, address: str, key: str):
+def _redactable_row(db: Session, address: str, key: str, scope: Scope = None):
     """The row one signed redaction names, refusing anything it may not touch.
 
     Looked up from the SUBMITTED key rather than walked from the server's own
@@ -316,6 +342,10 @@ def _redactable_row(db: Session, address: str, key: str):
     row = db.query(model).filter(model.id == int(raw_id), model.sender_address == address).first()
     if row is None:
         raise RedactionRefused(f"{key} is not one of your messages")
+    if not _in_scope(kind, row, scope):
+        # A conversation erase is authorized for ONE conversation; a signed
+        # redaction of a message elsewhere must not ride along with it.
+        raise RedactionRefused(f"{key} is not in this conversation")
 
     payload = _payload(row.content)
     if (
@@ -329,7 +359,9 @@ def _redactable_row(db: Session, address: str, key: str):
     return kind, row, payload
 
 
-def _verified_redactions(db: Session, address: str, signatures: dict[str, str]) -> list:
+def _verified_redactions(
+    db: Session, address: str, signatures: dict[str, str], scope: Scope = None
+) -> list:
     """Verify every redaction in this round before applying any of them.
 
     All-or-nothing within the round on purpose: verifying and applying one at a
@@ -341,7 +373,7 @@ def _verified_redactions(db: Session, address: str, signatures: dict[str, str]) 
     pending = []
     for key in sorted(signatures):
         signature = signatures[key]
-        kind, row, payload = _redactable_row(db, address, key)
+        kind, row, payload = _redactable_row(db, address, key, scope)
 
         conv, gid = _conv_and_gid(kind, row)
         if kind == "group" and payload.get("gid") and payload["gid"] != row.channel_id:
@@ -376,7 +408,9 @@ def _verified_redactions(db: Session, address: str, signatures: dict[str, str]) 
     return pending
 
 
-def apply_redactions(db: Session, address: str, signatures: dict[str, str]) -> int:
+def apply_redactions(
+    db: Session, address: str, signatures: dict[str, str], scope: Scope = None
+) -> int:
     """Apply ONE round of author-signed redactions. Returns how many landed.
 
     Separate from `delete_account` because an erase is now resumable: a round
@@ -388,7 +422,7 @@ def apply_redactions(db: Session, address: str, signatures: dict[str, str]) -> i
     holding a silent-signing grant in the extension, since a redaction body is
     `message`-context and auto-signed; the deletion signature is not.
     """
-    pending = _verified_redactions(db, address, signatures)
+    pending = _verified_redactions(db, address, signatures, scope)
     for _kind, row, content in pending:
         row.content = content
         db.add(row)
@@ -398,7 +432,7 @@ def apply_redactions(db: Session, address: str, signatures: dict[str, str]) -> i
     return len(pending)
 
 
-def _delete_own_messages(db: Session, address: str) -> None:
+def delete_own_messages(db: Session, address: str, scope: Scope = None) -> int:
     """Delete the user's messages that carry nobody else's session key.
 
     Every carrier has been redacted by `apply_redactions` before this runs —
@@ -410,14 +444,17 @@ def _delete_own_messages(db: Session, address: str) -> None:
     "everything except the carriers", which would have swept up the unreadable
     rows as well. `kept_messages` counts what that leaves behind.
     """
-    for kind, model in _KINDS.items():
+    deleted = 0
+    for _kind, model, in_scope in _scoped(scope):
         deletable = [
             row.id
-            for row in db.query(model).filter(model.sender_address == address).all()
+            for row in db.query(model).filter(model.sender_address == address, in_scope).all()
             if (payload := _payload(row.content)) is not None and not payload.get("keys")
         ]
         if deletable:
             db.query(model).filter(model.id.in_(deletable)).delete(synchronize_session=False)
+            deleted += len(deletable)
+    return deleted
 
 
 def _leave_all_groups(db: Session, address: str) -> list[dict]:
@@ -657,7 +694,7 @@ def delete_account(db: Session, user: models.User, mode: str) -> list[dict]:
     # leaving cascades its group_messages, so doing this first keeps the two
     # from racing over the same rows.
     if mode == MODE_ERASE:
-        _delete_own_messages(db, address)
+        delete_own_messages(db, address)
 
     departures = _leave_all_groups(db, address)
 
@@ -665,6 +702,11 @@ def delete_account(db: Session, user: models.User, mode: str) -> list[dict]:
         _erase_multisig(db, address)
         _erase_secrets(db, address)
         _erase_invite_codes(db, address)
+        # The user's own view preferences ("hide this conversation"). Kept on a
+        # leave like everything else, since a leave can be undone.
+        db.query(models.ConversationClear).filter(
+            models.ConversationClear.user_address == address
+        ).delete(synchronize_session=False)
 
     db.query(models.PushSubscription).filter(
         models.PushSubscription.user_address == address

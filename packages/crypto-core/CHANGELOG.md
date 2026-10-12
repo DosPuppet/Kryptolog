@@ -141,3 +141,15 @@ lot 4). Nothing written before it opens or verifies after it: wipe, do not migra
   alphabet by signer and verifier alike (`SignedBodyError`), which makes the
   bodies injective by construction rather than by the habits of honest clients
   (2026-09-23 Q-6).
+
+## 3.1.0
+
+ADDITIVE — nothing stored or signed before it changes. Every 3.0.0 vector is
+unchanged, which is the proof; if one ever needs regenerating for this, it was
+a cutover.
+
+- **`conversationEraseBody({ nonce, kind, conversation, redactionKeys, origin,
+  deployment })`** under a new `conversation-erase` context: the authorization
+  for erasing one's own messages in one conversation (audit 2026-09-11 M-6).
+  Separate from `message` so the extension never signs it silently, and naming
+  the conversation in full so an approval cannot be carried to another one.

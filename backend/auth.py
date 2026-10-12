@@ -170,6 +170,7 @@ def multisig_approval_message(workflow_id, secret_id, ciphertext_sha256_hex: str
 
 _CTX_MESSAGE = "message"
 _CTX_ACCOUNT_DELETION = "account-deletion"
+_CTX_CONVERSATION_ERASE = "conversation-erase"
 
 
 class NonCanonicalSignedBody(ValueError):
@@ -343,6 +344,37 @@ def account_deletion_message(
         _CTX_ACCOUNT_DELETION,
         f"origin={origin}\ndeployment={deployment}\nnonce={nonce}\nmode={mode}"
         f"\nredactions={digest}",
+    )
+
+
+def conversation_erase_message(
+    nonce: str, kind: str, conversation: str, redaction_keys=(), *, origin: str, deployment: str
+) -> str:
+    """The bytes a client signs to erase its own messages in ONE conversation.
+
+    The account erase, scoped (audit 2026-09-11 M-6), and authorized the same
+    way for the same reason: the per-message redactions are `message`-context
+    bodies, which TrustKeys signs silently for a connected site, so they must
+    sit behind a signature the extension asks the user about. `kind:conversation`
+    names the conversation in full so an approval for one cannot be replayed
+    against another.
+
+    Must be byte-identical to crypto-core's conversationEraseBody().
+    """
+    if not _is_hex(nonce):
+        raise NonCanonicalSignedBody("conversation erase: invalid nonce")
+    if not (
+        (kind == "dm" and _is_hex(conversation))
+        or (kind == "group" and is_signed_identifier(conversation))
+    ):
+        raise NonCanonicalSignedBody("conversation erase: invalid conversation")
+    if not is_canonical_origin(origin) or not is_signed_identifier(deployment):
+        raise NonCanonicalSignedBody("conversation erase: invalid origin or deployment")
+    digest = hashlib.sha256(_canonical_json(sorted(redaction_keys)).encode("utf-8")).hexdigest()
+    return _domain_separate(
+        _CTX_CONVERSATION_ERASE,
+        f"origin={origin}\ndeployment={deployment}\nnonce={nonce}"
+        f"\nconversation={kind}:{conversation}\nredactions={digest}",
     )
 
 

@@ -1,8 +1,9 @@
 import { useState, useEffect, useRef } from 'react';
-import { ArrowLeft, Shield, Loader2, Send, Users, UserPlus, UserMinus, Crown, ShieldCheck, Edit2, Check, X } from 'lucide-react';
+import { ArrowLeft, Shield, Loader2, Send, Users, UserPlus, UserMinus, Crown, ShieldCheck, Edit2, Check, X, Trash2 } from 'lucide-react';
 import MessageAuthBadge from './MessageAuthBadge';
 import MessageBody from './MessageBody';
 import KeyTrustPanel from './KeyTrustPanel';
+import DeleteConversationDialog from './DeleteConversationDialog';
 import { checkContactKey } from '../../services/trustedKeys';
 import { useAuth } from '../../context/AuthContext';
 import { useMessengerContext } from '../../context/MessengerContext';
@@ -22,6 +23,7 @@ const GroupChatArea = ({ activeGroupConversation, onBack, onSend, loadingMessage
     // The trust store is localStorage, not React state: bumping this re-renders,
     // and the render re-reads the store, after a member's new key is confirmed.
     const [, setTrustTick] = useState(0);
+    const [deleting, setDeleting] = useState(false);
     const messagesEndRef = useRef(null);
 
     useEffect(() => {
@@ -178,7 +180,22 @@ const GroupChatArea = ({ activeGroupConversation, onBack, onSend, loadingMessage
                 >
                     <Users className="w-5 h-5" />
                 </button>
+                <button
+                    onClick={() => setDeleting(true)}
+                    className="p-2 rounded-lg text-slate-400 hover:text-red-500 hover:bg-red-50 dark:hover:bg-red-900/20"
+                    title="Delete conversation"
+                >
+                    <Trash2 className="w-5 h-5" />
+                </button>
             </div>
+            {deleting && (
+                <DeleteConversationDialog
+                    kind="group"
+                    conversation={channel.id}
+                    label={channel.display_name ?? 'this group'}
+                    onClose={() => setDeleting(false)}
+                />
+            )}
 
             <div className="flex flex-1 overflow-hidden">
                 {/* Messages */}

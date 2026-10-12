@@ -31,6 +31,18 @@ const describeSignature = ({ kind, details = {}, origin }) => {
             `${details.redactions} message(s) will be redacted.`]
           : [`Remove this account from ${origin}.`, 'Logging in again with this key brings it back.'],
       };
+    case 'conversation-erase':
+      return {
+        title: 'Erase your messages',
+        danger: true,
+        lines: [
+          details.conversationKind === 'dm'
+            ? `Permanently erase YOUR messages in the conversation with ${details.conversation} on ${origin}.`
+            : `Permanently erase YOUR messages in group ${details.conversation} on ${origin}.`,
+          'Their messages stay. This cannot be undone.',
+          `${details.redactions} message(s) will be redacted.`,
+        ],
+      };
     case 'multisig-approval':
       return {
         title: 'Approve workflow',

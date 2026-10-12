@@ -10,7 +10,7 @@ import { describe, it, expect } from 'vitest';
 import { bootWithVault } from './harness.js';
 import { pageSender } from './chrome-mock.js';
 import {
-    domainSeparate, SIGNING_CONTEXT, loginChallengeBody, accountDeletionBody,
+    domainSeparate, SIGNING_CONTEXT, loginChallengeBody, accountDeletionBody, conversationEraseBody,
     multisigApprovalMessage, verifySignature,
 } from '../src/utils/crypto.js';
 
@@ -138,5 +138,30 @@ describe('signMessage without a silent-signing grant', () => {
         const { res, shown } = await approve(h, { type: 'SIGN_MESSAGE', message: body });
         expect(res.success).toBe(true);
         expect(shown.data.kind).toBe('message');
+    });
+});
+
+describe('signConversationErase (crypto-core 3.1.0)', () => {
+    it('asks, names the conversation, and signs the body for the asking site', async () => {
+        const h = await bootWithVault({ connect: [SITE] });
+        const partner = 'ab'.repeat(1312);
+        const fields = { nonce: 'ab12', kind: 'dm', conversation: partner, redactionKeys: ['dm:2'], deployment: 'dep-1' };
+        const { res, shown } = await approve(h, { type: 'SIGN_CONVERSATION_ERASE', ...fields });
+
+        expect(shown.data).toMatchObject({
+            kind: 'conversation-erase',
+            details: { conversationKind: 'dm', conversation: `${partner.slice(0, 16)}…`, redactions: 1 },
+        });
+        const body = await conversationEraseBody({ ...fields, origin: SITE });
+        expect(await verifySignature(body, res.signature, account(h).mldsa.publicKey)).toBe(true);
+    });
+
+    it('is never signed through the silent message path', async () => {
+        const h = await bootWithVault({ connect: [SITE] });
+        const body = await conversationEraseBody({
+            nonce: 'ab12', kind: 'group', conversation: 'g-1', origin: SITE, deployment: 'dep-1',
+        });
+        const res = await h.send({ type: 'SIGN', message: body }, pageSender(SITE));
+        expect(res.success).toBe(false);
     });
 });

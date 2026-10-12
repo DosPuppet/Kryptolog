@@ -2,8 +2,6 @@ from datetime import timedelta
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, Request
 from sqlalchemy import func
-from sqlalchemy.dialects.postgresql import insert as pg_insert
-from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, defer, joinedload
 
@@ -13,8 +11,10 @@ import schemas
 from database import get_db
 from dependencies import get_current_user, limiter
 from security import authorization, quota
+from security.audit_log import audit_event, short
 from utils.clock import utcnow_naive
 from utils.push import display_name, schedule_push
+from utils.upsert import insert_for
 from websocket_manager import manager
 
 router = APIRouter(tags=["secrets"])
@@ -233,6 +233,7 @@ def delete_secret(
     db.query(models.AccessGrant).filter(models.AccessGrant.secret_id == secret_id).delete()
     db.delete(secret)
     db.commit()
+    audit_event("secret.delete", request=request, actor=current_user.address, secret_id=secret_id)
     return {"status": "ok"}
 
 
@@ -270,6 +271,14 @@ def share_secret(
         encrypted_key=grant.encrypted_key,
         expires_at=expires_at,
     )
+    audit_event(
+        "secret.share",
+        request=request,
+        actor=current_user.address,
+        secret_id=grant.secret_id,
+        grantee=short(grantee_address),
+        expires_in=grant.expires_in,
+    )
 
     background_tasks.add_task(
         manager.send_personal_message,
@@ -304,9 +313,7 @@ def _upsert_grant(db: Session, **values) -> models.AccessGrant:
     shares each saw no row and each inserted one; revoking one left the other
     serving the key. A re-share keeps the grant's id and resets created_at.
     """
-    dialect = db.get_bind().dialect.name
-    insert = sqlite_insert if dialect == "sqlite" else pg_insert
-    stmt = insert(models.AccessGrant).values(created_at=utcnow_naive(), **values)
+    stmt = insert_for(db)(models.AccessGrant).values(created_at=utcnow_naive(), **values)
     stmt = stmt.on_conflict_do_update(
         index_elements=["secret_id", "grantee_address"],
         set_={
@@ -345,8 +352,16 @@ def revoke_grant(
 
     _refuse_if_workflow_managed(db, grant.secret_id, "manually revoke access to")
 
+    secret_id, grantee = grant.secret_id, grant.grantee_address
     db.delete(grant)
     db.commit()
+    audit_event(
+        "secret.revoke",
+        request=request,
+        actor=current_user.address,
+        secret_id=secret_id,
+        grantee=short(grantee),
+    )
     return {"status": "ok"}
 
 

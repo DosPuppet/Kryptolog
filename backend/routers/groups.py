@@ -9,6 +9,7 @@ import schemas
 from database import get_db
 from dependencies import get_current_user, limiter
 from security import authorization
+from security.audit_log import audit_event, short
 from security.crypto_validation import is_usable_encryption_key
 from utils.clock import to_wire_utc
 from utils.group_events import broadcast_removal
@@ -114,6 +115,13 @@ def create_group(
 
     db.commit()
     db.refresh(channel)
+    audit_event(
+        "group.create",
+        request=request,
+        actor=current_user.address,
+        channel_id=channel_id,
+        members=[short(a) for a in member_addrs],
+    )
 
     # JSON-ready, not the model (audit 2026-09-23 Q-1).
     joined = {
@@ -380,6 +388,13 @@ def add_member(
     db.add(new_member)
     db.commit()
     db.refresh(new_member)
+    audit_event(
+        "group.member_add",
+        request=request,
+        actor=current_user.address,
+        channel_id=channel_id,
+        member=short(new_addr),
+    )
 
     event = {
         "type": "GROUP_MEMBER_ADDED",
@@ -459,6 +474,15 @@ def remove_member(
             models.GroupMember.user_address == target_addr,
         ).delete(synchronize_session="fetch")
     db.commit()
+    audit_event(
+        "group.member_remove",
+        request=request,
+        actor=current_user.address,
+        channel_id=channel_id,
+        member=short(target_addr),
+        left=is_self,
+        group_deleted=group_deleted,
+    )
 
     # If the group is gone there is no one left to notify.
     if group_deleted:
@@ -514,6 +538,14 @@ def update_member_role(
     db.add(target_member)
     db.commit()
     db.refresh(target_member)
+    audit_event(
+        "group.role_change",
+        request=request,
+        actor=current_user.address,
+        channel_id=channel_id,
+        member=short(member_address),
+        role=new_role,
+    )
 
     event = {
         "type": "GROUP_MEMBER_UPDATED",

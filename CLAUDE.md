@@ -1216,10 +1216,10 @@ single crypto-core **3.0.0** cutover (lots 4–6); hybridization is a later **4.
 | 5 | TrustKeys custody (ships with 4) | P1 | done — `6a483ab` |
 | 6 | Web client trust UX | P1 | done — `34aeb32` |
 | 7 | Authorization, directory, data integrity | P1 | done — `f6a9e58` |
-| 8 | Realtime and push availability | P1 | done |
-| 9 | Operations: audit log, retention, backup, health | P2 | |
+| 8 | Realtime and push availability | P1 | done — `4967000` |
+| 9 | Operations: audit log, retention, backup, health, conversation deletion | P2 | done |
 | 10 | Assurance and documentation | P2 | |
-| 11 | Hybridization, crypto-core 4.0.0 | P3 | |
+| 11 | Hybridization, crypto-core 4.0.0 | P3 | **postponed** (2026-10-12, user's decision) — with lot 12's budget items |
 
 ### Lot 1 — supply chain
 
@@ -1595,3 +1595,82 @@ delivery while the listener is down" (the restart test had Redis itself down,
 so the old publish-failure fallback delivered anyway; the case that matters is
 Redis up and only this worker's subscription gone) and "serialize leniently
 with `default=str`" (the group tests catch Q-1 only while the bug exists).
+
+### Lot 9 — operations: audit trail, health, backup, retention, conversation deletion
+
+Closes 2026-09-11 M-3 and M-6, and the retention half of K-07. **Runs a
+migration** (`f2a3b4c5d6e7`, `conversation_clears`). **`CRYPTO_CORE_VERSION`
+3.0.0 → 3.1.0, ADDITIVE**: a new `conversation-erase` signing context; every
+3.0.0 vector is unchanged, which is the proof. Deploy the SPA, the extension
+and the server together (the extension needs the new typed call).
+
+**Two policy decisions were the user's, taken 2026-10-12:** retention is
+configurable and **off by default**; "delete this conversation" means **both**
+hide-it-for-me and, optionally, erase-my-messages-in-it.
+
+- **Security audit trail** (`security/audit_log.py`, M-3): one JSON line per
+  event on `kryptolog.audit`, which propagates nowhere else so it can be
+  shipped alone (`KRYPTOLOG_AUDIT_LOG` for a file). Logins with their kind
+  (`register`/`return`/`key_changed`/`login`) and every refusal with its
+  reason, key changes, logout, share/revoke/delete, workflow
+  create/sign/reject/delete, group create/add/remove/role, account deletion
+  rounds, conversation erase/hide, refused and revoked sockets, retention
+  passes. **Every 401/403/429** through `security/request_audit.py`, a pure ASGI
+  middleware, outermost, which also stamps **`X-Request-ID`** on every response
+  (exposed through CORS) — the correlation id the audit said was missing. Never
+  content, keys, signatures, tokens, usernames, or more than 16 characters of
+  an address, paths included (`/users/<address>` is shortened).
+  `test_audit_log.py` pins what is recorded and what never is.
+- **`GET /healthz`** (`routers/health.py`): database, Redis, and whether this
+  worker is actually on the fan-out channel (lot 8's `manager.listening`) —
+  the M-2 failure exactly. 503 naming the failed check; nothing else.
+- **Backup and restore that has been run** (`scripts/backup.sh`,
+  `scripts/restore.sh`): `pg_dump` from the `postgres:16` image, URL passed
+  through the environment (not the process list), dump checked readable.
+  `restore.sh --verify` restores into a scratch database, checks the schema
+  revision is known and every table exists, prints counts, drops it;
+  `restore.sh DUMP NAME` restores into a NEW database only. **Verified on the
+  dev database**: backup 53 MB, rehearsal restore, every row count identical
+  to the live database, scratch database gone afterwards, and both refusals
+  (an existing database, an injected name) checked. `backups/` is gitignored.
+  `DEPLOYMENT.md` "Operations" says what a backup does NOT hold: private keys
+  (never on the server) and `backend/.env`.
+- **Retention** (`retention.py`, `KRYPTOLOG_MESSAGE_RETENTION_DAYS`, unset =
+  keep): hourly, every worker, one at a time under a PostgreSQL advisory lock;
+  `python retention.py` runs one pass. **A session is purged whole**: its first
+  message holds the key, so cutting by timestamp would leave later messages of
+  the same session on screen undecryptable for good. An old row is kept while
+  any message of its (sender, sid) is within 48 h past the cutoff; clients
+  retire sessions at 24 h, so effective retention is N days to N + 2. A
+  malformed value refuses to start.
+- **Delete a conversation** (`routers/conversations.py`, both modes):
+  - *hide*: `POST /conversations/{dm|group}/{conv}/clear` stores a per-user
+    marker the server computes (newest message id at that moment; a group needs
+    membership, since that id says how busy it is). The SPA applies it to
+    **what it shows**, not what it processes (`useConversationClears`): a hidden
+    message may hold the key of a visible one. It comes back when something
+    newer arrives. An account erase removes the markers.
+  - *erase my messages*: the account erase **scoped** —
+    `account_deletion`'s walks all take a `scope` now, so the two erases cannot
+    disagree about what "my messages" are. Rounds with 409, carriers redacted,
+    the rest deleted, the other side untouched; a redaction of a message in
+    another conversation is refused. Authorized by `conversationEraseBody`,
+    which names the conversation in full, under its own context because the
+    redactions are signed **silently** — the reason the account erase has one,
+    and why there is still no bare redact endpoint. TrustKeys:
+    `signConversationErase` with its own approval screen; vault: the password
+    every time. The SPA's account-erase loop became `runErase`/`roundOutcome`,
+    shared by both.
+  - The dialog (`DeleteConversationDialog`) says plainly that hiding is for
+    you and erasing removes only your messages. Erase runs first, so a failed
+    or rejected erase leaves the conversation on screen.
+
+**Deliberately not done:** the other side is not told live that messages were
+erased — they see "content removed" on their next load, as with an account
+erase. And retention is not applied to anything but messages (secrets are the
+owner's to delete; metadata such as group membership is current state, not
+history).
+
+Backend 621 → **661**, SPA 265 → **270**, extension 125 → **127**, crypto-core
+64 → **67**. Twenty gates mutation-tested, all killed; the history filter was
+untested until its mutant survived, and has a test of its own now.

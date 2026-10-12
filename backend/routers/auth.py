@@ -11,6 +11,7 @@ import schemas
 from database import get_db
 from dependencies import get_current_user, limiter
 from security import authorization
+from security.audit_log import audit_event
 from security.crypto_validation import is_valid_ml_dsa_public_key, is_valid_ml_kem_public_key
 from security.usernames import InvalidUsername, normalize_username, username_taken
 from utils.clock import utcnow_naive
@@ -276,12 +277,14 @@ def _register_user(
 
 def _upsert_identity(
     db: Session, login_req: schemas.LoginRequest, address: str, attestation: str | None
-) -> models.User:
-    """Return the identity behind this login, creating or updating it as needed."""
+) -> tuple[models.User, str]:
+    """Return the identity behind this login, creating or updating it as needed,
+    and which of those happened — the audit trail records it (2026-09-11 M-3):
+    "register", "return", "key_changed" or "login"."""
     user = db.query(models.User).filter(models.User.address == address).first()
 
     if not user:
-        return _register_user(db, login_req, address, attestation)
+        return _register_user(db, login_req, address, attestation), "register"
 
     if user.deleted_at is not None:
         # An "erase" deletion is final, and this is the one check that makes
@@ -304,12 +307,14 @@ def _upsert_identity(
                     "Create a new identity to register again."
                 ),
             )
-        return _revive_user(db, login_req, address, attestation, user)
+        return _revive_user(db, login_req, address, attestation, user), "return"
 
+    kind = "login"
     if (
         login_req.encryption_public_key
         and user.encryption_public_key != login_req.encryption_public_key
     ):
+        kind = "key_changed"
         # Encryption key changed (or was never set). Update it, but — unlike the
         # previous silent overwrite (audit S1) — stamp key_changed_at so the
         # change is auditable and clients can warn contacts about a key swap.
@@ -328,7 +333,7 @@ def _upsert_identity(
         db.commit()
 
     db.refresh(user)
-    return user
+    return user, kind
 
 
 @router.post("/login", response_model=schemas.Token)
@@ -341,14 +346,23 @@ def login(request: Request, login_req: schemas.LoginRequest, db: Session = Depen
     failed verification cannot hand back a replayable challenge (KRY-004).
     """
     address = login_req.address.lower()
-
-    if not claim_nonce(db, address, login_req.nonce):
-        # Missing, mismatched, expired, or already consumed — one generic
-        # answer, so this can't be used to probe which nonces exist.
-        raise HTTPException(status_code=400, detail="Invalid or expired nonce.")
-
-    _verify_login_payload(login_req, address)
-    user = _upsert_identity(db, login_req, address, login_req.encryption_key_attestation)
+    try:
+        user, kind = _login(db, login_req, address)
+    except HTTPException as exc:
+        # Every refusal, with its reason: a run of these against one address
+        # is what an attack on it looks like (audit 2026-09-11 M-3).
+        audit_event(
+            "auth.login",
+            request=request,
+            actor=address,
+            outcome="refused",
+            status=exc.status_code,
+            reason=exc.detail,
+        )
+        raise
+    audit_event("auth.login", request=request, actor=address, kind=kind)
+    if kind == "key_changed":
+        audit_event("auth.key_changed", request=request, actor=address)
 
     access_token = auth.create_access_token(
         data={"sub": user.address, "tv": user.token_version or 0},
@@ -359,6 +373,19 @@ def login(request: Request, login_req: schemas.LoginRequest, db: Session = Depen
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Token signing failed."
         )
     return {"access_token": access_token, "token_type": "bearer", "user": user}
+
+
+def _login(db: Session, login_req: schemas.LoginRequest, address: str):
+    """Claim, verify, upsert — everything `login` audits the outcome of. The
+    address is the CLAIMED one until the signature has been checked, which is
+    how a refused line in the audit trail should be read."""
+    if not claim_nonce(db, address, login_req.nonce):
+        # Missing, mismatched, expired, or already consumed — one generic
+        # answer, so this can't be used to probe which nonces exist.
+        raise HTTPException(status_code=400, detail="Invalid or expired nonce.")
+
+    _verify_login_payload(login_req, address)
+    return _upsert_identity(db, login_req, address, login_req.encryption_key_attestation)
 
 
 @router.post("/logout")
@@ -383,5 +410,6 @@ def logout(
     """
     current_user.token_version = (current_user.token_version or 0) + 1
     db.commit()
+    audit_event("auth.logout", request=request, actor=current_user.address)
     background_tasks.add_task(manager.close_address, current_user.address, reason=SESSION_REVOKED)
     return {"status": "ok"}

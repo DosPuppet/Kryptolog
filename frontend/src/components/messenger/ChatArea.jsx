@@ -1,14 +1,16 @@
 import { useState, useEffect, useRef } from 'react';
-import { ArrowLeft, Shield, Loader2, Send, MessageSquare } from 'lucide-react';
+import { ArrowLeft, Shield, Loader2, Send, MessageSquare, Trash2 } from 'lucide-react';
 import MessageAuthBadge from './MessageAuthBadge';
 import MessageBody from './MessageBody';
 import KeyTrustPanel from './KeyTrustPanel';
+import DeleteConversationDialog from './DeleteConversationDialog';
 import { useAuth } from '../../context/AuthContext';
 import { avatarInitial, displayName } from '../../utils/format';
 
 const ChatArea = ({ activeConversation, onBack, onSend, loadingMessages, sending, onDecrypt }) => {
     const { user } = useAuth();
     const [inputText, setInputText] = useState('');
+    const [deleting, setDeleting] = useState(false);
     const messagesEndRef = useRef(null);
 
     // Scroll to bottom
@@ -55,7 +57,22 @@ const ChatArea = ({ activeConversation, onBack, onSend, loadingMessages, sending
                         <Shield className="w-3 h-3" /> End-to-End Encrypted
                     </div>
                 </div>
+                <button
+                    onClick={() => setDeleting(true)}
+                    className="ml-auto p-2 rounded-lg text-slate-400 hover:text-red-500 hover:bg-red-50 dark:hover:bg-red-900/20"
+                    title="Delete conversation"
+                >
+                    <Trash2 className="w-5 h-5" />
+                </button>
             </div>
+            {deleting && (
+                <DeleteConversationDialog
+                    kind="dm"
+                    conversation={activeConversation.user.address.toLowerCase()}
+                    label={displayName(activeConversation.user)}
+                    onClose={() => setDeleting(false)}
+                />
+            )}
 
             {/* Safety number, and the stop sign when their key changed (K-05) */}
             <KeyTrustPanel user={activeConversation.user} />

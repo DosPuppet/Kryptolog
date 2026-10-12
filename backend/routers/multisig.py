@@ -10,6 +10,7 @@ from database import get_db
 from dependencies import get_current_user, limiter
 from routers.secrets import create_secret_with_owner_grant
 from security import authorization
+from security.audit_log import audit_event, short
 from utils.clock import utcnow_naive
 from utils.push import display_name, schedule_push
 
@@ -132,6 +133,15 @@ def create_multisig_workflow(
 
     db.commit()
     db.refresh(new_workflow)
+    audit_event(
+        "workflow.create",
+        request=request,
+        actor=current_user.address,
+        workflow_id=new_workflow.id,
+        signers=[short(a) for a in signers],
+        recipients=[short(a) for a in recipients],
+        threshold=workflow.threshold,
+    )
 
     sender_name = display_name(current_user)
     for s_addr in signers:
@@ -432,6 +442,13 @@ def sign_multisig_workflow(
     # One commit: signature, recipient keys and status land together or not at
     # all. This also releases the FOR UPDATE lock taken above.
     db.commit()
+    audit_event(
+        "workflow.sign",
+        request=request,
+        actor=current_user.address,
+        workflow_id=wf.id,
+        completed=is_completing,
+    )
 
     _notify_signature(wf, display_name(current_user), current_user.address, is_completing)
 
@@ -473,6 +490,7 @@ def reject_multisig_workflow(
     wf.rejected_by = current_user.address.lower()
     wf.rejected_at = utcnow_naive()
     db.commit()
+    audit_event("workflow.reject", request=request, actor=current_user.address, workflow_id=wf.id)
 
     sender_name = display_name(current_user)
     if wf.owner_address != current_user.address:
@@ -522,4 +540,7 @@ def delete_multisig_workflow(
             db.delete(secret)
 
     db.commit()
+    audit_event(
+        "workflow.delete", request=request, actor=current_user.address, workflow_id=workflow_id
+    )
     return None

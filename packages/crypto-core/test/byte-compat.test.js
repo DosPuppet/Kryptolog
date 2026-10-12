@@ -30,6 +30,7 @@ describe('golden constants (wire/storage format contract)', () => {
             MESSAGE: 'message',
             KEY_ATTESTATION: 'key-attestation',
             ACCOUNT_DELETION: 'account-deletion',
+            CONVERSATION_ERASE: 'conversation-erase', // 3.1.0, additive
         });
     });
 
@@ -141,6 +142,28 @@ describe('golden constants (wire/storage format contract)', () => {
         // An absent envelope and an explicit null are the same statement.
         expect(await core.messageSigningBody({ ...base, keys: null }))
             .toBe(await core.messageSigningBody(base));
+    });
+
+    it('a conversation erase names its conversation in full and never signs silently (3.1.0)', async () => {
+        const base = { nonce: 'ab12', origin: 'https://app.example', deployment: 'dep-1' };
+        const body = await core.conversationEraseBody({
+            ...base, kind: 'dm', conversation: 'aa', redactionKeys: ['dm:10', 'dm:2'],
+        });
+        expect(await core.conversationEraseBody({
+            ...base, kind: 'dm', conversation: 'aa', redactionKeys: ['dm:2', 'dm:10'],
+        })).toBe(body);
+        expect(await core.conversationEraseBody({
+            ...base, kind: 'dm', conversation: 'ab', redactionKeys: ['dm:2', 'dm:10'],
+        })).not.toBe(body);
+        expect(await core.conversationEraseBody({
+            ...base, kind: 'group', conversation: 'aa', redactionKeys: ['dm:2', 'dm:10'],
+        })).not.toBe(body);
+        // Outside `message`: the extension's silent path never matches it.
+        expect(body.startsWith(core.MESSAGE_SIGNING_PREFIX)).toBe(false);
+        for (const [kind, conversation] of [['dm', 'AA'], ['dm', 'aa\nnonce=00'], ['group', 'a b'], ['x', 'aa']]) {
+            await expect(core.conversationEraseBody({ ...base, kind, conversation }))
+                .rejects.toThrow(core.SignedBodyError);
+        }
     });
 
     it('the login challenge names the origin and the deployment (3.0.0, K-02)', () => {
@@ -571,7 +594,7 @@ describe('encryption-key attestation (audit M-1, v1.3.0)', () => {
 
 describe('single-source / version guard', () => {
     it('exports a version both app builds can assert against', () => {
-        expect(core.CRYPTO_CORE_VERSION).toBe('3.0.0');
+        expect(core.CRYPTO_CORE_VERSION).toBe('3.1.0');
     });
 });
 
@@ -632,6 +655,15 @@ describe('signed bodies match the server, byte for byte', () => {
             origin: vectors.origin, deployment: vectors.deployment,
         })).toBe(vectors.bodies.account_deletion);
     });
+
+    it.each([['dm', 'erase_partner'], ['group', 'erase_group']])(
+        'conversation erase, %s (3.1.0)', async (kind, field) => {
+            expect(await core.conversationEraseBody({
+                nonce: vectors.nonce, kind, conversation: vectors[field],
+                redactionKeys: vectors.redaction_keys,
+                origin: vectors.origin, deployment: vectors.deployment,
+            })).toBe(vectors.bodies[`conversation_erase_${kind}`]);
+        });
 
     it('the fixture is what we think it is, not just what both sides produce', () => {
         // Guards the vectors themselves: agreement with a file both sides could

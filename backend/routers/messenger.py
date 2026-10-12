@@ -24,6 +24,7 @@ import schemas
 from database import SessionLocal, get_db
 from dependencies import get_current_user, limiter, user_for_token
 from security import authorization
+from security.audit_log import audit_event
 from security.crypto_validation import is_usable_encryption_key
 from utils.clock import to_wire_utc
 from utils.push import display_name, schedule_push
@@ -365,6 +366,7 @@ async def _client_message_loop(websocket: WebSocket, token: str) -> None:
 async def websocket_endpoint(websocket: WebSocket):
     # Closing before accept() rejects the handshake outright.
     if not _origin_allowed(websocket):
+        audit_event("ws.denied", request=websocket, outcome="refused", reason="origin")
         await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
         return
 
@@ -373,6 +375,7 @@ async def websocket_endpoint(websocket: WebSocket):
     try:
         authenticated = await _authenticate_socket(websocket)
         if authenticated is None:
+            audit_event("ws.denied", request=websocket, outcome="refused", reason="auth")
             await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
             return
         user_address, token = authenticated
@@ -384,6 +387,7 @@ async def websocket_endpoint(websocket: WebSocket):
             # validating under it (audit M-1). Say so before hanging up — the
             # client cannot tell a dead session from a dropped connection
             # otherwise, and would spend its reconnect budget finding out.
+            audit_event("ws.revoked", request=websocket, actor=user_address, outcome="refused")
             await websocket.send_json({"type": SESSION_REVOKED})
             await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
         except WebSocketDisconnect:

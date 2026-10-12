@@ -14,6 +14,7 @@ import { sessionKeyId, groupConversationId } from './messenger/sessionScope';
 import { useGroupNames } from './messenger/useGroupNames';
 import { usePartnerDirectory } from './messenger/usePartnerDirectory';
 import { createGroupEventHandlers } from './messenger/groupEvents';
+import { useConversationClears } from './messenger/useConversationClears';
 import { apiFetch } from '../services/api';
 
 // Re-exported for existing importers (tests); the implementation lives in
@@ -37,7 +38,7 @@ export const useMessengerContext = () => {
 
 export const MessengerProvider = ({ children }) => {
     const { user, token, logout, isAuthenticated } = useAuth();
-    const { generateSessionKey, wrapSessionKey, unwrapSessionKey, unwrapManySessionKeys, mlkemKey, signMessage } = usePQC();
+    const { generateSessionKey, wrapSessionKey, unwrapSessionKey, unwrapManySessionKeys, mlkemKey, signMessage, eraseConversation } = usePQC();
 
     const [conversations, setConversations] = useState([]);
     const [activeConversation, setActiveConversation] = useState(null); // { user, messages: [] }
@@ -90,6 +91,7 @@ export const MessengerProvider = ({ children }) => {
 
     /** Authenticated API call, bound to this session's token. */
     const api = (url, options = {}) => apiFetch(url, token, options);
+    const { fetchClears, clearConversation, isHidden, visible } = useConversationClears(api);
 
     // Names for partners the sidebar has never seen (messenger/usePartnerDirectory.js)
     const { resolvePartner } = usePartnerDirectory({ token });
@@ -244,6 +246,7 @@ export const MessengerProvider = ({ children }) => {
         if (token) {
             fetchConversations();
             fetchGroupConversations();
+            fetchClears();
         }
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [token]);
@@ -782,18 +785,63 @@ export const MessengerProvider = ({ children }) => {
         });
     };
 
+    // ── Delete a conversation (audit 2026-09-11 M-6) ──────────────
+    //
+    // Two things a user can mean, and the dialog offers both: erase MY messages
+    // in it (signed, rounds, the other side's untouched — PQCContext), and hide
+    // it from MY view (a server-side marker every device applies). Erase runs
+    // first: it needs the conversation's rows, and a failure must leave the
+    // conversation on screen rather than half-gone behind a marker.
+    const deleteConversation = async (kind, conversation, { eraseMine = false } = {}) => {
+        const erased = eraseMine ? await eraseConversation(kind, conversation) : null;
+        await clearConversation(kind, conversation);
+        if (kind === 'dm' && activeConversationRef.current?.user.address.toLowerCase() === conversation.toLowerCase()) {
+            setActiveConversation(null);
+        }
+        if (kind === 'group' && activeGroupConversationRef.current?.channel.id === conversation) {
+            setActiveGroupConversation(null);
+        }
+        return erased;
+    };
+
     // ── Computed Values ────────────────────────────────────────────
 
+    // What the UI is handed: the hide markers applied. The raw state stays
+    // complete, because the decryption pipelines need hidden rows too (a hidden
+    // message may carry the key of a visible one).
+    const shownConversations = useMemo(
+        () => conversations.filter((c) => !isHidden('dm', c.user.address, c.last_message?.id)),
+        [conversations, isHidden]
+    );
+    const shownGroupConversations = useMemo(
+        () => groupConversations.filter((g) => !isHidden('group', g.channel.id, g.last_message?.id)),
+        [groupConversations, isHidden]
+    );
+    const shownActiveConversation = useMemo(
+        () => activeConversation && {
+            ...activeConversation,
+            messages: visible('dm', activeConversation.user.address, activeConversation.messages),
+        },
+        [activeConversation, visible]
+    );
+    const shownActiveGroupConversation = useMemo(
+        () => activeGroupConversation && {
+            ...activeGroupConversation,
+            messages: visible('group', activeGroupConversation.channel.id, activeGroupConversation.messages),
+        },
+        [activeGroupConversation, visible]
+    );
+
     const unreadCount = useMemo(() =>
-        conversations.reduce((acc, c) => acc + (c.unread_count || 0), 0) +
-        groupConversations.reduce((acc, g) => acc + (g.unread_count || 0), 0),
-        [conversations, groupConversations]
+        shownConversations.reduce((acc, c) => acc + (c.unread_count || 0), 0) +
+        shownGroupConversations.reduce((acc, g) => acc + (g.unread_count || 0), 0),
+        [shownConversations, shownGroupConversations]
     );
 
     return (
         <MessengerContext.Provider value={{
-            conversations,
-            activeConversation,
+            conversations: shownConversations,
+            activeConversation: shownActiveConversation,
             loading,
             messagesLoading,
             sending,
@@ -804,8 +852,8 @@ export const MessengerProvider = ({ children }) => {
             unreadCount,
             lastEvent,
             // Group Channels
-            groupConversations,
-            activeGroupConversation,
+            groupConversations: shownGroupConversations,
+            activeGroupConversation: shownActiveGroupConversation,
             setActiveGroupConversation,
             createGroup,
             loadGroupConversation,
@@ -817,6 +865,7 @@ export const MessengerProvider = ({ children }) => {
             updateGroupMemberRole,
             updateGroup,
             renameGroup,
+            deleteConversation,
         }}>
             {children}
         </MessengerContext.Provider>

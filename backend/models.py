@@ -387,3 +387,35 @@ class PushSubscription(Base):
 User.push_subscriptions = relationship(
     "PushSubscription", back_populates="user", cascade="all, delete-orphan"
 )
+
+
+class ConversationClear(Base):
+    """ "Delete this conversation", for one user: hide it up to a point.
+
+    The conversation is not deleted — the other side's copy is theirs (the
+    principle account deletion settled: messages a user only received are the
+    partner's speech). It disappears from THIS user's list and history up to
+    `cleared_through_id`, on every device, and comes back if a newer message
+    arrives. Erasing one's own messages in it is a separate, signed operation
+    (`POST /conversations/{kind}/{conversation}/erase`). Audit 2026-09-11 M-6.
+
+    The marker is a message id, not a time: ids are what the client pages by,
+    and the server computes it, so a client cannot hide messages that did not
+    exist when the user asked.
+    """
+
+    __tablename__ = "conversation_clears"
+    __table_args__ = (
+        UniqueConstraint(
+            "user_address", "kind", "conversation", name="uq_conversation_clear_user_conv"
+        ),
+        CheckConstraint("kind IN ('dm', 'group')", name="ck_conversation_clears_kind"),
+    )
+
+    id = Column(Integer, primary_key=True)
+    user_address = Column(String, ForeignKey("users.address"), nullable=False)
+    kind = Column(String, nullable=False)
+    # The partner's address for a DM, the channel id for a group.
+    conversation = Column(String, nullable=False)
+    cleared_through_id = Column(Integer, nullable=False)
+    cleared_at = Column(DateTime, default=utcnow_naive, nullable=False)

@@ -53,3 +53,6 @@ audit/
 # CLAUDE.md is deliberately TRACKED: work is split across dev environments and
 # it carries the remediation status table between them. Keep findings detail out
 # of it — that belongs in the untracked AUDIT.md / roadmap/.
+
+# Database dumps from scripts/backup.sh: every row the server holds.
+backups/

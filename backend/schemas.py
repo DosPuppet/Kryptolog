@@ -671,6 +671,50 @@ class AccountDeleteResponse(BaseModel):
     remaining: int = 0
 
 
+class ConversationEraseRequest(BaseModel):
+    """One round of erasing the caller's own messages in one conversation.
+
+    The account erase's request without a mode: the conversation is in the
+    path, and in the signed body (auth.conversation_erase_message).
+    """
+
+    nonce: str = Field(..., max_length=200)
+    origin: str = Field(..., max_length=MAX_ORIGIN_LEN)
+    deployment: str = Field(..., max_length=MAX_DEPLOYMENT_LEN)
+    signature: str = Field(..., max_length=SIGNATURE_CHARS)
+    redactions: list[RedactionSignature] = Field(
+        default_factory=list, max_length=MAX_REDACTIONS_PER_DELETE
+    )
+
+    @field_validator("signature")
+    @classmethod
+    def _signature_is_ml_dsa(cls, v: str) -> str:
+        if not is_valid_ml_dsa_signature(v):
+            raise ValueError("signature must be a canonical base64 ML-DSA-44 signature")
+        return v
+
+
+class ConversationEraseResponse(BaseModel):
+    """`erased` when nothing of the caller's is left holding content in the
+    conversation, `redacting` (with 409) when another round is needed. `kept`
+    as in AccountDeleteResponse: rows refused rather than guessed at."""
+
+    status: Literal["erased", "redacting"]
+    redacted: int
+    deleted: int = 0
+    kept: int = 0
+    remaining: int = 0
+
+
+class ConversationClearResponse(BaseModel):
+    kind: Literal["dm", "group"]
+    conversation: str
+    cleared_through_id: int
+    cleared_at: UtcDateTime
+
+    model_config = ConfigDict(from_attributes=True)
+
+
 class RedactableMessageResponse(BaseModel):
     """One message the client must re-sign before an erase.
 

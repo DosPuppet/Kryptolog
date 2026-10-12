@@ -133,3 +133,70 @@ docker exec kryptolog-postgres-1 psql -U kryptolog -d kryptolog \
   office shares one address, so any cap low enough to matter would lock real
   users out. An unauthenticated socket is closed after 10 s, which bounds what
   one client can hold open.
+
+## Operations
+
+### Security audit log
+
+Every security-relevant event is one JSON line on the `kryptolog.audit`
+logger: logins and refused logins (with the reason), key changes, logouts,
+shares and revocations, workflow decisions, group membership changes, account
+deletions, conversation erases and hides, refused WebSockets, retention purges,
+and every 401/403/429. Each line carries the client IP (as uvicorn resolved it,
+see above), a shortened address, and the `request_id` that response carried in
+`X-Request-ID`. Never content, keys, signatures, tokens or usernames.
+
+It goes to stderr by default, apart from the application log (it does not
+propagate). Set `KRYPTOLOG_AUDIT_LOG=/var/log/kryptolog/audit.jsonl` to write a
+file instead, and ship that file to your SIEM. Rotate it with logrotate's
+`copytruncate`, or restart the backend after rotating.
+
+### Health
+
+`GET /healthz` answers 200 when the database answers and, with Redis
+configured, when Redis answers and this worker is actually listening on the
+fan-out channel; 503 naming the failed check otherwise. Unauthenticated, and
+says nothing else. Point the load balancer or supervisor at it — not at `/`,
+which answers 200 from a worker whose realtime delivery is dead.
+
+### Backup and restore
+
+```bash
+scripts/backup.sh /srv/backups/kryptolog          # pg_dump, mode 600, checked readable
+scripts/restore.sh --verify /srv/backups/kryptolog/kryptolog-<ts>.dump   # rehearsal
+scripts/restore.sh <dump> kryptolog_restored      # into a NEW database, never over one
+```
+
+Both run the PostgreSQL 16 client from the `postgres:16` image (nothing to
+install) against `DATABASE_URL` from `backend/.env`; the password reaches the
+container through its environment, never the command line. **Schedule
+`backup.sh`, and schedule `restore.sh --verify` too**: a backup that has never
+been restored is a hope. The rehearsal restores into a scratch database, checks
+that the schema revision is one this checkout knows and that every table exists,
+prints row counts, and drops it.
+
+What a backup does **not** contain, by design: users' private keys. They never
+reach the server — a lost device without its own vault backup is a lost
+identity, and no server backup changes that. Also not in it: `backend/.env`
+(JWT secret, deployment id, VAPID keys, service passwords). Back that up with
+the deployment's other secrets; losing the JWT secret logs everyone out, losing
+the VAPID keys breaks push until browsers resubscribe.
+
+To switch to a restored database: stop the backend, point `DATABASE_URL` at it,
+start the backend (it migrates before serving), keep the old database until the
+new one is proven.
+
+### Message retention
+
+Unset by default: messages are kept until a user erases them. Set
+`KRYPTOLOG_MESSAGE_RETENTION_DAYS=N` to purge DMs and group messages older than
+N days, hourly, by every worker under a PostgreSQL advisory lock (one does the
+work). Sessions are purged whole — a message is only readable with the key in
+its session's first message — so the effective retention is N days to N days
+plus 48 hours. A malformed value refuses to start. `cd backend && python
+retention.py` runs a single pass, for an external scheduler. Each pass is an
+audit event.
+
+Users can also delete a conversation themselves: it is hidden from them on all
+their devices, and they may first erase their own messages in it for everyone
+(signed, like an account erase; the other side's messages stay).

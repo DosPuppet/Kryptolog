@@ -14,6 +14,16 @@ export const API_ENDPOINTS = {
         REDACTABLE: `${API_BASE_URL}/account/redactable-messages`,
         DELETE: `${API_BASE_URL}/account/delete`,
     },
+    // Deleting a conversation (audit 2026-09-11 M-6): hide it for me, and/or
+    // erase my own messages in it. `kind` is 'dm' (conversation = partner
+    // address) or 'group' (conversation = channel id).
+    CONVERSATIONS: {
+        CLEARS: `${API_BASE_URL}/conversations/clears`,
+        CLEAR: (kind, conversation) => `${API_BASE_URL}/conversations/${kind}/${conversation}/clear`,
+        REDACTABLE: (kind, conversation) =>
+            `${API_BASE_URL}/conversations/${kind}/${conversation}/redactable-messages`,
+        ERASE: (kind, conversation) => `${API_BASE_URL}/conversations/${kind}/${conversation}/erase`,
+    },
     USERS: {
         GET: (address) => `${API_BASE_URL}/users/${address}`,
         LIST: `${API_BASE_URL}/users`,

@@ -62,6 +62,14 @@ window.addEventListener('message', async (event) => {
                 result = res.signature;
                 break;
             }
+            case 'TRUSTKEYS_SIGN_CONVERSATION_ERASE': {
+                const res = await callBackground('SIGN_CONVERSATION_ERASE', {
+                    nonce: payload.nonce, kind: payload.kind, conversation: payload.conversation,
+                    redactionKeys: payload.redactionKeys, deployment: payload.deployment,
+                });
+                result = res.signature;
+                break;
+            }
             case 'TRUSTKEYS_SIGN_MULTISIG_APPROVAL': {
                 const res = await callBackground('SIGN_MULTISIG_APPROVAL', {
                     workflowId: payload.workflowId, secretId: payload.secretId,

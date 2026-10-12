@@ -21,6 +21,7 @@ from database import get_db
 from dependencies import get_current_user, limiter
 from routers.auth import check_signed_for_this_server, claim_nonce
 from security import authorization
+from security.audit_log import audit_event
 from utils.group_events import broadcast_removal
 from websocket_manager import manager
 
@@ -99,7 +100,28 @@ async def delete_account(
     # A Session is not thread-safe but is fine to use FROM another thread while
     # only one touches it, which is exactly what FastAPI does for every `def`
     # endpoint. HTTPException raised in there propagates normally.
-    outcome, payload, departures = await run_in_threadpool(_perform_deletion, db, current_user, req)
+    try:
+        result = await run_in_threadpool(_perform_deletion, db, current_user, req)
+    except HTTPException as exc:
+        audit_event(
+            "account.delete",
+            request=request,
+            actor=address,
+            outcome="refused",
+            mode=req.mode,
+            status=exc.status_code,
+            reason=exc.detail,
+        )
+        raise
+    outcome, payload, departures = result
+    audit_event(
+        "account.delete",
+        request=request,
+        actor=address,
+        mode=req.mode,
+        status=outcome,
+        redacted=payload.get("redacted"),
+    )
 
     if outcome == "redacting":
         return JSONResponse(status_code=409, content=payload)
@@ -193,7 +215,7 @@ def _perform_deletion(db: Session, current_user: models.User, req: schemas.Accou
         # set: the erase finishes only when nothing of the user's still holds
         # both a session key and its ciphertext. A message sent while the
         # client was working through its manifest therefore delays the
-        # deletion instead of being caught by it — `_delete_own_messages` never
+        # deletion instead of being caught by it — `delete_own_messages` never
         # deletes a carrier, so the row that used to be at risk of destroying
         # the partner's history now simply keeps this from completing.
         remaining = len(account_deletion.redaction_keys(db, address))
