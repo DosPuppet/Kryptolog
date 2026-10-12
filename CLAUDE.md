@@ -44,6 +44,9 @@ cd trustkeys && npm test           # vitest, node env — chrome.* is mocked (te
 cd trustkeys && npm run build
 cd trustkeys && npm run lint       # blocking gate — lint is clean, keep it clean
 
+# end-to-end: real Chromium + the unpacked extension (needs compose Postgres/Redis)
+cd e2e && npm test                 # builds trustkeys (build:dev), own DB kryptolog_e2e
+
 # full stack (PM2 + docker-compose Postgres/Redis)
 ./start_all.sh
 ```
@@ -236,7 +239,10 @@ for the column object's truthiness and builds a different query.
 
 ### Deliberately not done
 
-- **`MessengerContext.jsx` stays at 657 lines.** Its DM and group halves share
+- **`MessengerContext.jsx` stays at 657 lines.** *(Drift, 2026-10-12: it is 873
+  now, and `PQCContext.jsx` 933, after the key-change, session and deletion
+  work of lots 4–9. The reasoning below still holds; the size no longer
+  argues for it.)* Its DM and group halves share
   about fifteen closure values, so splitting them into hooks means threading all
   of that through a parameter list — plausibly worse to read than the banner
   comments it has now. Worth doing only alongside a state-shape change.
@@ -555,8 +561,8 @@ names go through the M-3 encrypted-name path, which is a different mechanism.
   database on another port and point `TEST_DATABASE_URL` at it.
 - **`test_ws_fanout` needs `fakeredis`** (`requirements-dev.txt`). Without it five tests
   error out in a way unrelated to whatever you are changing.
-- **Extension tests are slow by design** (~15s): the vault KDF is 600k PBKDF2
-  iterations and each `bootWithVault()` pays it. Use `boot()` where a test only needs
+- **Extension tests are slow by design**: the vault KDF (Argon2id, 46 MiB since
+  crypto-core 3.0.0; it was 600k PBKDF2 before) runs on every `bootWithVault()`. Use `boot()` where a test only needs
   the sender guard, which runs before any vault access.
 
 ## Independent audit — 2026-09-11
@@ -1115,9 +1121,8 @@ commits; the branch is still around at the merged commit), with all four suites
 — backend **539**, frontend **219**, crypto-core **57**, extension **96** —
 both builds and every lint/format/drift gate green at `ab5c689`.
 
-**Not pushed yet**, so neither GitHub Actions workflow has run over any of this.
-Every previous merge found something on the first push that a local pass did
-not: `js-yaml`, a runner-speed timeout. Expect the same here.
+~~**Not pushed yet**~~ — pushed later: `origin/main` reached `238ee15`, which
+contains this merge (checked 2026-10-12, lot 10).
 
 **Deploying this merge runs a migration** (`c9d0e1f2a3b4`, `users` gains
 `deleted_at` and `blocked`), which both start paths do before serving. No
@@ -1191,8 +1196,8 @@ No migration and no `CRYPTO_CORE_VERSION` bump — nothing stored changed shape.
 **Committed straight to `main`** (`b1e7856`, at the user's direction — no
 branch this time), with all four suites — backend **544**, frontend **223**,
 crypto-core **57**, extension **96** — both builds and every lint/format/drift
-gate green. **Not pushed yet**, so neither GitHub Actions workflow has run over
-it.
+gate green. ~~**Not pushed yet**~~ — pushed later: `origin/main` reached
+`238ee15`, which contains `b1e7856` (checked 2026-10-12, lot 10).
 
 **M-1 is the second finding closed from the 2026-09-11 independent audit**
 (H-1 was fixed during the audit itself). M-2…M-6 and F-1…F-10 are still open;
@@ -1217,8 +1222,8 @@ single crypto-core **3.0.0** cutover (lots 4–6); hybridization is a later **4.
 | 6 | Web client trust UX | P1 | done — `34aeb32` |
 | 7 | Authorization, directory, data integrity | P1 | done — `f6a9e58` |
 | 8 | Realtime and push availability | P1 | done — `4967000` |
-| 9 | Operations: audit log, retention, backup, health, conversation deletion | P2 | done |
-| 10 | Assurance and documentation | P2 | |
+| 9 | Operations: audit log, retention, backup, health, conversation deletion | P2 | done — `9bbcc05` |
+| 10 | Assurance and documentation | P2 | done |
 | 11 | Hybridization, crypto-core 4.0.0 | P3 | **postponed** (2026-10-12, user's decision) — with lot 12's budget items |
 
 ### Lot 1 — supply chain
@@ -1674,3 +1679,39 @@ history).
 Backend 621 → **661**, SPA 265 → **270**, extension 125 → **127**, crypto-core
 64 → **67**. Twenty gates mutation-tested, all killed; the history filter was
 untested until its mutant survived, and has a test of its own now.
+
+### Lot 10 — assurance and documentation
+
+Closes the 2026-10-12 report's test-suite weaknesses, 2026-09-23 Q-7 and
+2026-09-11 Q-1, and corrects this file's drift.
+
+- **A browser end-to-end suite** (`e2e/`, Playwright 1.63, CI job `e2e`): the
+  real SPA, backend and **TrustKeys loaded unpacked into Chromium**. Alice signs
+  in through the extension, Bob through a local vault; they find each other in
+  the directory, message both ways (live, over the real WebSocket), and Alice
+  shares a secret Bob opens. Every approval window is clicked through and its
+  TEXT asserted on — "Sign in to Kryptolog at http://localhost:5174", "Decrypt".
+  Its own database (`kryptolog_e2e`, recreated per run) and Redis db 7
+  (flushed per run). ~10 s. **The CI job has not run yet** — nothing here has
+  been pushed — so expect the first push to need a fix, as every first push has.
+- **The first run found a real extension bug.** Approval windows are
+  positioned from the last-focused window, and Chrome refuses a window less
+  than half on-screen — which failed EVERY approval: no login, no signature, no
+  decryption. Reachable for a real user with a browser partly off a monitor.
+  `openTrackedWindow` retries unpositioned; covered in `approvals.test.js`,
+  mutation-tested.
+- **Real ML-DSA on the remaining signature-gated paths**
+  (`tests/test_real_signatures.py`): multisig approval (the owner's key, or the
+  wrong ciphertext, is refused) and conversation erase (an approval for another
+  conversation is a 401, a redaction signed by someone else a 400, and the
+  stored redaction verifies the way a reader's client checks it).
+- **Every route has a docstring** — 32 of 50 had none, and FastAPI publishes
+  them as `/docs`. `test_route_docs.py` fails on the next one.
+- **`ARCHITECTURE.md` and `THREAT_MODEL.md`**, new. The threat model starts
+  from the 10-12 audit's adversary table and says, per adversary, what changed
+  and what still does not hold — above all that the server still serves the
+  code, so a malicious operator is only partly contained.
+- Drift fixed here: two "Not pushed yet" notes (`origin/main` is at `238ee15`,
+  which contains both), the context file sizes, the extension KDF.
+
+Backend 661 → **668**, extension 127 → **128**.

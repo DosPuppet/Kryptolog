@@ -62,6 +62,9 @@ def create_group(
     current_user: models.User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
+    """Create a group with the caller as owner. At most MAX_GROUP_MEMBERS members,
+    the creator included. The name is an encrypted blob only members can read.
+    """
     member_addrs = list({addr.lower() for addr in data.member_addresses})
     if current_user.address not in member_addrs:
         member_addrs.append(current_user.address)
@@ -164,6 +167,9 @@ def list_groups(
     current_user: models.User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
+    """The caller's groups, most recently active first (paged), each with its last
+    message and unread count.
+    """
     # Most-recent-activity order and the page boundary are decided in SQL
     # (audit O-3): sorting the rows in Python after loading them would only
     # sort whichever arbitrary rows the page happened to contain.
@@ -250,6 +256,7 @@ def get_group(
     current_user: models.User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
+    """One group and its members. Members only."""
     channel = _load_channel_or_404(db, channel_id, with_users=True)
 
     if not authorization.is_group_member(db, channel_id, current_user.address):
@@ -271,6 +278,9 @@ def send_group_message(
     current_user: models.User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
+    """Post an end-to-end encrypted message to a group. Members only. Relayed to
+    every member over the WebSocket, and by push to those not in the app.
+    """
     channel = _load_channel_or_404(db, channel_id)
 
     if not authorization.is_group_member(db, channel_id, current_user.address):
@@ -325,6 +335,7 @@ def get_group_history(
     current_user: models.User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
+    """A group's messages, oldest first, paged from the newest. Members only."""
     if not authorization.is_group_member(db, channel_id, current_user.address):
         raise HTTPException(status_code=403, detail="Not a member of this group")
 
@@ -354,6 +365,9 @@ def add_member(
     current_user: models.User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
+    """Add a user to a group. Owner or admin. The caller re-wraps the group name
+    for the new member separately (`PUT /groups/{id}`).
+    """
     channel = _load_channel_or_404(db, channel_id)
 
     caller_member = authorization.find_group_member(db, channel_id, current_user.address)
@@ -516,6 +530,9 @@ def update_member_role(
     current_user: models.User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
+    """Make a member an admin or demote them. Owner only; the owner's own role
+    cannot be changed here.
+    """
     channel = _load_channel_or_404(db, channel_id, with_users=True)
 
     caller_member = authorization.find_group_member(db, channel_id, current_user.address)
@@ -576,6 +593,9 @@ def update_group(
     current_user: models.User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
+    """Replace a group's encrypted name — also how a name is re-wrapped after the
+    member set changes. Owner or admin.
+    """
     channel = _load_channel_or_404(db, channel_id, with_users=True)
 
     # Owner/admin, not owner-only — see can_administer_group for why (audit M-3).

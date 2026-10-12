@@ -1,5 +1,12 @@
 # End-to-end verification recipe
 
+> **Partly automated since 2026-10-12** (`e2e/`, CI job `e2e`): §1 with both
+> custody modes (TrustKeys and a local vault), §2 both directions, and §4's
+> live WebSocket delivery run on every push in real Chromium with the real
+> extension, plus a secret shared and opened. Everything else here — chunked
+> files, sign-out across tabs, extension lock, biometrics, nginx, deletion as
+> the OTHER account sees it — is still a manual pass, and still the gate.
+
 The manual pass that automated tests cannot replace. It has been open since the
 first audit (`audit/AUDIT-2026-09-03.md` §8 item 5) and is the gate before any
 real deployment.

@@ -88,22 +88,30 @@ export const openTrackedWindow = async (slot, route, params = {}) => {
         console.warn("Failed to calculate popup position", e);
     }
 
-    try {
-        const win = await chrome.windows.create({
-            url: queryString ? `index.html?${queryString}` : 'index.html',
-            type: 'popup',
-            width,
-            height,
-            left,
-            top,
-            focused: true,
-        });
-        state[slot] = win?.id ?? null;
-        return true;
-    } catch (e) {
-        console.warn("Failed to open window", e);
-        return false;
+    const base = {
+        url: queryString ? `index.html?${queryString}` : 'index.html',
+        type: 'popup',
+        width,
+        height,
+        focused: true,
+    };
+    // Positioned first; unpositioned if Chrome refuses the position. Chrome
+    // rejects a window less than half on-screen ("Invalid value for bounds"),
+    // and the position above is computed from the last-focused window, which
+    // can sit partly off a monitor. That refusal used to fail EVERY approval —
+    // no login, no signature, no decryption — with nothing the user could do.
+    // Found by the first browser end-to-end run, where headless Chromium's
+    // screen is smaller than its default window.
+    for (const opts of left === undefined ? [base] : [{ ...base, left, top }, base]) {
+        try {
+            const win = await chrome.windows.create(opts);
+            state[slot] = win?.id ?? null;
+            return true;
+        } catch (e) {
+            console.warn("Failed to open window", e);
+        }
     }
+    return false;
 };
 
 /** The extension popup — the unlock nudge, not an approval. */

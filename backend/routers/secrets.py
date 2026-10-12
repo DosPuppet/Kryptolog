@@ -149,6 +149,11 @@ def create_secret(
     current_user: models.User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
+    """Store a new encrypted secret and the caller's own wrapped key for it.
+
+    The server never sees the plaintext or the unwrapped key. Counted against
+    the caller's quota (413 when over).
+    """
     return create_secret_with_owner_grant(db, current_user, secret)
 
 
@@ -161,6 +166,9 @@ def get_secrets(
     current_user: models.User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
+    """The caller's own secrets, as summaries without their content (paged).
+    Fetch one with `GET /secrets/{id}` to get its ciphertext.
+    """
     # `encrypted_data` is deferred, not just absent from SecretSummaryResponse
     # (audit O-3). Dropping it in the schema alone would still have Postgres
     # ship every ciphertext to the worker for Pydantic to discard — the bytes
@@ -200,6 +208,9 @@ def update_secret(
     current_user: models.User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
+    """Replace a secret's encrypted name and content. Owner only; refused for a
+    secret a multisig workflow manages. Growth counts against the quota.
+    """
     secret = _load_secret(secret_id, current_user.address, db, authorization.can_manage_secret)
     _refuse_if_workflow_managed(db, secret_id, "edit")
 
@@ -227,6 +238,9 @@ def delete_secret(
     current_user: models.User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
+    """Delete a secret and every grant to it. Owner only; refused for a secret a
+    multisig workflow manages.
+    """
     secret = _load_secret(secret_id, current_user.address, db, authorization.can_manage_secret)
     _refuse_if_workflow_managed(db, secret_id, "delete")
 
@@ -246,6 +260,13 @@ def share_secret(
     current_user: models.User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
+    """Give another user access: their own wrapped copy of the secret's key,
+    optionally expiring (`expires_in`, seconds).
+
+    One grant per grantee: sharing again replaces the wrap and the expiry in
+    place. Sharing with yourself is refused, since it would replace the owner's
+    only copy of the key.
+    """
     grantee_address = authorization.normalize_address(grant.grantee_address)
 
     secret = _load_secret(
@@ -335,6 +356,9 @@ def revoke_grant(
     current_user: models.User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
+    """Revoke a grant: the owner revokes anyone's, a grantee may give up their own.
+    The owner's own grant cannot be revoked; delete the secret instead.
+    """
     grant = db.query(models.AccessGrant).filter(models.AccessGrant.id == grant_id).first()
     if not grant:
         raise HTTPException(status_code=404, detail="Grant not found")
@@ -375,6 +399,9 @@ def get_secret_access(
     current_user: models.User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
+    """Who holds a grant to this secret, and until when (paged). Owner only.
+    Expired grants are purged first.
+    """
     _load_secret(secret_id, current_user.address, db, authorization.can_manage_secret)
     authorization.purge_expired_grants(db, secret_id=secret_id)
 
@@ -397,6 +424,10 @@ def get_shared_secrets(
     current_user: models.User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
+    """Secrets other users shared with the caller, as summaries (paged). Expired
+    grants are purged first. A secret behind a multisig workflow is not listed
+    here at all: it is reached through `/multisig/workflows`.
+    """
     authorization.purge_expired_grants(db, grantee=current_user.address)
 
     return (

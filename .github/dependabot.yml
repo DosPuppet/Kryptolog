@@ -57,3 +57,11 @@ updates:
     groups:
       crypto-core:
         patterns: ["*"]
+
+  - package-ecosystem: npm
+    directory: /e2e
+    schedule:
+      interval: weekly
+    groups:
+      e2e:
+        patterns: ["*"]

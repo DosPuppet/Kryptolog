@@ -35,6 +35,12 @@ def create_transfer(
     current_user: models.User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
+    """Park an encrypted vault blob for a device-to-device transfer.
+
+    The blob is encrypted on the sending device under a passphrase carried out of
+    band; the server never sees it. Returns a short pickup id, valid for
+    KEY_TRANSFER_TTL_MINUTES and readable once.
+    """
     # Opportunistically purge expired rows so the table can't accumulate.
     # Naive UTC comparison to match the (timezone-less) column.
     db.query(models.KeyTransfer).filter(models.KeyTransfer.expires_at <= utcnow_naive()).delete()

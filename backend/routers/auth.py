@@ -23,6 +23,13 @@ router = APIRouter(prefix="/auth", tags=["auth"])
 @router.get("/nonce/{address}")
 @limiter.limit("10/minute")
 def get_nonce(request: Request, address: str, db: Session = Depends(get_db)):
+    """Issue a single-use login challenge for this address, valid five minutes.
+
+    Unauthenticated by necessity. Answers `nonce` and the server's `deployment`
+    id, both of which the client signs into the login body. Several challenges
+    may be live at once for one address, so a stranger cannot cancel someone
+    else's login by asking for a new one (audit H-1).
+    """
     # The address IS an ML-DSA-44 public key, so anything that is not one can
     # never produce a verifying signature and can never complete a login
     # (audit L-5). Checking the shape here stops an unauthenticated endpoint

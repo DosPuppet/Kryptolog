@@ -198,4 +198,5 @@ app.include_router(transfers.router)
 
 @app.get("/")
 def read_root():
+    """Liveness only. For readiness — database, Redis, realtime — use `/healthz`."""
     return {"status": "running"}

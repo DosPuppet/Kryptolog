@@ -1,0 +1,13 @@
+{
+  "name": "kryptolog-e2e",
+  "private": true,
+  "type": "module",
+  "description": "Browser + extension end-to-end tests (audit 2026-10-12: no automated browser test existed).",
+  "scripts": {
+    "pretest": "npm --prefix ../trustkeys run build:dev",
+    "test": "playwright test"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.63.0"
+  }
+}

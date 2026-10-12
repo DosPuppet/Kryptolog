@@ -29,6 +29,11 @@ def subscribe(
     current_user: models.User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
+    """Register this browser for push notifications.
+
+    The endpoint must be a public HTTPS host (SSRF guard). An account keeps at
+    most ten subscriptions; registering an eleventh drops the oldest.
+    """
     # Reject SSRF-capable endpoints at the door (KRY-002). The sender
     # re-validates too, since stored rows predate this check and DNS can move.
     try:
@@ -97,6 +102,9 @@ def unsubscribe(
     current_user: models.User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
+    """Remove one of the caller's push subscriptions. The endpoint travels in the
+    body: it is a capability URL, and query strings end up in logs.
+    """
     db.query(models.PushSubscription).filter(
         models.PushSubscription.user_address == current_user.address,
         models.PushSubscription.endpoint == body.endpoint,

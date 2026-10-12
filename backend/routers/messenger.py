@@ -44,6 +44,12 @@ def send_message(
     current_user: models.User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
+    """Send an end-to-end encrypted direct message.
+
+    The content is the client's signed payload; the server stores and relays it
+    without reading it. The recipient gets it over the WebSocket and, if the app
+    is not open, a push notification; the sender's other devices get it too.
+    """
     recipient_addr = msg.recipient_address.lower()
     # No client writes to itself, and it was the reflector half of audit
     # 2026-09-23 M-1: each self-DM made the server send a push to hosts the
@@ -199,6 +205,9 @@ def get_message_history(
     current_user: models.User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
+    """Direct messages between the caller and one partner, oldest first, paged
+    from the newest.
+    """
     partner_address = req.partner_address.lower()
 
     msgs = (
@@ -228,6 +237,7 @@ def mark_read(
     current_user: models.User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
+    """Mark every message from this partner to the caller as read."""
     partner_addr = partner_address.lower()
 
     # Mark all messages sent BY partner TO me as read

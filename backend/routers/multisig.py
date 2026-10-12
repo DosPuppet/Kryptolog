@@ -54,6 +54,13 @@ def create_multisig_workflow(
     current_user: models.User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
+    """Create an N-of-M workflow around a new secret.
+
+    Signers must each come with their own wrapped key (they review what they
+    approve); recipients' keys may be supplied now or by the completing signer.
+    The secret and the recipients' access are released only when `threshold`
+    signers have approved.
+    """
     # Everything is normalized, deduplicated and validated BEFORE anything is
     # written, and the whole workflow is one transaction (audit 2026-09-23
     # F-2). It used to be three commits: a signer listed twice in different
@@ -165,6 +172,9 @@ def list_multisig_workflows(
     current_user: models.User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
+    """Workflows the caller owns or signs, and completed ones they receive (paged),
+    without the secret's content.
+    """
     # One query, not three merged in Python (audit O-2/O-3). "Owner, signer, or
     # recipient of something completed" is the same rule `can_read_workflow`
     # applies to a single workflow, so it is spelled once in
@@ -241,6 +251,9 @@ def get_multisig_workflow(
     current_user: models.User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
+    """One workflow with its secret's ciphertext and the caller's wrapped key —
+    what a signer needs to review and approve it.
+    """
     wf = _load_workflow_or_404(db, workflow_id, with_secret=True)
 
     # Owner/signer always, recipient only once completed — the rule lives in
@@ -391,6 +404,12 @@ def sign_multisig_workflow(
     current_user: models.User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
+    """Approve a workflow with an ML-DSA signature over the workflow, its secret
+    and the SHA-256 of the stored ciphertext.
+
+    The signature that reaches the threshold completes the workflow and releases
+    the recipients' keys, in the same transaction.
+    """
     # Serialize concurrent signatures on this workflow (KRY-005).
     #
     # The quorum decision is read-then-write: without a lock, two signers can
@@ -513,6 +532,10 @@ def delete_multisig_workflow(
     current_user: models.User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
+    """Delete a workflow that has not completed, with the secret it carries.
+    Owner only. A completed workflow stays: the recipients' keys are their only
+    copy.
+    """
     wf = _load_workflow_or_404(db, workflow_id)
 
     if not authorization.can_delete_workflow(wf, current_user.address):

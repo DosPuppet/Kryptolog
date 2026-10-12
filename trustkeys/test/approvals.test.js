@@ -236,3 +236,29 @@ describe('the popup walks the queue', () => {
         await expect(only).resolves.toMatchObject({ success: false });
     });
 });
+
+describe('an approval window Chrome will not place', () => {
+    it('opens unpositioned instead of failing the request', async () => {
+        // Chrome refuses a window less than half on-screen, and the position
+        // is computed from the last-focused window. That refusal used to fail
+        // every approval — found by the first browser end-to-end run.
+        const h = await bootWithVault({ connect: [SITE] });
+        const create = h.chrome.windows.create.getMockImplementation();
+        h.chrome.windows.create.mockImplementation(async (opts) => {
+            if (opts.left !== undefined) {
+                throw new Error('Invalid value for bounds. Bounds must be at least 50% within visible screen space.');
+            }
+            return create(opts);
+        });
+
+        const { answer } = await askToSign(h);
+        expect(h.state.pendingRequests.size).toBe(1);
+        expect(h.state.approvalWindowId).toBe(h.lastWindowId());
+        expect(h.chrome.windows.create).toHaveBeenLastCalledWith(
+            expect.not.objectContaining({ left: expect.anything() })
+        );
+
+        h.approvals.rejectAllApprovals('test');
+        await answer;
+    });
+});

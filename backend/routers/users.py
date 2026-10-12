@@ -28,6 +28,9 @@ def update_user(
     current_user: models.User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
+    """Change the caller's own username. Case-insensitively unique, NFKC-normalized,
+    and refused when it mixes scripts.
+    """
     if current_user.address.lower() != address.lower():
         raise HTTPException(status_code=403, detail="Not authorized to update this user")
 
@@ -81,6 +84,10 @@ def get_user(
     current_user: models.User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
+    """One directory record by exact address, including a deleted identity
+    (marked `deleted`, without its name), so a message that names it can say
+    "user removed".
+    """
     # Deliberately answers for a DELETED identity too, marked `deleted` by the
     # response model. This is the directory half of the rule in
     # security/authorization.py: a message or a group that still names the
@@ -155,6 +162,9 @@ def resolve_user(
     current_user: models.User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
+    """Like `GET /users/{address}`, with the address in the body for addresses
+    too long for comfortable URLs.
+    """
     # Exact-match resolve of a user by their identity public key. Auth-gated.
     # Addresses are stored lowercased, so normalize the query (matches get_user).
     # Like GET /{address}, this answers for a deleted identity so the caller can
