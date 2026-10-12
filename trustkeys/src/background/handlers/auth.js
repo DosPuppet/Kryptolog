@@ -50,8 +50,8 @@ export const unlock = async (password) => {
 
     try {
         // Derive ONCE here and cache the key for the session, so every later
-        // save reuses it instead of re-running the deliberately-slow 600k-iter
-        // PBKDF2. The raw bytes are kept alongside the CryptoKey because only
+        // save reuses it instead of re-running the deliberately slow Argon2id
+        // KDF. The raw bytes are kept alongside the CryptoKey because only
         // they can survive a service-worker restart (audit M-4).
         // Parameters from the blob itself (crypto-core 3.0.0).
         const kdf = vaultKdfOf(vaultData);
@@ -79,8 +79,8 @@ export const unlockWithSession = async (password) => {
 
 /**
  * Resume an unlocked session after a service-worker restart, from the cached key
- * bytes rather than a stored password (audit M-4). Also skips PBKDF2 entirely,
- * so a restart is instant instead of 600k iterations.
+ * bytes rather than a stored password (audit M-4). Also skips the KDF entirely,
+ * so a restart is instant instead of a fresh Argon2id derivation.
  */
 export const restoreSession = async () => {
     const session = await readSession();

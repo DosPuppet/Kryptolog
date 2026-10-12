@@ -97,9 +97,32 @@ explicitly:
   Mint codes with `cd backend && python generate_invites.py`, which refuses to run
   until migrations are applied.
 - `ALLOWED_ORIGINS` — the SPA origin. The WebSocket Origin check accepts every
-  origin when this list is empty.
+  origin when this list is empty, and a login may only be signed for an origin
+  on it.
+- `KRYPTOLOG_DEPLOYMENT_ID` — this server's name inside every login and deletion
+  signature (`init_env.sh` generates one). A signature made for another server
+  is refused.
 
+A malformed `KRYPTOLOG_MESSAGE_RETENTION_DAYS` refuses to start in every mode.
 `/docs`, `/redoc` and `/openapi.json` are not served in production.
+
+## Deploying an update
+
+- **Ship the SPA, the extension and the server together.** Signed bodies,
+  envelopes and several request shapes change between versions, and an old
+  client against a new server fails — sometimes silently (an old SPA shows
+  secrets it cannot decrypt).
+- **Migrations run before serving**: both `serve.sh` and `start_all.sh` apply
+  `alembic upgrade head` and refuse to start if it fails. Back up first
+  (`scripts/backup.sh`).
+- **crypto-core 3.0.0 was a clean break** (October 2026): nothing written by an
+  earlier version opens or verifies — messages, wrapped keys, file chunks, local
+  and extension vaults, `.kvault` backups. There is no migration path; a
+  deployment holding 2.x data starts from an empty database, and users recreate
+  their vaults. 3.1.0 is additive.
+- **TrustKeys production build** injects into no site by default: each user adds
+  the SPA's HTTPS origin under Settings → Manage Trusted Sites. The `build:dev`
+  variant (localhost trusted, silent chat signing) is for development only.
 
 ### Storage
 

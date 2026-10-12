@@ -41,7 +41,8 @@ server-interop guard, and a `CRYPTO_CORE_VERSION` check) rather than by a commen
 ### 2. The Secure Vault
 - **Zero-Knowledge Architecture**: Your private keys never leave the extension.
 - **Encryption**: The vault is encrypted at rest using **AES-GCM (256-bit)**.
-- **Key Derivation**: Your password derives the encryption key using **PBKDF2** (SHA-512, 600,000 iterations).
+- **Key Derivation**: Your password derives the encryption key using **Argon2id** (46 MiB, one pass — the parameters travel in the vault, so they can be raised without a format change). The password must be at least 12 characters and not a sequence or a well-known password; the same rule applies to backup passphrases.
+- **Format**: crypto-core 3.x. A vault or backup made before 3.0.0 is refused by name ("older Kryptolog version"); recreate it.
 - **Memory-Only Decryption**: Private keys are decrypted into memory *only* when the vault is unlocked.
 - **Session Persistence**: The vault remains unlocked for **1 Hour** of inactivity, via a session secret in `chrome.storage.session` (in-memory), which is **automatically wiped** when the browser is closed.
 
@@ -59,6 +60,13 @@ TrustKeys enforces a strict "user consent, least-privilege" model similar to a w
   approval popup — **except** silent chat-message signing, which is an **opt-in per-site
   capability** (default OFF). Even when enabled it can only produce `message`-domain
   signatures (never a login, multisig, or document signature).
+- **The extension builds what it signs.** A page cannot hand over a login challenge, a
+  deletion or a multisig approval as a string: those have typed calls (below), and
+  TrustKeys builds the signed body itself — with the origin Chrome reports for the page, so
+  a site can only ever sign in to itself — and the approval window says in words what is
+  being signed, with the exact bytes one click away.
+- **Internal-only operations**: unlocking, locking, setting the password and the vault
+  status can only be asked for by the extension's own pages, never by a site.
 - **Trusted Sites Management**: authorized origins are stored in the encrypted vault, shown
   in Settings, and can be added/removed (with their host permission and capabilities). The
   trust list is reconciled on startup against actually-granted permissions.
@@ -79,8 +87,11 @@ TrustKeys enforces a strict "user consent, least-privilege" model similar to a w
    ```
 3. Build the extension:
    ```bash
-   npm run build
+   npm run build:dev   # local development: http://localhost and 127.0.0.1 trusted by default
+   npm run build       # production: no site is trusted until you add it (HTTPS only)
    ```
+   The production build also prompts for every chat-message signature unless the site
+   is granted silent message signing.
 4. Load into Chrome/Brave/Edge:
    - Go to `chrome://extensions`
    - Enable **Developer Mode**
@@ -102,16 +113,17 @@ TrustKeys enforces a strict "user consent, least-privilege" model similar to a w
 Alternatively, add sites manually from **Settings > Manage Trusted Sites**.
 
 ### Demo page
-`trustkeys-demo/index.html` is a dependency-free manual test harness that
-exercises every method on `window.trustkeys`. Serve it from a port the
-extension trusts and open it in the browser:
+`trustkeys-demo/index.html` (at the repository root) is a dependency-free manual
+test harness that exercises the generic methods on `window.trustkeys`. Serve it on
+localhost with a `build:dev` extension and open it in the browser:
 
 ```bash
-python3 -m http.server 5173 --directory trustkeys-demo
+python3 -m http.server 5173 --directory ../trustkeys-demo
 ```
 
-It is the only end-to-end exercise of the connect and authorize flow, which
-has no automated coverage.
+The connect, sign-in, signing and decryption flows are also covered automatically,
+with the extension loaded unpacked into Chromium, by the end-to-end suite in
+[`../e2e`](../e2e).
 
 ---
 
@@ -283,10 +295,10 @@ const keys = await window.trustkeys.unwrapManySessionKeys([blob1, blob2, blob3])
 | Crypto core | `@kryptolog/crypto-core` (shared with the web app, `file:` dep) |
 | PQC Encryption | @noble/post-quantum — ML-KEM-768 (FIPS 203) |
 | PQC Signatures | @noble/post-quantum — ML-DSA-44 (FIPS 204) |
-| Vault | AES-256-GCM encrypted storage |
+| Vault | AES-256-GCM under Argon2id |
 | Dynamic Scripts | chrome.scripting API |
 
 ---
 
 ## Disclaimer
-This software implements NIST-standardized post-quantum algorithms (FIPS 203/204) via `@noble/post-quantum`, which has been formally audited. The broader application (vault storage, key management, authorization flows) has not undergone an independent security audit. Use for testing and development purposes only.
+This software implements NIST-standardized post-quantum algorithms (FIPS 203/204) via `@noble/post-quantum`. That library is self-audited and makes no side-channel claims; it has not had an independent third-party audit, and neither has this extension. Use for testing and development purposes only.

@@ -10,10 +10,16 @@ Monorepo, four parts:
 
 | Path | What |
 |---|---|
-| `backend/` | FastAPI + SQLAlchemy + Alembic, PostgreSQL. Routers in `routers/`, shared security rules in `security/` (`authorization.py`, `crypto_validation.py`, `url_guard.py`, `usernames.py`). |
+| `backend/` | FastAPI + SQLAlchemy + Alembic, PostgreSQL. Routers in `routers/`, shared security rules in `security/` (`authorization.py`, `crypto_validation.py`, `url_guard.py`, `usernames.py`, `quota.py`, `body_limit.py`, `audit_log.py`, `request_audit.py`). Deletion of history in `account_deletion.py` and `retention.py`. |
 | `frontend/` | React 19 SPA (Vite). Messenger state is split under `src/context/messenger/`. |
 | `trustkeys/` | MV3 browser extension — the key custodian. Service worker under `src/background/`. |
 | `packages/crypto-core/` | `@kryptolog/crypto-core`: one copy of every crypto primitive, consumed by **both** clients via a `file:` dependency. Split into `encoding`/`signing`/`pqc`/`aead`/`vault`/`webauthn`, all re-exported from `src/index.js` — import the package root, never a submodule. |
+| `e2e/` | Playwright suite: the real SPA, backend and TrustKeys (unpacked) in Chromium, on its own database. |
+| `scripts/` | `init_env.sh` (generates `backend/.env`), `build_liboqs.sh` (pinned liboqs), `backup.sh` / `restore.sh`, `load_env.sh`. |
+
+Reader-facing documentation: `README.md`, `ARCHITECTURE.md`, `THREAT_MODEL.md`,
+`DEPLOYMENT.md`, `E2E-RECIPE.md` (the manual pass), `trustkeys/README.md`. This file
+is the working log.
 
 `crypto-core` exists so the SPA and the extension can never drift apart on wire format.
 Byte-for-byte compatibility is enforced by golden vectors in CI, not by a "keep in sync"
@@ -80,14 +86,18 @@ real path and then needs `@noble/post-quantum` next to it, so run `npm ci` insid
 
 ## Untracked files
 
-Two things are deliberately **not** in git, so a fresh clone will be missing them:
+The audit reports are deliberately **not** in git, so a fresh clone will be
+missing them (all in French):
 
-- `AUDIT.md` — the full security audit (2026-09-01, French).
-- `audit/AUDIT-2026-09-03.md` — the follow-up audit (French). `roadmap/` is gone;
-  every item in it landed.
+- `AUDIT.md` — the first full security audit (2026-09-01).
+- `audit/AUDIT-2026-09-03.md` — its follow-up. `roadmap/` is gone; every item landed.
+- `audit/AUDIT-2026-09-11-independent.md`, `audit/AUDIT-2026-09-12-account-deletion.md`,
+  `audit/AUDIT-2026-09-23-complet.md`, `audit/AUDIT-2026-10-12-full.md` — the later
+  audits, with their probes in `audit/probes/`.
 
-Both enumerate not-yet-fixed findings, which is why they stay local. Copy them across
-machines out of band. The status table below is the tracked substitute.
+They enumerate findings, including any still open, which is why they stay local.
+Copy them across machines out of band. The status tables in this file are the
+tracked substitute.
 
 ## Remediation status — 2026-09-01 audit
 
@@ -254,9 +264,11 @@ for the column object's truthiness and builds a different query.
 - **The external `CHECK_CONNECTION` arm** answers `connected: true`
   unconditionally with a hardcoded version, and has no in-repo caller. Left
   alone because `externally_connectable` is by definition callable from outside
-  this repo. Worth a decision.
+  this repo. Worth a decision. *(Decided 2026-10-12, lot 5: removed, with
+  `externally_connectable` itself.)*
 - **37 of 44 route handlers still have no docstring**, which is also the whole
   `/docs` surface, since FastAPI publishes them as the OpenAPI description.
+  *(Fixed 2026-10-12, lot 10: all 50 have one, and `test_route_docs.py` gates it.)*
 
 ### Found by the manual pass — PQC envelope size bounds
 
@@ -288,7 +300,8 @@ dropped from the message on purpose — it echoes the whole blob.
 
 Still open: the message composer has no `maxLength`, so text past
 `MAX_MESSAGE_TEXT_CHARS` (10 000) is refused by the server rather than by the
-textarea. Readable now, but better caught client-side.
+textarea. Readable now, but better caught client-side. *(Still true on
+2026-10-12.)*
 
 ### Found by the manual pass — datetimes lost their UTC marker on the wire
 
@@ -523,12 +536,15 @@ names go through the M-3 encrypted-name path, which is a different mechanism.
 
 ### Still open from the remediation
 
-- **End-to-end recipe not run.** The steps now live in a tracked checklist,
+- **End-to-end recipe not run.** *(Since 2026-10-12 its critical path is
+  automated in `e2e/`; the rest is still manual — see the top of the recipe.)*
+  The steps now live in a tracked checklist,
   `E2E-RECIPE.md`, ordered by untested risk and saying what each step proves.
   It needs a running stack and a browser. Do this before any real deployment.
   The stack on the dev box is re-seeded and ready for it (empty database,
   persistent JWT secret, `REDIS_URL` set).
-- **The cutovers are cumulative, and there are six of them.** `CRYPTO_CORE_VERSION`
+- **The cutovers are cumulative, and there are six of them.** *(Seven since
+  crypto-core 3.0.0, lot 4 of the 2026-10-12 remediation; 3.1.0 is additive.)* `CRYPTO_CORE_VERSION`
   went 1.3.0 → 2.0.0, and the count is one higher than the version list suggests:
   the HKDF derivation of the AES key from the ML-KEM shared secret (audit S5,
   `KEM_KDF_INFO` in `pqc.js`) was a wire break that landed before `CHANGELOG.md`
@@ -539,7 +555,9 @@ names go through the M-3 encrypted-name path, which is a different mechanism.
   vault blob, so existing local vaults and `.kvault` backups no longer open.**
   That last one is key custody, not just wire format. Fine for a pre-production
   system; a decision to re-take explicitly if there is ever real data.
-- **Nothing can detect old data.** No version marker is persisted anywhere, and
+- **Nothing can detect old data.** *(Fixed by crypto-core 3.0.0: every envelope
+  carries `v` and an algorithm id, and decoders refuse older data by name.)*
+  No version marker is persisted anywhere, and
   neither client reads `CRYPTO_CORE_VERSION` — its only consumer is a test
   assertion. Old rows therefore fail as an opaque `OperationError`, or worse: a
   pre-1.4.0 message renders with an **invalid-signature badge** indistinguishable

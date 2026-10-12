@@ -11,7 +11,7 @@ const writeVault = async (key, kdf) => {
 /**
  * Save under a freshly derived key. Only for the two places that legitimately
  * hold a password — initial setup and vault import — because it pays the
- * deliberately-slow 600k-iteration PBKDF2 every time.
+ * deliberately slow vault KDF (Argon2id, 46 MiB) every time.
  *
  * Re-caches the result as the session key, so the in-memory key never goes stale
  * against the salt just written to disk.

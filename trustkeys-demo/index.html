@@ -268,8 +268,8 @@
         <div class="card">
             <h2>Sign & Verify <span class="tag tag-sign">ML-DSA</span></h2>
             <p class="note">
-                <span class="api-method">sign(message)</span> &rarr; ML-DSA signature (hex) with popup<br>
-                <span class="api-method">signMessage(message)</span> &rarr; ML-DSA signature (hex) silent if authorized (message context only)<br>
+                <span class="api-method">sign(message)</span> &rarr; ML-DSA signature (base64) with popup<br>
+                <span class="api-method">signMessage(message)</span> &rarr; ML-DSA signature (base64) silent if authorized (message context only)<br>
                 <span class="api-method">verify(message, signature, publicKey)</span> &rarr; boolean
             </p>
 
@@ -282,7 +282,7 @@
                 <button onclick="doVerify()" class="success">Verify Signature</button>
             </div>
 
-            <label>Signature (hex)</label>
+            <label>Signature (base64)</label>
             <textarea id="signatureOutput" rows="3" readonly></textarea>
 
             <div id="verifyOutput" class="output"></div>
@@ -505,7 +505,7 @@
                 log('Calling getKeyAttestation()...');
                 const attestation = await window.trustkeys.getKeyAttestation();
                 log('getKeyAttestation() OK', 'success');
-                showResult('detectionOutput', `ML-KEM Key Attestation Signature (hex):\n${attestation}`);
+                showResult('detectionOutput', `ML-KEM Key Attestation Signature (base64):\n${attestation}`);
             } catch (e) {
                 log(`getKeyAttestation() error: ${e.message}`, 'error');
                 showResult('detectionOutput', e.message, true);
@@ -521,7 +521,7 @@
                 log(`Calling sign("${message.slice(0, 40)}${message.length > 40 ? '...' : ''}")...`);
                 const signature = await window.trustkeys.sign(message);
                 document.getElementById('signatureOutput').value = signature;
-                log(`sign() OK — ${signature.length} hex chars`, 'success');
+                log(`sign() OK — ${signature.length} base64 chars`, 'success');
                 showResult('verifyOutput', `Signature produced (${signature.length / 2} bytes)`);
             } catch (e) {
                 log(`sign() error: ${e.message}`, 'error');
@@ -551,7 +551,7 @@
                 // Keep the input value in sync if we modified it
                 document.getElementById('signInput').value = message;
 
-                log(`signMessage() OK — ${signature.length} hex chars`, 'success');
+                log(`signMessage() OK — ${signature.length} base64 chars`, 'success');
                 showResult('verifyOutput', `Signature produced (${signature.length / 2} bytes)`);
             } catch (e) {
                 log(`signMessage() error: ${e.message}`, 'error');

@@ -4,12 +4,12 @@ export const state = {
     vault: null,
 
     // The unlocked vault's encryption key (audit M-4). The PASSWORD is
-    // deliberately NOT here and not in chrome.storage.session: it is the PBKDF2
+    // deliberately NOT here and not in chrome.storage.session: it is the KDF
     // input, it outlives any salt change, and it is what a user is likely to
     // have reused elsewhere. These two are equivalent for opening this vault and
     // useless for anything else. See background/session.js.
     //
-    // The PBKDF2 KDF is deliberately slow (600k iters), so it runs once at
+    // The KDF is deliberately slow (Argon2id, 46 MiB), so it runs once at
     // unlock and every subsequent save reuses the cached key.
     vaultKey: null,       // non-extractable CryptoKey, for encrypt/decrypt
     vaultKeyBytes: null,  // the same key raw, so it survives a worker restart

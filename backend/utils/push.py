@@ -107,11 +107,9 @@ def notify_user_push(db, user_address, title, body, data=None):
     Skips sending if the user has an active WebSocket connection (app is open).
 
     BLOCKING: this does DNS resolution, a presence lookup and one outbound
-    HTTPS request per subscription. It is safe to call directly from a sync
-    (`def`) endpoint — Starlette already runs those in a worker thread — but an
-    async (`async def`) endpoint MUST use `notify_user_push_async` instead, or
-    the whole event loop (every request and every WebSocket on this worker)
-    stalls for the duration.
+    HTTPS request per subscription. Routes never call it: they queue through
+    `schedule_push(es)` below, which runs it on the push pool with its own
+    Session (audit 2026-09-23 M-1).
     """
     import models
     from websocket_manager import manager

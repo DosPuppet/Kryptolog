@@ -2,6 +2,8 @@
 
 A secure secret management and document signing platform built on **NIST FIPS post-quantum cryptography** — ML-KEM-768 (FIPS 203) and ML-DSA-44 (FIPS 204).
 
+For how the pieces fit together read [ARCHITECTURE.md](ARCHITECTURE.md); for what is and is not protected, [THREAT_MODEL.md](THREAT_MODEL.md); before exposing it to anyone, [DEPLOYMENT.md](DEPLOYMENT.md).
+
 Crypto runs on standards-based open-source libraries: [`@noble/post-quantum`](https://github.com/paulmillr/noble-post-quantum) in the browser and extension (pure TS, no WASM), and [`liboqs`](https://github.com/open-quantum-safe/liboqs-python) in the backend (in-process, no sidecar). Neither has had an independent third-party audit: `@noble/post-quantum` is self-audited and makes no side-channel claims, and the liboqs maintainers advise against production use without a hybrid classical algorithm. Byte-for-byte agreement between the two is proven in CI; the libraries themselves are trusted, not verified, by this project.
 
 ---
@@ -16,7 +18,9 @@ kryptolog/
 ├── packages/
 │   └── crypto-core/    Shared crypto package — single source of truth for every
 │                       wire/storage primitive (consumed by SPA + extension)
-└── docker-compose.yml  Local PostgreSQL 16 + Redis 7 for dev + tests
+├── e2e/                Playwright end-to-end suite: real Chromium + the extension
+├── scripts/            init_env.sh, build_liboqs.sh, backup.sh / restore.sh
+└── docker-compose.yml  Local PostgreSQL 16 + Redis 7 (loopback only) for dev + tests
 ```
 
 ```
@@ -50,21 +54,23 @@ Two app processes run locally — the FastAPI API and the Vite dev server — on
 
 | Feature | Description |
 |---------|-------------|
-| **Post-Quantum Authentication** | TrustKeys / local-vault ML-DSA-44 login-challenge signatures; the server then issues an HS256 session JWT |
+| **Post-Quantum Authentication** | TrustKeys / local-vault ML-DSA-44 login-challenge signatures, bound to this server's origin and deployment id; the server then issues a 30-minute HS256 session JWT, revocable (sign-out ends every session and hangs up their sockets) |
 | **Post-Quantum Cryptography** | ML-KEM-768 (FIPS 203) + ML-DSA-44 (FIPS 204), via `@noble/post-quantum` (clients) and `liboqs` (server) |
 | **Secret Vault** | E2EE secrets with hybrid encryption (ML-KEM-768 KEM + AES-GCM) — **including entry titles** (the server stores only ciphertext names) |
 | **File Vault** | Chunked encrypted file upload/download (up to 50 MB) |
 | **Secure Sharing** | Re-wrap session keys for any recipient (ML-KEM-768) |
-| **Timebomb Access** | Share secrets with self-destruct timers (ephemeral grants) |
+| **Timebomb Access** | Share secrets with self-destruct timers (ephemeral grants); one grant per person, re-sharing replaces it |
 | **Signed Documents** | Create, share, and verify digitally signed documents (sign-then-encrypt) |
-| **Multisig Workflows** | Configurable **N-of-M approval quorum** — an approval workflow, not a cryptographic threshold: every listed signer already holds the secret, and the **server** withholds it from the destination recipient until any N of the M signers approve (N = M gives classic N-of-N). The completing approval re-wraps the key for the recipient; signing closes once the quorum is met; any signer can **reject** to block the workflow, after which the owner can **delete** it. |
-| **E2EE Messenger** | Post-quantum end-to-end encryption: AES-256-GCM session keys encapsulated with ML-KEM-768 per conversation session (renewed on group membership changes), **per-message ML-DSA-44 signatures verified client-side** (authorship is proven, not asserted by the server), zero-knowledge relay (server stores/forwards only ciphertext). PQC auth only. |
+| **Multisig Workflows** | Configurable **N-of-M approval quorum** — an approval workflow, not a cryptographic threshold: every listed signer holds the secret (each needs a wrapped key, so nobody approves blind), and the **server** withholds it from the recipients until any N of the M signers have signed the hash of the stored ciphertext (N = M gives classic N-of-N). Recipients' keys are stored withheld at creation or supplied by the completing signer; any signer can **reject** to block the workflow, after which the owner can **delete** it. |
+| **E2EE Messenger** | Post-quantum end-to-end encryption: each sender's AES-256-GCM session key, encapsulated with ML-KEM-768 for every recipient and **rotated after 100 messages or 24 h** (and on group membership changes); **per-message ML-DSA-44 signatures over the content, its position and its time, verified client-side** — authorship, replays, gaps and reordering are detected, and an unverifiable message is hidden until the reader chooses to see it. Content-blind relay. |
 | **Group Channels** | Multi-user encrypted group chat with owner/admin/member roles; **session key rotates on membership change** (removed members can't read future messages). |
-| **Peer Key Verification** | Contacts' encryption keys carry a **self-signed attestation** (signed by their identity key) verified client-side before anything is encrypted to them — a lying key directory fails verification. Safety-number fingerprints cover the out-of-band identity check, and a TOFU store flags key changes. |
-| **Push Notifications** | Web Push API (VAPID) for real-time alerts |
-| **Hardened Local Vault** | AES-256-GCM + PBKDF2-SHA-512 (600k iterations) for browser-stored keys |
+| **Peer Key Verification** | Every encryption key carries a **mandatory self-signed attestation** (signed by the identity key), verified client-side before anything is encrypted to it — a substituted key fails. Each conversation shows a **safety number**, and a contact's key that changed since you last confirmed it **stops sending** until you verify and accept it. The trusted keys travel with your backups. |
+| **Push Notifications** | Web Push API (VAPID) for real-time alerts; sent off the request path, at most ten subscriptions per account |
+| **Hardened Local Vault** | AES-256-GCM under an **Argon2id** key (46 MiB per guess), 12-character password minimum, for browser-stored keys |
 | **Device Key Transfer** | Move keys to another device via a one-time QR / transfer code (encrypted relay, single-use, ~10 min TTL) or a passphrase-encrypted `.kvault` backup file. The decryption secret never reaches the server. |
-| **User Profiles** | Manage usernames and PQC identities |
+| **User Profiles** | Manage usernames and PQC identities. The directory is search-only (no listing of all users) |
+| **Deletion** | Delete your account — **leave** (reversible: log back in with the same keys) or **erase** (final). Delete a conversation — hide it from your view on all devices, and optionally **erase your own messages in it** for everyone. Erasing is signed, and never takes the other side's messages |
+| **Operations** | Structured security audit log (`kryptolog.audit`, JSON), `GET /healthz`, tested backup/restore scripts, optional message retention — see [DEPLOYMENT.md](DEPLOYMENT.md) |
 
 ### A note on the messenger's security properties
 
@@ -72,23 +78,27 @@ The messenger uses **hybrid encryption** (an ML-KEM-768 encapsulation per sessio
 wrap a fresh AES-256-GCM session key), a **content-blind server** that only ever sees
 ciphertext, and **per-message ML-DSA-44 signatures**: every DM and group message is signed by
 the sender and **verified client-side** against the sender's public key, so authorship is
-*proven*, not merely asserted by the server. The UI flags any message whose signature fails.
+*proven*, not merely asserted by the server. The signature also covers the message's sequence
+number and timestamp, so a replayed, dropped or reordered message is flagged; a message whose
+signature fails is hidden until the reader explicitly reveals it.
 
 **Key-directory trust**: the server is the directory for contacts' encryption keys, so it is
 the natural place for a key-substitution attack. Three client-side defenses stack against it:
-(1) every identity **self-signs its own ML-KEM key** (attestation) and clients verify that
-binding before wrapping anything to the key — a substituted key fails cryptographically;
-(2) **safety numbers** let two users compare fingerprints out of band to confirm the identity
-itself; (3) a local **TOFU store** flags any key change since last contact. First contact with
-an unattested legacy account still trusts the directory.
+(1) every identity **self-signs its own ML-KEM key** (attestation) — mandatory: the server
+refuses a key without one, and clients refuse to encrypt to one that does not verify;
+(2) **safety numbers** in every conversation let two users compare fingerprints out of band;
+(3) a local **TOFU store** remembers the key you last confirmed, and a change **blocks
+sending** until you check the new safety number and accept it.
 
-**Group forward secrecy on membership change**: the group session key is rotated when a member
-is added or removed, so a removed member cannot read future messages and an added member cannot
-read prior history.
+**Session rotation**: every sender's session key is replaced after 100 messages or 24 hours,
+and a group's whenever a member is added or removed — a removed member cannot read later
+messages, an added one cannot read earlier history.
 
-It is still **not** a full ratcheting protocol: within a session, messages are encrypted under a
-long-term-key-derived session key, so it does **not** yet provide per-message **forward secrecy**
-or **post-compromise security** against compromise of a long-term private key.
+It is still **not** a ratcheting protocol: a session key is wrapped to each participant's
+long-term ML-KEM key, so a compromised long-term key opens every wrap ever sent to it. There is
+**no forward secrecy or post-compromise security** against that; rotation only bounds what one
+leaked *session* key exposes. Deployments can also purge old messages (retention, off by
+default).
 
 **Metadata**: "zero-knowledge" means content-blind, not metadata-blind. **Entry titles are
 E2EE** — secret names travel encrypted under the item's own key (so exactly the people with
@@ -106,10 +116,10 @@ state.
 
 | Tool | Version | Notes |
 |------|---------|-------|
-| **Python** | 3.10+ | Backend API |
+| **Python** | 3.12 | Backend API. The hashed lock is compiled for 3.12, which CI uses |
 | **Docker** | Any recent | Easiest way to run PostgreSQL + Redis locally (`docker compose`). Not needed if you point the backend at external instances. |
 | **CMake + C compiler** | Latest | Required to build `liboqs` (the backend's PQC library). `pip install cmake` works; any system `gcc`/`clang` is fine. |
-| **Node.js** | 22.x | Frontend + extension build |
+| **Node.js** | 22.x | Frontend, extension and e2e builds |
 | **npm** | 10.x | Comes with Node.js |
 | **Chrome / Brave** | Latest | Required for TrustKeys extension |
 
@@ -154,19 +164,13 @@ pip install --require-hashes -r requirements.txt   # hashed lock, compiled from 
 > itself, the binding would instead clone and compile an unpinned copy at first
 > import; `serve.sh` refuses to start without the pinned library.
 
-Generate the JWT signing secret (HS256 — server-issued, server-verified, no
-keypair needed) and paste the printed line into `backend/.env`:
+`init_env.sh` already generated the JWT signing secret (`KRYPTOLOG_JWT_SECRET`,
+HS256) and the deployment id. To rotate the secret later, `python
+generate_server_keys.py` prints a new one; doing so signs everyone out.
 
-```bash
-python generate_server_keys.py
-# -> KRYPTOLOG_JWT_SECRET=...   (treat like any production secret)
-```
-
-If unset, the backend falls back to an **ephemeral** secret — fine for a quick
-local run, but every JWT becomes invalid on restart. Required in production.
-
-**Optional — invite-gated signups:** set `KRYPTOLOG_REQUIRE_INVITE=true` in
-`backend/.env` and seed codes:
+**Invite-gated signups** are on in the generated file
+(`KRYPTOLOG_REQUIRE_INVITE=true`). Seed codes before creating the first account,
+or set it to `false` for local development:
 
 ```bash
 python generate_invites.py              # 1 single-use code
@@ -193,7 +197,8 @@ npm install
 ```bash
 cd ../trustkeys
 npm install
-npm run build
+npm run build:dev   # local development: trusts http://localhost, signs chat messages silently
+npm run build       # production: injects into no site until you add it (HTTPS only)
 ```
 
 Then load in Chrome/Brave:
@@ -211,12 +216,16 @@ Then load in Chrome/Brave:
 ./start_all.sh
 ```
 
-The script starts the compose Postgres + Redis (skipped for external
-`DATABASE_URL` / missing Docker), installs PM2 and frontend dependencies if
-needed, builds the frontend for preview, and launches both services under PM2.
+The script generates `backend/.env` on first run, starts the compose Postgres +
+Redis (skipped for external `DATABASE_URL` / missing Docker), builds the pinned
+liboqs if needed, installs PM2 and frontend dependencies, builds the frontend if
+`dist/` is absent, applies migrations, and launches both services under PM2 —
+all bound to `127.0.0.1`. **Activate the venv first**: it installs with whatever
+`python3` is on `PATH`.
 
 Manage with: `pm2 status` · `pm2 logs` · `pm2 monit` · `pm2 stop all`.
-The app is served at `http://localhost:5173/`.
+The app is served at `http://localhost:5173/` (a local `vite preview`; production
+serves `frontend/dist` from the reverse proxy — see DEPLOYMENT.md).
 
 ### Manual startup (development)
 
@@ -239,6 +248,7 @@ cd frontend && npm run dev
 | `/secrets` | Secret vault (default authenticated view) |
 | `/multisig` | Multisig workflows |
 | `/messenger` | E2EE messenger |
+| `/receive` | Receive keys from another device (QR / code / backup file) |
 | `/proof-audit` | Offline proof verifier — upload a `.kryptolog-proof.json` to cryptographically verify its ML-DSA-44 signature(s), then check the original text/file(s) against the signed SHA-256 hash. All verification runs client-side |
 
 ---
@@ -269,12 +279,15 @@ other people, read [DEPLOYMENT.md](DEPLOYMENT.md) first.
 | `TEST_DATABASE_URL` | No | local compose test DB | Database the pytest suite targets (default `...localhost:5432/kryptolog_test`, auto-created by the compose init script). The suite creates/drops all tables around every test — never point it at real data. |
 | `REDIS_URL` | No | – | Redis connection URL (`redis://localhost:6379/0` with the compose service). When set, **two** state stores move to Redis: rate limits (durable, shared) and the WebSocket fan-out + presence (pub/sub) — which is what makes multiple workers/instances safe. Unset ⇒ in-memory, single process only. |
 | `RATELIMIT_STORAGE_URI` | No | `memory://` | Explicit rate-limit storage URI (overrides `REDIS_URL` for the limiter only). |
-| `KRYPTOLOG_ENV` | No | `development` (`production` in the example) | `production` fails closed: the backend refuses to start unless the JWT secret, `KRYPTOLOG_REQUIRE_INVITE` and `ALLOWED_ORIGINS` are all set, and serves no `/docs`. |
+| `KRYPTOLOG_ENV` | No | `development` (`production` in the example) | `production` fails closed: the backend refuses to start unless the JWT secret, `KRYPTOLOG_REQUIRE_INVITE`, `ALLOWED_ORIGINS` and `KRYPTOLOG_DEPLOYMENT_ID` are all set, and serves no `/docs`. |
+| `KRYPTOLOG_DEPLOYMENT_ID` | Prod: **yes** | `dev` | This server's identity inside every login and deletion signature, so a signature made for one server is refused by another. Generated by `init_env.sh`; 1–64 of `A-Za-z0-9_-`. Changing it invalidates nothing stored. |
 | `KRYPTOLOG_JWT_SECRET` | Prod: **yes** | – | HS256 JWT signing secret (hex). From `generate_server_keys.py`. Forges JWTs if leaked — treat as a production secret. Unset in dev ⇒ ephemeral secret, JWTs reset on restart. |
 | `KRYPTOLOG_REQUIRE_INVITE` | Prod: **yes** | `false` (`true` in the example) | Access filter. When `true`, registering a **new** identity at first login requires a valid invite code (existing users unaffected). Seed codes with `python generate_invites.py`. |
 | `KRYPTOLOG_QUOTA_SECRETS` | No | `1000` | Secrets one account may own. Over it, creation answers 413. |
 | `KRYPTOLOG_QUOTA_BYTES` | No | `1073741824` (1 GiB) | Characters one account may store, inline content and file chunks together. Over it, uploads answer 413. |
-| `ALLOWED_ORIGINS` | No | `http://localhost:5173` | Comma-separated CORS origins |
+| `KRYPTOLOG_MESSAGE_RETENTION_DAYS` | No | unset (keep) | Purge DMs and group messages older than this many days, hourly, a whole session at a time. A malformed value refuses to start. |
+| `KRYPTOLOG_AUDIT_LOG` | No | unset (stderr) | File to write the JSON security audit trail to. |
+| `ALLOWED_ORIGINS` | Prod: **yes** | none (`http://localhost:5173` in the example) | Comma-separated SPA origins: CORS, the WebSocket Origin check, and the origins a login may be signed for. Unset, CORS refuses every browser request. |
 | `TRUSTED_PROXY_IPS` | No | `127.0.0.1` | Comma-separated trusted reverse-proxy IPs, passed by `serve.sh` to uvicorn's `--forwarded-allow-ips`. The rate limiter keys on the right-most `X-Forwarded-For` hop not vouched for by one of these; `X-Real-IP` is ignored. |
 | `VAPID_PUBLIC_KEY` | No | – | Web Push VAPID public key (required for push notifications) |
 | `VAPID_PRIVATE_KEY` | No | – | Web Push VAPID private key |
@@ -319,24 +332,42 @@ python3 -m pytest tests/ -v
 
 Coverage spans auth, secrets, file chunks, messenger, multisig (including
 N-of-M quorum, reject, and delete), groups, users, notifications, key
-attestations, rate-limit storage, WebSocket fan-out/presence, and the PQC gate.
+attestations, account and conversation deletion, retention, the audit trail,
+rate-limit storage, WebSocket fan-out/presence, input bounds on every request
+body, and the PQC gate — with real ML-DSA signatures on every signature-gated
+path (`@pytest.mark.real_signatures`). `alembic check`, `ruff check` and
+`ruff format --check` are blocking gates too.
 
 The PQC gate (`backend/tests/test_pqc.py`) proves ML-DSA-44 interop between `liboqs`
 (server) and `@noble/post-quantum` (clients) using the shared fixture
 `tests/fixtures/pqc_interop.json`, plus FIPS size conformance and the (classical
 HS256) JWT issue/verify/tamper/expiry paths.
 
-### Frontend (vitest) & crypto-core
+### Frontend (vitest), crypto-core and the extension
 
 ```bash
 cd frontend && npx vitest run          # SPA unit tests (incl. the PQC interop gate)
 cd packages/crypto-core && npm test    # byte-compat golden vectors + version guard
+cd trustkeys && npm test               # extension (vitest, chrome.* mocked)
 ```
 
 `src/test/pqc.test.js` covers ML-KEM-768 wrap/unwrap round-trips, ML-DSA-44
 sign/verify + tamper rejection, the liboqs→noble interop fixture, and a
 deterministic seeded-keygen byte-pin. `crypto-core`'s suite pins the wire/storage
 formats both apps share.
+
+### End to end (Playwright, real browser + extension)
+
+```bash
+cd e2e && npm ci && npx playwright install chromium   # once
+npm test   # builds the extension, starts backend + SPA on their own DB, runs
+```
+
+Two people — one with TrustKeys, one with a local vault — sign in, message each
+other and share a secret, in real Chromium with the extension loaded. Needs the
+compose Postgres and Redis; uses its own `kryptolog_e2e` database. See
+[e2e/README.md](e2e/README.md). CI runs every suite on each push
+(`.github/workflows/ci.yml`).
 
 ---
 
@@ -379,17 +410,19 @@ alembic downgrade -1 # step back one revision
 
 | Component | Technology |
 |-----------|------------|
-| Web framework | FastAPI ≥0.128 |
-| ORM | SQLAlchemy ≥2.0.46 |
+| Web framework | FastAPI 0.143 |
+| ORM | SQLAlchemy 2.1 |
 | Database | PostgreSQL 16 (psycopg 3); `DATABASE_URL` to override |
 | Shared state (optional) | Redis 7 — rate limits + WebSocket fan-out/presence (`REDIS_URL`) |
-| Migrations | Alembic ≥1.13 |
-| HTTP client | httpx ≥0.27 |
-| Validation | Pydantic ≥2.12 |
-| ASGI server | uvicorn ≥0.40 |
-| Rate limiting | slowapi 0.1.9 — in-memory by default; Redis-backed when `REDIS_URL` is set |
-| Post-quantum crypto | liboqs-python (ML-DSA-44, FIPS 204) — in-process, verifies client login challenges |
-| JWT | PyJWT 2.10 — HS256 (server-issued, server-verified) |
+| Migrations | Alembic 1.20 |
+| HTTP client | httpx 0.28 |
+| Validation | Pydantic 2.14 |
+| ASGI server | uvicorn (standard) |
+| Rate limiting | slowapi 0.1.10 — in-memory by default; Redis-backed when `REDIS_URL` is set |
+| Post-quantum crypto | liboqs-python 0.16 on liboqs 0.16.0 built from a pinned, checksummed release (ML-DSA-44, FIPS 204) — verifies every signature the server relies on |
+| JWT | PyJWT 2.15 — HS256 (server-issued, server-verified) |
+
+Exact versions, with hashes, are in `backend/requirements.txt`, compiled from `backend/requirements.in`.
 
 ### Frontend
 
@@ -410,21 +443,25 @@ alembic downgrade -1 # step back one revision
 | UI | React 18, Manifest V3 |
 | Build | Vite + @crxjs/vite-plugin |
 | PQC | @kryptolog/crypto-core (@noble/post-quantum: ML-KEM-768 + ML-DSA-44) |
-| Vault | AES-256-GCM encrypted storage |
+| Vault | AES-256-GCM under Argon2id |
 
 ---
 
 ## Production Deployment Notes
 
+**Read [DEPLOYMENT.md](DEPLOYMENT.md)** — it is the authoritative guide (proxy,
+client addresses, required settings, backups, health, retention). The notes
+below are only the parts specific to this README's setup.
+
 ### Nginx configuration
 
-JWTs are compact HS256 tokens, so the Authorization header is small. But login/approval requests still carry PQC material (ML-DSA-44 public keys ~2.6 KB hex and ~4.8 KB signatures) in the request **body**, and file uploads are chunked — so keep generous body limits (and somewhat larger header buffers as a safety margin):
+JWTs are compact HS256 tokens, so the Authorization header is small. But login/approval requests carry PQC material (ML-DSA-44 public keys ~2.6 KB hex, ~3.2 KB base64 signatures) in the request **body**, and file uploads are chunked. The largest legitimate body is under 8 MB, which is also the backend's own limit — match it at the proxy (`nginx.conf.example` does):
 
 ```nginx
 http {
     client_header_buffer_size 4k;
     large_client_header_buffers 4 16k;
-    client_max_body_size 64M;
+    client_max_body_size 8M;
 }
 ```
 
@@ -520,7 +557,8 @@ up for background message alerts to work.
 > When using the Local Vault without the TrustKeys extension:
 > - Your PQC keys are encrypted and stored in browser `localStorage`
 > - **Clearing browser data will permanently delete your keys**
-> - Keys are protected with AES-256-GCM via PBKDF2-SHA-512 (600,000 iterations)
+> - Keys are protected with AES-256-GCM under an Argon2id key (46 MiB per guess); the password must be at least 12 characters
 > - **Always back up your keys regularly** (Manage Vault → Transfer / Back up → encrypted `.kvault` file)
 > - To move to a new device, use Manage Vault → Transfer / Back up → Send to another device (QR / one-time code)
 > - For maximum security, use the TrustKeys Extension
+> - Vaults and backups made before crypto-core 3.0.0 (October 2026) no longer open: recreate them

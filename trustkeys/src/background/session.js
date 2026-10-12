@@ -3,7 +3,7 @@
 // Three problems compounded here, and each one on its own defeated the lock:
 //
 //  1. The vault PASSWORD sat in plaintext in chrome.storage.session. It is the
-//     PBKDF2 *input*, it survives a salt change, and it is the credential a
+//     KDF *input* (Argon2id since crypto-core 3.0.0), it survives a salt change, and it is the credential a
 //     user is most likely to have reused elsewhere. We cache the DERIVED KEY's
 //     raw bytes instead: equally powerful against THIS vault, worth nothing
 //     anywhere else, and impossible to retype into another login. The bytes

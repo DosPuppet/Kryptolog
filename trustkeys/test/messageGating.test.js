@@ -38,7 +38,7 @@ const INTERNAL_ONLY = [
 describe('internal-only handlers reject external senders', () => {
     // boot() rather than bootWithVault(): the guard is the first statement in
     // every one of these handlers, so it must refuse before any vault exists —
-    // and skipping setup keeps 28 parametrised cases off the 600k-iteration KDF.
+    // and skipping setup keeps 28 parametrised cases off the deliberately slow KDF.
     it.each(INTERNAL_ONLY.map(r => [r.type, r]))('%s refuses a content script', async (_type, request) => {
         const h = await boot();
         const res = await h.send(request, pageSender('https://app.example'));
