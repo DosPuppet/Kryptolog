@@ -1223,7 +1223,7 @@ single crypto-core **3.0.0** cutover (lots 4–6); hybridization is a later **4.
 | 7 | Authorization, directory, data integrity | P1 | done — `f6a9e58` |
 | 8 | Realtime and push availability | P1 | done — `4967000` |
 | 9 | Operations: audit log, retention, backup, health, conversation deletion | P2 | done — `9bbcc05` |
-| 10 | Assurance and documentation | P2 | done |
+| 10 | Assurance and documentation | P2 | done — `3d9421c` |
 | 11 | Hybridization, crypto-core 4.0.0 | P3 | **postponed** (2026-10-12, user's decision) — with lot 12's budget items |
 
 ### Lot 1 — supply chain
@@ -1715,3 +1715,26 @@ Closes the 2026-10-12 report's test-suite weaknesses, 2026-09-23 Q-7 and
   which contains both), the context file sizes, the extension KDF.
 
 Backend 661 → **668**, extension 127 → **128**.
+
+### Where the 2026-10-12 remediation stands
+
+Lots 1–10 are committed on `remediation-2026-10` (`bd12c2b`..`3d9421c`), each
+with every suite, both builds, every lint/format/drift gate — and, from lot 10,
+the browser suite — green. Lot 11 (hybrid crypto-core 4.0.0) is postponed at
+the user's decision, with lot 12's budget items (forward secrecy, code-delivery
+integrity, an external audit). Final counts: backend **668**, frontend **270**,
+crypto-core **67**, extension **128**, e2e **1** (the critical path).
+
+**Not done, and needed before relying on any of it:**
+- **Not merged, not pushed.** No GitHub Actions run has seen lots 1–10, and the
+  new `e2e` CI job has never run. Every previous first push found something.
+- **The dev stack still holds pre-3.0.0 data**, unreadable since lot 4: run
+  `E2E-RECIPE.md` step 0 (`docker compose --env-file backend/.env down -v`)
+  before using it, and recreate local vaults, `.kvault` backups and extension
+  vaults.
+- **The manual parts of `E2E-RECIPE.md`** — deletion as the other account sees
+  it, chunked files, tab sign-out, extension lock, biometrics, nginx — and a
+  look at the production extension build in Chrome (lot 5).
+- **Three migrations deploy with it** (`d0e1f2a3b4c5`, `e1f2a3b4c5d6`,
+  `f2a3b4c5d6e7`), and `backend/.env` needs the lot 2/4 keys (`init_env.sh`
+  generates them; production refuses to start without them).
