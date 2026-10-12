@@ -1,6 +1,8 @@
 import { useState, useEffect, useRef } from 'react';
-import { ArrowLeft, Shield, Loader2, Send, Lock, MessageSquare } from 'lucide-react';
+import { ArrowLeft, Shield, Loader2, Send, MessageSquare } from 'lucide-react';
 import MessageAuthBadge from './MessageAuthBadge';
+import MessageBody from './MessageBody';
+import KeyTrustPanel from './KeyTrustPanel';
 import { useAuth } from '../../context/AuthContext';
 import { avatarInitial, displayName } from '../../utils/format';
 
@@ -55,6 +57,9 @@ const ChatArea = ({ activeConversation, onBack, onSend, loadingMessages, sending
                 </div>
             </div>
 
+            {/* Safety number, and the stop sign when their key changed (K-05) */}
+            <KeyTrustPanel user={activeConversation.user} />
+
             {/* Messages */}
             <div className="flex-1 overflow-y-auto p-4 space-y-4">
                 {loadingMessages ? (
@@ -79,21 +84,7 @@ const ChatArea = ({ activeConversation, onBack, onSend, loadingMessages, sending
                                         ? 'bg-indigo-600 text-white rounded-br-none'
                                         : 'bg-white dark:bg-slate-750 text-slate-800 dark:text-white rounded-bl-none border border-slate-200 dark:border-slate-600'}
                                 `}>
-                                    {msg.redacted ? (
-                                        // Not a failure: there is nothing to
-                                        // decrypt. A "Click to Decrypt" button
-                                        // here could only ever spin and fail.
-                                        <p className="text-sm italic opacity-70">Content removed</p>
-                                    ) : msg.plainText ? (
-                                        <p className="text-sm">{msg.plainText}</p>
-                                    ) : (
-                                        <button
-                                            onClick={() => onDecrypt(msg)}
-                                            className={`flex items-center gap-2 text-sm font-semibold px-2 py-1 rounded bg-black/10 hover:bg-black/20 dark:bg-white/10 dark:hover:bg-white/20 transition-colors ${isMe ? 'text-white' : 'text-indigo-500 dark:text-indigo-400'}`}
-                                        >
-                                            <Lock className="w-4 h-4" /> Click to Decrypt
-                                        </button>
-                                    )}
+                                    <MessageBody msg={msg} isMe={isMe} suspicious={hasPeerSignedHistory} onDecrypt={onDecrypt} />
                                     <div className={`flex items-center gap-1 text-[10px] mt-1 opacity-70 ${isMe ? 'text-indigo-100' : 'text-slate-400'}`}>
                                         {new Date(msg.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
                                         {/* Authenticity (audit S1/F-2): verified / invalid / unsigned. */}

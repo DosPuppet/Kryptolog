@@ -57,6 +57,52 @@ export const trustContactKey = (address, encryptionPublicKey) => {
     save(STORE_KEY, map);
 };
 
+// The TOFU verdict, acted on: a first sighting is pinned, a change refuses.
+//
+// The store used to be consulted only by the share dialog, so a contact whose
+// key changed went on receiving messages with nothing on screen to say so
+// (audit 2026-10-12 K-05). Every send path now goes through this, and the
+// conversation offers the confirmation (KeyTrustPanel) — so the stop does not
+// depend on the reader noticing a banner. Returns the state it acted on.
+export const pinContactKey = (user) => {
+    const state = checkContactKey(user?.address, user?.encryption_public_key);
+    if (state === 'new') trustContactKey(user.address, user.encryption_public_key);
+    return state;
+};
+
+export const assertKeyUnchanged = (user) => {
+    if (pinContactKey(user) === 'changed') {
+        throw new Error(
+            `${label(user)}'s encryption key changed. Nothing was sent: compare ` +
+            'the safety number in the conversation and confirm the new key first.'
+        );
+    }
+};
+
+// --- Trust stores in a backup (audit 2026-10-12 K-05) ---
+//
+// Both stores live in localStorage only, so a new device or a restored backup
+// started blind: every contact was 'new' again and a key swapped meanwhile was
+// pinned without a word. They travel with the vault now. Merged, with the LOCAL
+// record winning on conflict — an import must never be able to overwrite a key
+// this device already pinned, or restoring an old (or planted) backup would be
+// a way to make a changed key look unchanged.
+export const exportTrustStores = () => ({ keys: load(STORE_KEY), attested: load(ATTEST_KEY) });
+
+const isRecord = (r) => !!r && typeof r === 'object' && typeof r.key === 'string';
+
+export const importTrustStores = (data) => {
+    if (!data || typeof data !== 'object') return;
+    for (const [store, incoming] of [[STORE_KEY, data.keys], [ATTEST_KEY, data.attested]]) {
+        if (!incoming || typeof incoming !== 'object') continue;
+        const map = load(store);
+        for (const [address, rec] of Object.entries(incoming)) {
+            const a = norm(address);
+            if (a && isRecord(rec) && !map[a]) map[a] = rec;
+        }
+        save(store, map);
+    }
+};
 
 // --- Encryption-key attestation (audit M-1) ---
 // TOFU above detects a key CHANGE; the attestation proves the key BINDING:

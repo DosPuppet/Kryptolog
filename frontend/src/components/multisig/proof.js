@@ -33,7 +33,7 @@ export const downloadMultisigProof = async ({
             username: workflow.owner?.username || null,
             signature: creatorSignature,
             signed_at: workflow.created_at,
-            algorithm: 'DILITHIUM2',
+            algorithm: 'ML-DSA-44',
             role: 'creator',
         });
     }
@@ -46,7 +46,7 @@ export const downloadMultisigProof = async ({
                 username: s.user?.username || null,
                 signature: s.signature,
                 signed_at: s.signed_at,
-                algorithm: 'DILITHIUM2',
+                algorithm: 'ML-DSA-44',
                 role: 'signer',
             });
         }

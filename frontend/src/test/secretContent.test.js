@@ -57,6 +57,9 @@ describe('unwrapSignedDocument', () => {
     });
 });
 
+// A blob URL minted by THIS page, the only kind a descriptor may carry.
+const BLOB = `blob:${window.location.origin}/0f8c2d1e-0000-4000-8000-000000000000`;
+
 describe('readFileDescriptor', () => {
     it('returns null for text, empty input and unrelated JSON', () => {
         expect(readFileDescriptor('just text')).toBeNull();
@@ -67,21 +70,38 @@ describe('readFileDescriptor', () => {
     it('normalises a single file into a one-element list', () => {
         // The caller then renders `files` without branching on which shape came in.
         const out = readFileDescriptor(JSON.stringify({
-            type: 'file', name: 'a.pdf', mime: 'application/pdf', content: 'blob:x', size: 9,
+            type: 'file', name: 'a.pdf', mime: 'application/pdf', content: BLOB, size: 9,
         }));
         expect(out.multiple).toBe(false);
         expect(out.files).toEqual([
-            { name: 'a.pdf', mime: 'application/pdf', content: 'blob:x', size: 9 },
+            { name: 'a.pdf', mime: 'application/pdf', content: BLOB, size: 9 },
         ]);
     });
 
     it('reads a multi-file list and flags it as such', () => {
-        const items = [{ name: 'a' }, { name: 'b' }];
+        const items = [{ name: 'a', content: BLOB }, { name: 'b', content: BLOB }];
         const out = readFileDescriptor(JSON.stringify({ type: 'files', items }));
         expect(out).toEqual({ multiple: true, files: items });
     });
 
     it('rejects a file entry with no content to point at', () => {
         expect(readFileDescriptor(JSON.stringify({ type: 'file', name: 'a' }))).toBeNull();
+    });
+
+    // Audit 2026-10-12 K-15. A descriptor is recognised by its shape, and a
+    // shared secret is plaintext its sender chose, so text that LOOKS like one
+    // used to draw a Download button to wherever it pointed.
+    it.each([
+        ['an external https link', 'https://evil.example/invoice.exe'],
+        ['a javascript: URL', 'javascript:alert(1)'],
+        ['a data: URL', 'data:text/html,<script>alert(1)</script>'],
+        ['a blob URL of another origin', 'blob:https://evil.example/0f8c2d1e'],
+        ['a lookalike prefix', `blob:${window.location.origin}.evil.example/x`],
+        ['an external link that merely contains a local blob URL', `https://evil.example/?u=${BLOB}`],
+    ])('renders as text, not a file, when it points at %s', (_label, url) => {
+        expect(readFileDescriptor(JSON.stringify({ type: 'file', name: 'a.pdf', content: url }))).toBeNull();
+        expect(readFileDescriptor(JSON.stringify({
+            type: 'files', items: [{ name: 'ok', content: BLOB }, { name: 'bad', content: url }],
+        }))).toBeNull();
     });
 });

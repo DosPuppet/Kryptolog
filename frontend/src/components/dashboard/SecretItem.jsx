@@ -64,7 +64,7 @@ const SecretItem = ({ secret, decryptedContent, onDecrypt, onLock, onDelete, onS
             },
             signer: {
                 publicKey: docData.signerPublicKey,
-                algorithm: 'DILITHIUM2',
+                algorithm: 'ML-DSA-44',
             },
             signature: docData.signature,
         };

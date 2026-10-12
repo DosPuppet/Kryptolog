@@ -5,7 +5,7 @@ import API_ENDPOINTS from '../config';
 import { fetchAllPages, pageUrl } from '../utils/paging';
 import { encryptWithSessionKey, decryptWithSessionKey, messageSigningBody } from '../utils/crypto';
 import { isEncryptedTitle, LOCKED_TITLE } from '../utils/titles';
-import { assertSafeRecipient, attestationVerdict } from '../services/trustedKeys';
+import { assertSafeRecipient, attestationVerdict, assertKeyUnchanged, pinContactKey } from '../services/trustedKeys';
 import { toast } from '../utils/toast';
 import { verifyMessageAuthenticity } from './messenger/verifyMessage';
 import { useMessengerSocket } from './messenger/useMessengerSocket';
@@ -137,8 +137,21 @@ export const MessengerProvider = ({ children }) => {
             // crypto-core 3.0.0 cutover, 'unattested' too: the server refuses a
             // key without its attestation, so a member served without one is
             // a key swap by omission, not a legacy account (audit 2026-10-12 K-04).
-            const verdict = await attestationVerdict({ ...member.user, address: member.user_address });
-            (verdict === 'verified' ? safe : excluded).push(member);
+            const contact = { ...member.user, address: member.user_address };
+            const verdict = await attestationVerdict(contact);
+            if (verdict !== 'verified') {
+                excluded.push({ member, reason: 'attestation' });
+                continue;
+            }
+            // A verified key can still be a CHANGED one: attestation proves the
+            // key belongs to the identity, not that it is the key the reader
+            // last checked (audit 2026-10-12 K-05). The sender's own row is
+            // exempt — excluding yourself only makes your own messages unreadable.
+            if (member.user_address !== user?.address?.toLowerCase() && pinContactKey(contact) === 'changed') {
+                excluded.push({ member, reason: 'changed' });
+                continue;
+            }
+            safe.push(member);
         }
         return { safe, excluded };
     };
@@ -366,6 +379,9 @@ export const MessengerProvider = ({ children }) => {
             // the attack. A gate reachable only on the path the attacker avoids
             // is not a gate.
             await assertSafeRecipient(partnerUser);
+            // And refuse a key that is not the one the reader last confirmed
+            // (audit 2026-10-12 K-05) — the conversation offers the check.
+            assertKeyUnchanged(partnerUser);
 
             let sid = activeSessionIds[theirAddr];
             let sKey = sid ? sessionKeys[sessionKeyId(theirAddr, sid)] : null;
@@ -623,9 +639,12 @@ export const MessengerProvider = ({ children }) => {
             // stops matching its identity binding must stop receiving messages
             // immediately, not at the next rotation.
             const { safe, excluded } = await gateGroupMembers(members);
-            for (const member of excluded) {
-                console.error(`Skipping ${member.user_address}: encryption key failed attestation`);
-                toast.error(`Key verification failed for a member (${(member.user?.username) || member.user_address.slice(0, 12) + '…'}) — they were excluded from this message.`);
+            for (const { member, reason } of excluded) {
+                const who = member.user?.username || member.user_address.slice(0, 12) + '…';
+                console.error(`Skipping ${member.user_address}: ${reason}`);
+                toast.error(reason === 'changed'
+                    ? `${who}'s encryption key changed — they were excluded from this message until you confirm it in the member list.`
+                    : `Key verification failed for a member (${who}) — they were excluded from this message.`);
             }
 
             let sid = activeSessionIds[conv];

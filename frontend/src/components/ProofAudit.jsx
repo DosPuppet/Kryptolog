@@ -1,5 +1,11 @@
 import { useState, useRef } from 'react';
 import { Upload, ShieldCheck, ShieldAlert, FileJson, User, Key, Clock, FileText, X, Loader2, FileCheck, FileWarning, Type } from 'lucide-react';
+
+// Proofs name their signature algorithm. Exports wrote the pre-standard name
+// 'DILITHIUM2' until crypto-core 3.0.0 and 'ML-DSA-44' since (audit 2026-09-11
+// Q-1). Both are the same FIPS 204 parameter set, and document signatures did
+// not change format, so proofs exported before still verify.
+const isMlDsaLabel = (label) => label === 'ML-DSA-44' || label === 'DILITHIUM2';
 import { verifySignaturePQC, domainSeparate, SIGNING_CONTEXT, multisigApprovalMessage } from '../utils/crypto';
 // Ethereum/ECDSA proofs are no longer verifiable (the app is post-quantum only);
 // such legacy entries are reported as unsupported rather than verified.
@@ -71,7 +77,7 @@ export default function ProofAudit() {
 
     const verifySingleSignature = async (proofData) => {
         const { document: doc, signer, signature } = proofData;
-        const isPQC = signer.algorithm === 'DILITHIUM2';
+        const isPQC = isMlDsaLabel(signer.algorithm);
 
         // Verify against the `content`-domain-separated bytes the signer actually signed (H1).
         // PQC (ML-DSA-44) only; legacy ECDSA proofs are unsupported.
@@ -108,7 +114,7 @@ export default function ProofAudit() {
         const signerResults = [];
 
         for (const entry of proofData.signatures) {
-            const isPQC = entry.algorithm === 'DILITHIUM2';
+            const isPQC = isMlDsaLabel(entry.algorithm);
             let isValid = false;
 
             // 'signer' approvals need the ciphertext hash; 'creator' uses content.

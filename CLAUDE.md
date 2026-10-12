@@ -1213,8 +1213,8 @@ single crypto-core **3.0.0** cutover (lots 4–6); hybridization is a later **4.
 | 2 | Default deployment posture (exposed services, proxy headers, docs, body limit) | P0 | done — `915615d` |
 | 3 | Quotas and input bounds | P0 | done — `c159a8a` |
 | 4 | Protocol cutover, crypto-core 3.0.0 | P1 | done — `687a196` |
-| 5 | TrustKeys custody (ships with 4) | P1 | done |
-| 6 | Web client trust UX | P1 | |
+| 5 | TrustKeys custody (ships with 4) | P1 | done — `6a483ab` |
+| 6 | Web client trust UX | P1 | done |
 | 7 | Authorization, directory, data integrity | P1 | |
 | 8 | Realtime and push availability | P1 | |
 | 9 | Operations: audit log, retention, backup, health | P2 | |
@@ -1429,3 +1429,46 @@ Q-3. Ships with lot 4: the SPA and the extension must be deployed together.
   and the production manifest's behaviour in Chrome want a manual pass:
   build with `npm run build` (production) for that check, and `build:dev` for
   the E2E recipe as before.
+
+### Lot 6 — web client trust UX
+
+Closes K-05, K-15, 2026-09-23 F-3 and 2026-09-11 F-5. SPA only.
+
+- **A changed contact key stops the send, not just a dialog** (K-05). The TOFU
+  store recorded changes but only `ShareModal` consulted it, so a key swapped in
+  the directory went on receiving messages in every conversation.
+  `trustedKeys.pinContactKey` is the one rule: a first sighting is pinned
+  silently, a change refuses. The DM path throws (`assertKeyUnchanged`, after
+  the attestation gate); `gateGroupMembers` excludes the member, which rotates
+  the session as any member-set change does, and toasts *why*. **The sender's
+  own row is exempt** — excluding yourself only makes your own messages
+  unreadable. Attestation does not make this redundant: it proves whose key it
+  is, not that it is the key the reader last checked.
+- **`KeyTrustPanel`** shows the safety number in every DM and per group member,
+  and for a changed key a red banner with the number and "I verified it — trust
+  the new key". The banner is what the user sees; the send path is what holds.
+- **Both TOFU stores travel with the vault**: the plaintext export and the
+  transfer / `.kvault` blob carry a `trustStore`, applied by `importNewVault`
+  (so `importEncryptedBlob` too) and `importVault`. **Merged, local wins** — an
+  import may add contacts but never replace a pin, or an old or planted backup
+  would be a way to make a changed key look unchanged. Kept out of the stored
+  vault itself, which only ever holds accounts. No format change: the field is
+  additive and older readers ignore it.
+- **Unauthenticated messages are hidden until asked** (F-3):
+  `messenger/MessageBody.jsx`, shared by both chat views, hides plaintext when
+  the signature failed, or is missing where the author has signed before, behind
+  "Show it anyway". The reader's own messages never hide.
+- **A file descriptor must point at a blob of this origin** (K-15):
+  `readFileDescriptor` refuses any item whose `content` is not
+  `blob:<this origin>/…`, so text shaped like a descriptor renders as text
+  instead of a Download button to wherever it pointed. The proof label is
+  `ML-DSA-44` now; `ProofAudit` still reads `DILITHIUM2` in a proof made earlier.
+- **The font is self-hosted** (F-5): Press Start 2P, OFL, five `woff2` subsets
+  under `public/fonts/`; Google origins are gone from both CSPs
+  (`index.html`, `nginx.conf.example`).
+
+SPA 240 → **261**. Eight gates mutation-tested, each killing only its own
+test — including `startsWith` → `includes` on the blob origin, which survived
+until a case with a local blob URL *inside* an external link was added.
+**Not seen in a browser**: the banner and the per-member panel want a look in
+the E2E pass.

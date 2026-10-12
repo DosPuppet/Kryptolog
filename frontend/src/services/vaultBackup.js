@@ -1,4 +1,5 @@
 import { encryptVault, decryptVault, normalizeAccount, isEncryptedVaultBlob, vaultPasswordProblem } from '../utils/crypto';
+import { exportTrustStores, importTrustStores } from './trustedKeys';
 
 // One rule for every password that seals keys (crypto-core 3.0.0, audit
 // 2026-10-12 K-08): the floor here was 6 characters. Throws the rule's own
@@ -58,6 +59,10 @@ export const backupMethods = {
 
         // Encrypt + persist under the new password, then expose sanitized in memory.
         await this._save(fullVault, password);
+        // The contacts' pinned keys came along (audit 2026-10-12 K-05). Kept
+        // OUT of fullVault: they are not key material and the vault only
+        // ever stores accounts.
+        importTrustStores(data.trustStore);
         this.vault = {
             accounts: fullVault.accounts.map(acc => this._sanitize(acc)),
             activeAccountId
@@ -71,8 +76,9 @@ export const backupMethods = {
     async exportVault(password) {
         if (this.isLocked) throw new Error("Vault locked");
         const fullVault = await this._getFullVault(password);
-        // Export plaintext (sensitive!)
-        return JSON.stringify(fullVault, null, 2);
+        // Export plaintext (sensitive!). The pinned contact keys travel with
+        // it, so a restore does not start every contact over as 'new' (K-05).
+        return JSON.stringify({ ...fullVault, trustStore: exportTrustStores() }, null, 2);
     },
 
     // --- Device-to-device transfer ---
@@ -88,7 +94,7 @@ export const backupMethods = {
         // offline once it leaves the device.
         requireStrongPassword(transferPassphrase);
         const fullVault = await this._getFullVault(vaultPassword);
-        const encrypted = await encryptVault(fullVault, transferPassphrase);
+        const encrypted = await encryptVault({ ...fullVault, trustStore: exportTrustStores() }, transferPassphrase);
         return JSON.stringify(encrypted);
     },
 
@@ -157,6 +163,7 @@ export const backupMethods = {
 
             if (addedCount > 0) {
                 await this._save(fullVault, password);
+                importTrustStores(data.trustStore); // merged, local pins win
 
                 // Re-sync memory completely to ensure consistency
                 this.vault = {

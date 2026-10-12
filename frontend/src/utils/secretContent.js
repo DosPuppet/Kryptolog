@@ -51,10 +51,29 @@ export function unwrapSignedDocument(decryptedContent) {
 }
 
 /**
+ * Is this a blob: URL this page created (URL.createObjectURL)?
+ *
+ * The only URL a file descriptor may carry (audit 2026-10-12 K-15). Descriptors
+ * are built by useSecrets AFTER the chunks are downloaded and decrypted, and
+ * every URL in them is a blob of this origin. But the descriptor is recognised
+ * by its SHAPE, and a secret is plaintext someone else chose: share a text
+ * secret reading {"type":"file","content":"https://evil.example/invoice.exe"}
+ * and the trusted interface drew a Download button to it. A blob URL names the
+ * origin that minted it, so this page's prefix is something nobody else's
+ * plaintext can produce a working link with.
+ */
+export function isLocalBlobUrl(url) {
+    return typeof url === 'string' && url.startsWith(`blob:${window.location.origin}/`);
+}
+
+/**
  * The file descriptor inside `content`, or null if it is not one.
  *
  * Normalises the single-file and multi-file shapes to one list, so a caller
  * renders `files` and never branches on which of the two it received.
+ *
+ * A descriptor whose files are not all local blob URLs is NOT one: it renders
+ * as the text it is (see isLocalBlobUrl).
  */
 export function readFileDescriptor(content) {
     if (!content) return null;
@@ -68,9 +87,10 @@ export function readFileDescriptor(content) {
     if (!parsed) return null;
 
     if (parsed.type === 'files' && Array.isArray(parsed.items)) {
+        if (!parsed.items.every((f) => isLocalBlobUrl(f?.content))) return null;
         return { multiple: true, files: parsed.items };
     }
-    if (parsed.type === 'file' && parsed.content) {
+    if (parsed.type === 'file' && isLocalBlobUrl(parsed.content)) {
         return {
             multiple: false,
             files: [{

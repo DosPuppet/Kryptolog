@@ -91,7 +91,9 @@ server {
     #   script-src 'self'      — app ships as hashed external bundles; no inline
     #                            scripts, no eval, no WASM (noble PQC is pure JS).
     #   style-src 'unsafe-inline' — required: Tailwind/React inject inline styles
-    #                            at runtime. fonts.googleapis.com serves the CSS.
+    #                            at runtime.
+    #   font-src 'self'        — the one font is served from this origin; no
+    #                            third party sees who loads the app.
     #   connect-src            — list every API/WS origin the SPA talks to. If the
     #                            API is a separate subdomain you need BOTH its
     #                            https origin and its wss origin (see below).
@@ -102,8 +104,8 @@ server {
     add_header Content-Security-Policy
         "default-src 'self';
          script-src 'self';
-         style-src 'self' 'unsafe-inline' https://fonts.googleapis.com;
-         font-src 'self' https://fonts.gstatic.com;
+         style-src 'self' 'unsafe-inline';
+         font-src 'self';
          img-src 'self' data:;
          connect-src 'self' https://api.your-domain.com wss://api.your-domain.com;
          worker-src 'self';
