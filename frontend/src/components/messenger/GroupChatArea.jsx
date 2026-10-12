@@ -237,7 +237,7 @@ const GroupChatArea = ({ activeGroupConversation, onBack, onSend, loadingMessage
                                             {/* Authenticity (audit S1/F-2): in groups every member holds the
                                                 session key, so a per-message signature is what proves the author. */}
                                             {!isMe && (
-                                                <MessageAuthBadge verified={msg.verified} suspicious={hasPeerSignedHistory} />
+                                                <MessageAuthBadge verified={msg.verified} suspicious={hasPeerSignedHistory} freshness={msg.freshness} />
                                             )}
                                         </div>
                                     </div>

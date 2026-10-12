@@ -2,11 +2,13 @@
 
 from conftest import (
     TEST_ENCRYPTION_KEY,
+    TEST_ORIGIN,
     TEST_USER_ADDRESS,
     auth_header,
     do_login,
     get_nonce,
     synthetic_address,
+    test_deployment,
 )
 
 
@@ -45,6 +47,8 @@ class TestNonce:
                 "address": TEST_USER_ADDRESS,
                 "signature": "fake_signature_for_testing",
                 "nonce": victims_nonce,
+                "origin": TEST_ORIGIN,
+                "deployment": test_deployment(),
             },
         )
         assert resp.status_code == 200, (
@@ -64,6 +68,8 @@ class TestNonce:
                     "address": TEST_USER_ADDRESS,
                     "signature": "fake_signature_for_testing",
                     "nonce": nonce,
+                    "origin": TEST_ORIGIN,
+                    "deployment": test_deployment(),
                 },
             )
 
@@ -81,6 +87,8 @@ class TestNonce:
                 "address": synthetic_address("nonce-thief"),
                 "signature": "fake_signature_for_testing",
                 "nonce": victims_nonce,
+                "origin": TEST_ORIGIN,
+                "deployment": test_deployment(),
             },
         )
         assert resp.status_code == 400, resp.text
@@ -116,7 +124,10 @@ class TestLogin:
                 "address": TEST_USER_ADDRESS,
                 "signature": "fake",
                 "nonce": nonce,
+                "origin": TEST_ORIGIN,
+                "deployment": test_deployment(),
                 "encryption_public_key": TEST_ENCRYPTION_KEY,
+                "encryption_key_attestation": "fake_attestation_for_testing",
             },
         )
         data = resp.json()
@@ -130,6 +141,8 @@ class TestLogin:
                 "address": TEST_USER_ADDRESS,
                 "signature": "fake",
                 "nonce": "wrong_nonce_value",
+                "origin": TEST_ORIGIN,
+                "deployment": test_deployment(),
             },
         )
         assert resp.status_code == 400
@@ -141,6 +154,8 @@ class TestLogin:
                 "address": TEST_USER_ADDRESS,
                 "signature": "fake",
                 "nonce": "whatever",
+                "origin": TEST_ORIGIN,
+                "deployment": test_deployment(),
             },
         )
         assert resp.status_code == 400
@@ -152,7 +167,10 @@ class TestLogin:
             "address": TEST_USER_ADDRESS,
             "signature": "fake",
             "nonce": nonce,
+            "origin": TEST_ORIGIN,
+            "deployment": test_deployment(),
             "encryption_public_key": TEST_ENCRYPTION_KEY,
+            "encryption_key_attestation": "fake_attestation_for_testing",
         }
         resp1 = client.post("/auth/login", json=body)
         assert resp1.status_code == 200
@@ -212,7 +230,10 @@ class TestRegistrationUsernameCollision:
                 "address": self.OTHER_ADDRESS,
                 "signature": "fake",
                 "nonce": nonce,
+                "origin": TEST_ORIGIN,
+                "deployment": test_deployment(),
                 "encryption_public_key": TEST_ENCRYPTION_KEY,
+                "encryption_key_attestation": "fake_attestation_for_testing",
                 "username": "ALICE",
             },
         )

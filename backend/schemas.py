@@ -73,8 +73,11 @@ ADDRESS_CHARS = 2_624
 # A detached ML-DSA-44 signature, base64 (2420 bytes). Every message carries
 # one (audit S1).
 SIGNATURE_CHARS = b64_chars(2_420)  # 3 228
-# One ML-KEM-768-wrapped session key, JSON-encoded: {kem, iv, encKey}.
-WRAPPED_KEY_CHARS = 1_600  # measured 1 562
+# One ML-KEM-768-wrapped session key, JSON-encoded: {v, alg, kem, iv, encKey}.
+# Measured 1 562 before crypto-core 3.0.0 added the format version and the
+# algorithm id to every envelope, ~1 600 after — past the old 1 600 budget by two
+# characters per member, which envelope-size.test.js caught.
+WRAPPED_KEY_CHARS = 1_700
 # One entry in a key-wrap map: the member's address, their wrapped key, and the
 # JSON punctuation between them.
 KEY_WRAP_CHARS_PER_MEMBER = ADDRESS_CHARS + WRAPPED_KEY_CHARS  # 4 224
@@ -319,13 +322,25 @@ class SharedSecretResponse(AccessGrantResponse):
     secret: SecretSummaryResponse
 
 
+# An origin as the browser serialises it (scheme://host[:port]); the format is
+# checked where the signed body is built (auth.is_canonical_origin).
+MAX_ORIGIN_LEN = 255
+# The deployment id named in signed bodies (config.deployment_id).
+MAX_DEPLOYMENT_LEN = 64
+
+
 class LoginRequest(BaseModel):
     address: str = Field(..., max_length=MAX_ADDRESS_LEN)
     signature: str = Field(..., max_length=64_000)
     nonce: str = Field(..., max_length=200)
+    # What the challenge was signed FOR (crypto-core 3.0.0, audit 2026-10-12
+    # K-02): the SPA origin and this server's deployment id. Both are part of
+    # the signed bytes, and the route refuses values that are not its own.
+    origin: str = Field(..., max_length=MAX_ORIGIN_LEN)
+    deployment: str = Field(..., max_length=MAX_DEPLOYMENT_LEN)
     encryption_public_key: str | None = Field(None, max_length=MAX_ADDRESS_LEN)
-    # Self-signed attestation of encryption_public_key (audit M-1). Optional for
-    # compat with older clients; verified server-side when present.
+    # Self-signed attestation of encryption_public_key (audit M-1). REQUIRED
+    # whenever a key is submitted (audit 2026-10-12 K-04).
     encryption_key_attestation: str | None = Field(None, max_length=64_000)
     username: str | None = Field(None, max_length=200)
     # Access filter (audit §5): only consulted when the server requires invites
@@ -617,6 +632,9 @@ class AccountDeleteRequest(BaseModel):
     # and the MODE is part of what is signed — see auth.account_deletion_message.
     mode: Literal["leave", "erase"]
     nonce: str = Field(..., max_length=200)
+    # Bound to this server like a login (crypto-core 3.0.0, K-02).
+    origin: str = Field(..., max_length=MAX_ORIGIN_LEN)
+    deployment: str = Field(..., max_length=MAX_DEPLOYMENT_LEN)
     signature: str = Field(..., max_length=SIGNATURE_CHARS)
     redactions: list[RedactionSignature] = Field(
         default_factory=list, max_length=MAX_REDACTIONS_PER_DELETE
@@ -661,4 +679,8 @@ class RedactableMessageResponse(BaseModel):
     conv: str
     gid: str
     sid: str | None
+    # The original message's signed position (crypto-core 3.0.0, K-06): the
+    # redacted body keeps them, so the client has to sign them again.
+    ts: int
+    seq: int
     keys: dict

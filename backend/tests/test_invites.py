@@ -8,11 +8,13 @@ env var per-test with monkeypatch.
 import pytest
 from conftest import (
     TEST_ENCRYPTION_KEY,
+    TEST_ORIGIN,
     TEST_USER_ADDRESS,
     TEST_USER_ADDRESS_2,
     do_login,
     get_nonce,
     synthetic_address,
+    test_deployment,
 )
 
 import invites
@@ -48,7 +50,10 @@ def _login_with(client, address, code=None, encryption_key=TEST_ENCRYPTION_KEY):
         "address": address,
         "signature": "fake_signature_for_testing",
         "nonce": nonce,
+        "origin": TEST_ORIGIN,
+        "deployment": test_deployment(),
         "encryption_public_key": encryption_key,
+        "encryption_key_attestation": "fake_attestation_for_testing",
         # Distinct username per address: the test addresses share the first 7
         # chars, so the default username (address[:7]) would collide and 409
         # before the invite is ever checked. address[:20] keeps them unique.
@@ -119,7 +124,10 @@ class TestInvitesRequired:
                     "address": occupier,
                     "signature": "fake",
                     "nonce": nonce,
+                    "origin": TEST_ORIGIN,
+                    "deployment": test_deployment(),
                     "encryption_public_key": TEST_ENCRYPTION_KEY,
+                    "encryption_key_attestation": "fake_attestation_for_testing",
                     "username": "Taken",
                     "invite_code": _mint(count=1)[0],
                 },
@@ -136,7 +144,10 @@ class TestInvitesRequired:
                 "address": clash,
                 "signature": "fake",
                 "nonce": get_nonce(client, clash),
+                "origin": TEST_ORIGIN,
+                "deployment": test_deployment(),
                 "encryption_public_key": TEST_ENCRYPTION_KEY,
+                "encryption_key_attestation": "fake_attestation_for_testing",
                 "username": "Taken",
                 "invite_code": code,
             },

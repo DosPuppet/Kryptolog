@@ -24,7 +24,7 @@ import pathlib
 
 import oqs
 import pytest
-from conftest import get_nonce
+from conftest import TEST_ORIGIN, get_nonce, test_deployment
 
 import auth
 
@@ -39,14 +39,22 @@ def _vectors() -> dict:
 class TestSignedBodiesMatchTheSharedFixture:
     def test_login_challenge(self):
         v = _vectors()
-        assert auth._login_message(v["nonce"]) == v["bodies"]["login"]
+        assert (
+            auth._login_message(v["nonce"], origin=v["origin"], deployment=v["deployment"])
+            == v["bodies"]["login"]
+        )
 
     def test_login_challenge_with_the_encryption_key_bound_in(self):
         """The ML-KEM key is folded into the challenge (audit M-2), so the
         identity's signature authorizes that key."""
         v = _vectors()
         assert (
-            auth._login_message(v["nonce"], v["mlkem_public_key"])
+            auth._login_message(
+                v["nonce"],
+                encryption_public_key=v["mlkem_public_key"],
+                origin=v["origin"],
+                deployment=v["deployment"],
+            )
             == v["bodies"]["login_with_encryption_key"]
         )
 
@@ -76,6 +84,8 @@ class TestSignedBodiesMatchTheSharedFixture:
                 conv=v["message_conv"],
                 gid=v["message_gid"],
                 sid=v["message_sid"],
+                ts=v["message_ts"],
+                seq=v["message_seq"],
                 ct=v["message_ct"],
                 keys=v["message_keys"],
             )
@@ -90,6 +100,8 @@ class TestSignedBodiesMatchTheSharedFixture:
                 conv=v["message_conv"],
                 gid=v["message_gid"],
                 sid=v["message_sid"],
+                ts=v["message_ts"],
+                seq=v["message_seq"],
                 ct=None,
                 keys=v["message_keys"],
             )
@@ -99,7 +111,13 @@ class TestSignedBodiesMatchTheSharedFixture:
     def test_account_deletion(self):
         v = _vectors()
         assert (
-            auth.account_deletion_message(v["nonce"], v["deletion_mode"], v["redaction_keys"])
+            auth.account_deletion_message(
+                v["nonce"],
+                v["deletion_mode"],
+                v["redaction_keys"],
+                origin=v["origin"],
+                deployment=v["deployment"],
+            )
             == v["bodies"]["account_deletion"]
         )
 
@@ -114,14 +132,36 @@ class TestSignedBodiesMatchTheSharedFixture:
         expected = v["bodies"]["account_deletion"]
         assert (
             auth.account_deletion_message(
-                v["nonce"], v["deletion_mode"], list(reversed(v["redaction_keys"]))
+                v["nonce"],
+                v["deletion_mode"],
+                list(reversed(v["redaction_keys"])),
+                origin=v["origin"],
+                deployment=v["deployment"],
             )
             == expected
         )
-        assert auth.account_deletion_message(v["nonce"], "leave", v["redaction_keys"]) != expected
+        assert (
+            auth.account_deletion_message(
+                v["nonce"],
+                "leave",
+                v["redaction_keys"],
+                origin=v["origin"],
+                deployment=v["deployment"],
+            )
+            != expected
+        )
         # Stripping the namespace collapses two distinct rows into one.
         stripped = [k.split(":", 1)[1] for k in v["redaction_keys"]]
-        assert auth.account_deletion_message(v["nonce"], v["deletion_mode"], stripped) != expected
+        assert (
+            auth.account_deletion_message(
+                v["nonce"],
+                v["deletion_mode"],
+                stripped,
+                origin=v["origin"],
+                deployment=v["deployment"],
+            )
+            != expected
+        )
 
 
 class TestTheVectorsAreWhatWeThinkTheyAre:
@@ -167,6 +207,8 @@ class TestTheVectorsAreWhatWeThinkTheyAre:
             conv=v["message_conv"],
             gid=v["message_gid"],
             sid=v["message_sid"],
+            ts=v["message_ts"],
+            seq=v["message_seq"],
             keys=v["message_keys"],
         )
         redacted = auth.message_signing_body(ct=None, **common)
@@ -186,6 +228,8 @@ class TestTheVectorsAreWhatWeThinkTheyAre:
             from_=v["message_from"],
             conv=v["message_conv"],
             gid=v["message_gid"],
+            ts=v["message_ts"],
+            seq=v["message_seq"],
             keys=v["message_keys"],
             ct=None,
         )
@@ -202,10 +246,14 @@ class TestTheVectorsAreWhatWeThinkTheyAre:
         """Guards the fixture: agreement with a file both sides regenerate would
         pass for any value, including a broken one."""
         v = _vectors()
+        # Built by hand, sorted by hand: alg < encKey < iv < kem < v. The
+        # integer `v` (crypto-core 3.0.0) is the case worth pinning — Python and
+        # JS agree on an int's spelling, and on nothing about a bool's.
         canon = (
             "{"
             + ",".join(
-                f'"{name}":{{"encKey":"{e["encKey"]}","iv":"{e["iv"]}","kem":"{e["kem"]}"}}'
+                f'"{name}":{{"alg":"{e["alg"]}","encKey":"{e["encKey"]}",'
+                f'"iv":"{e["iv"]}","kem":"{e["kem"]}","v":{e["v"]}}}'
                 for name, e in sorted(v["message_keys"].items())
             )
             + "}"
@@ -248,7 +296,15 @@ class TestARealLoginSignatureThroughTheEndpoint:
             # Built the way the SPA builds it: crypto-core's loginChallengeBody
             # is pinned against auth._login_message by the fixture tests above,
             # so signing the server's form is signing the client's form.
-            signature = self._sign(auth._login_message(nonce, enc_key), signer)
+            signature = self._sign(
+                auth._login_message(
+                    nonce,
+                    encryption_public_key=enc_key,
+                    origin=TEST_ORIGIN,
+                    deployment=test_deployment(),
+                ),
+                signer,
+            )
             attestation = self._sign(auth.encryption_key_attestation_message(enc_key), signer)
 
         resp = client.post(
@@ -257,6 +313,8 @@ class TestARealLoginSignatureThroughTheEndpoint:
                 "address": address,
                 "signature": signature,
                 "nonce": nonce,
+                "origin": TEST_ORIGIN,
+                "deployment": test_deployment(),
                 "encryption_public_key": enc_key,
                 "encryption_key_attestation": attestation,
                 "username": "RealLogin",
@@ -277,11 +335,20 @@ class TestARealLoginSignatureThroughTheEndpoint:
         with oqs.Signature(auth.SIG_ALG) as signer:
             address = signer.generate_keypair().hex()
             nonce = get_nonce(client, address)
-            signature = self._sign(auth._login_message("a" * 32), signer)
+            signature = self._sign(
+                auth._login_message("a" * 32, origin=TEST_ORIGIN, deployment=test_deployment()),
+                signer,
+            )
 
         resp = client.post(
             "/auth/login",
-            json={"address": address, "signature": signature, "nonce": nonce},
+            json={
+                "address": address,
+                "signature": signature,
+                "nonce": nonce,
+                "origin": TEST_ORIGIN,
+                "deployment": test_deployment(),
+            },
         )
         assert resp.status_code == 401, resp.text
 
@@ -293,7 +360,9 @@ class TestARealLoginSignatureThroughTheEndpoint:
         with oqs.Signature(auth.SIG_ALG) as signer:
             address = signer.generate_keypair().hex()
             nonce = get_nonce(client, address)
-            signature = self._sign(auth._login_message(nonce), signer)
+            signature = self._sign(
+                auth._login_message(nonce, origin=TEST_ORIGIN, deployment=test_deployment()), signer
+            )
 
         resp = client.post(
             "/auth/login",
@@ -301,7 +370,40 @@ class TestARealLoginSignatureThroughTheEndpoint:
                 "address": address,
                 "signature": signature,
                 "nonce": nonce,
+                "origin": TEST_ORIGIN,
+                "deployment": test_deployment(),
                 "encryption_public_key": v["mlkem_public_key"],
+                "encryption_key_attestation": "fake_attestation_for_testing",
             },
         )
         assert resp.status_code == 401, resp.text
+
+    @pytest.mark.real_signatures
+    @pytest.mark.parametrize(
+        "signed_for",
+        [{"origin": "https://evil.example"}, {"deployment": "another-server"}],
+        ids=["another-origin", "another-deployment"],
+    )
+    def test_a_genuine_signature_made_for_another_server_is_refused(
+        self, client, signed_for, monkeypatch
+    ):
+        """K-02, with real crypto. The relay: a site that obtained a valid
+        signature over a challenge naming ITSELF (or another deployment)
+        submits it here, honestly reporting what it signed. The signature
+        verifies; the server must still refuse, because it names someone else.
+
+        With the allowlist production requires: in development an empty one
+        accepts any origin, which is why this sets it."""
+        monkeypatch.setenv("ALLOWED_ORIGINS", TEST_ORIGIN)
+        server = {"origin": TEST_ORIGIN, "deployment": test_deployment(), **signed_for}
+        with oqs.Signature(auth.SIG_ALG) as signer:
+            address = signer.generate_keypair().hex()
+            nonce = get_nonce(client, address)
+            signature = self._sign(auth._login_message(nonce, **server), signer)
+
+        resp = client.post(
+            "/auth/login",
+            json={"address": address, "signature": signature, "nonce": nonce, **server},
+        )
+        assert resp.status_code == 400, resp.text
+        assert "signed for another" in resp.json()["detail"]

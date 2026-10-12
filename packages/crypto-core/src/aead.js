@@ -7,7 +7,11 @@
 import { ml_kem768 } from '@noble/post-quantum/ml-kem.js';
 
 import { toHex, fromHex, toB64, fromB64, ENC, DEC } from './encoding.js';
-import { kemAesKey } from './pqc.js';
+import { kemAesKey, FORMAT_VERSION, KEM_ENVELOPE_ALG, assertFormat } from './pqc.js';
+
+// The symmetric envelope's algorithm id (see pqc.js for why every envelope
+// carries one). A session or content key is always a fresh 256-bit AES-GCM key.
+export const AEAD_ALG = 'A256GCM';
 
 // --- AES-GCM: session keys, envelopes, and chunks ---
 //
@@ -39,11 +43,12 @@ const aeadEncrypt = async (plaintext, keyHex, field) => {
         key,
         ENC.encode(plaintext)
     );
-    return { iv: toB64(iv), [field]: toB64(new Uint8Array(encrypted)) };
+    return { v: FORMAT_VERSION, alg: AEAD_ALG, iv: toB64(iv), [field]: toB64(new Uint8Array(encrypted)) };
 };
 
 /** Inverse of aeadEncrypt, reading the ciphertext from `field`. */
 const aeadDecrypt = async (envelope, keyHex, field) => {
+    assertFormat(envelope, AEAD_ALG, 'AES-GCM envelope');
     const key = await importAesKey(keyHex);
     const decrypted = await crypto.subtle.decrypt(
         { name: "AES-GCM", iv: fromB64(envelope.iv) },
@@ -70,6 +75,8 @@ export const wrapSessionKey = async (sessionKeyHex, publicKeyHex) => {
     );
 
     return {
+        v: FORMAT_VERSION,
+        alg: KEM_ENVELOPE_ALG,
         kem: toB64(ct),
         iv: toB64(iv),
         encKey: toB64(new Uint8Array(encryptedKey))
@@ -77,7 +84,8 @@ export const wrapSessionKey = async (sessionKeyHex, publicKeyHex) => {
 };
 
 export const unwrapSessionKey = async (wrappedKey, privateKeyHex) => {
-    // wrappedKey: { kem, iv, encKey } — all base64
+    // wrappedKey: { v, alg, kem, iv, encKey } — the three blobs base64
+    assertFormat(wrappedKey, KEM_ENVELOPE_ALG, 'wrapped key');
     const privateKey = fromHex(privateKeyHex);
     const ct = fromB64(wrappedKey.kem);
 

@@ -20,6 +20,11 @@ import { apiFetch } from '../services/api';
 // messenger/verifyMessage.js.
 export { verifyMessageAuthenticity };
 
+
+// Session rotation (crypto-core 3.0.0, audit 2026-10-12 K-07): see sendStateRef.
+const SESSION_MAX_MESSAGES = 100;
+const SESSION_MAX_AGE_MS = 24 * 60 * 60 * 1000;
+
 const MessengerContext = createContext();
 
 export const useMessengerContext = () => {
@@ -128,13 +133,43 @@ export const MessengerProvider = ({ children }) => {
         const excluded = [];
         for (const member of members) {
             if (!member.user?.encryption_public_key) continue;
-            // 'downgraded' counts as 'invalid': a member previously seen
-            // attested whose key now arrives with none is a key swap by
-            // omission, not a legacy account.
+            // Only a verified key is wrappable. 'downgraded' and, since the
+            // crypto-core 3.0.0 cutover, 'unattested' too: the server refuses a
+            // key without its attestation, so a member served without one is
+            // a key swap by omission, not a legacy account (audit 2026-10-12 K-04).
             const verdict = await attestationVerdict({ ...member.user, address: member.user_address });
-            (verdict === 'invalid' || verdict === 'downgraded' ? excluded : safe).push(member);
+            (verdict === 'verified' ? safe : excluded).push(member);
         }
         return { safe, excluded };
+    };
+
+    // ── Session lifetime and sequence (crypto-core 3.0.0) ──
+    //
+    // Every message signs `seq`, its position in a session this client minted
+    // (audit 2026-10-12 K-06), so receivers can detect a replay, a gap or a
+    // reordering. And no session outlives SESSION_MAX_MESSAGES or
+    // SESSION_MAX_AGE_MS (K-07): a leaked session key used to expose a DM
+    // conversation for as long as it lasted, which was forever. Rotation bounds
+    // that; it is not forward secrecy against a compromised ML-KEM key, which
+    // still opens every wrap ever sent to it — that needs a ratchet.
+    const sendStateRef = useRef({}); // sessionKeyId -> { next, startedAt }
+    const sessionUsable = (keyId) => {
+        const st = sendStateRef.current[keyId];
+        return !!st && st.next < SESSION_MAX_MESSAGES && Date.now() - st.startedAt < SESSION_MAX_AGE_MS;
+    };
+    const startSession = (keyId) => { sendStateRef.current[keyId] = { next: 0, startedAt: Date.now() }; };
+    const nextSeq = (keyId) => sendStateRef.current[keyId].next++;
+    // A session whose FIRST message never reached the server was delivered to
+    // nobody: its key travels only in that message. Forget it, so the next
+    // send mints a fresh one instead of sending under a key no one can read.
+    const abandonSession = (conv, keyId) => {
+        delete sendStateRef.current[keyId];
+        setActiveSessionIds(prev => {
+            if (prev[conv] === undefined) return prev;
+            const next = { ...prev };
+            delete next[conv];
+            return next;
+        });
     };
 
     // ── WebSocket (lifecycle in messenger/useMessengerSocket.js) ──
@@ -335,6 +370,7 @@ export const MessengerProvider = ({ children }) => {
             let sid = activeSessionIds[theirAddr];
             let sKey = sid ? sessionKeys[sessionKeyId(theirAddr, sid)] : null;
             let keyPayload = null;
+            if (sKey && !sessionUsable(sessionKeyId(theirAddr, sid))) sKey = null;
 
             if (!sKey) {
                 sid = crypto.randomUUID();
@@ -345,8 +381,12 @@ export const MessengerProvider = ({ children }) => {
                 keyPayload = { recip: wRecip, sender: wSender };
                 setSessionKeys(prev => ({ ...prev, [sessionKeyId(theirAddr, sid)]: sKey }));
                 setActiveSessionIds(prev => ({ ...prev, [theirAddr]: sid }));
+                startSession(sessionKeyId(theirAddr, sid));
             }
 
+            const keyId = sessionKeyId(theirAddr, sid);
+            const seq = nextSeq(keyId);
+            const ts = Date.now();
             const ct = await encryptWithSessionKey(text, sKey);
             // Sign the message end-to-end (audit S1): authorship is proven by the
             // sender's ML-DSA key, not asserted by the server.
@@ -354,18 +394,26 @@ export const MessengerProvider = ({ children }) => {
                 from: user.address.toLowerCase(),
                 conv: theirAddr,
                 sid,
+                ts,
+                seq,
                 keys: keyPayload,
                 ct,
             }));
-            const payload = { v: 1, sid, keys: keyPayload, ct, sig };
+            const payload = { v: 1, sid, ts, seq, keys: keyPayload, ct, sig };
 
-            const newMsg = await api(`${API_ENDPOINTS.BASE}/messages`, {
-                method: 'POST',
-                body: {
-                    recipient_address: partnerUser.address,
-                    content: JSON.stringify(payload)
-                }
-            });
+            let newMsg;
+            try {
+                newMsg = await api(`${API_ENDPOINTS.BASE}/messages`, {
+                    method: 'POST',
+                    body: {
+                        recipient_address: partnerUser.address,
+                        content: JSON.stringify(payload)
+                    }
+                });
+            } catch (e) {
+                if (keyPayload) abandonSession(theirAddr, keyId);
+                throw e;
+            }
 
             const uiMsg = { ...newMsg, plainText: text, verified: true };
             setActiveConversation(prev => {
@@ -594,6 +642,7 @@ export const MessengerProvider = ({ children }) => {
             if (sKey && groupSessionMembersRef.current[sessionKeyId(conv, sid)] !== safeSet) {
                 sKey = null;
             }
+            if (sKey && !sessionUsable(sessionKeyId(conv, sid))) sKey = null;
 
             if (!sKey) {
                 sid = crypto.randomUUID();
@@ -610,8 +659,12 @@ export const MessengerProvider = ({ children }) => {
                 groupSessionMembersRef.current[keyId] = safeSet;
                 setSessionKeys(prev => ({ ...prev, [keyId]: sKey }));
                 setActiveSessionIds(prev => ({ ...prev, [conv]: sid }));
+                startSession(keyId);
             }
 
+            const sendKeyId = sessionKeyId(conv, sid);
+            const seq = nextSeq(sendKeyId);
+            const ts = Date.now();
             const ct = await encryptWithSessionKey(text, sKey);
             // Sign end-to-end (audit S1) — critical for groups, where every member
             // holds the session key and could otherwise forge as another member.
@@ -622,15 +675,23 @@ export const MessengerProvider = ({ children }) => {
                 conv: channelId,
                 gid: channelId,
                 sid,
+                ts,
+                seq,
                 keys: keyPayload,
                 ct,
             }));
-            const payload = { v: 2, sid, gid: channelId, keys: keyPayload, ct, sig };
+            const payload = { v: 2, sid, gid: channelId, ts, seq, keys: keyPayload, ct, sig };
 
-            const newMsg = await api(`${API_ENDPOINTS.GROUPS.MESSAGES(channelId)}`, {
-                method: 'POST',
-                body: { content: JSON.stringify(payload) }
-            });
+            let newMsg;
+            try {
+                newMsg = await api(`${API_ENDPOINTS.GROUPS.MESSAGES(channelId)}`, {
+                    method: 'POST',
+                    body: { content: JSON.stringify(payload) }
+                });
+            } catch (e) {
+                if (keyPayload) abandonSession(conv, sendKeyId);
+                throw e;
+            }
 
             const uiMsg = { ...newMsg, plainText: text, verified: true };
             setActiveGroupConversation(prev => {

@@ -115,6 +115,7 @@ def production(monkeypatch):
     monkeypatch.setenv("KRYPTOLOG_ENV", "production")
     monkeypatch.setenv("KRYPTOLOG_REQUIRE_INVITE", "true")
     monkeypatch.setenv("ALLOWED_ORIGINS", "https://kryptolog.example")
+    monkeypatch.setenv("KRYPTOLOG_DEPLOYMENT_ID", "prod-7Hq_x2")
     return monkeypatch
 
 
@@ -165,3 +166,14 @@ def test_the_real_app_refuses_an_undeclared_oversized_body_with_413(client):
     r = client.post("/auth/login", content=chunks(), headers={"content-type": "application/json"})
     assert r.status_code == 413, r.text
     assert r.headers.get("x-content-type-options") == "nosniff"
+
+
+def test_production_refuses_the_development_deployment_id(production):
+    """Signed logins name the deployment (crypto-core 3.0.0, K-02). Two servers
+    both calling themselves "dev" would accept each other's signatures."""
+    production.delenv("KRYPTOLOG_DEPLOYMENT_ID")
+    with pytest.raises(RuntimeError, match="KRYPTOLOG_DEPLOYMENT_ID"):
+        config.check_production_settings()
+    production.setenv("KRYPTOLOG_DEPLOYMENT_ID", "has spaces")
+    with pytest.raises(RuntimeError, match="KRYPTOLOG_DEPLOYMENT_ID"):
+        config.check_production_settings()

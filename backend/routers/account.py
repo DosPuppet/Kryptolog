@@ -19,7 +19,7 @@ import models
 import schemas
 from database import get_db
 from dependencies import get_current_user, limiter
-from routers.auth import claim_nonce
+from routers.auth import check_signed_for_this_server, claim_nonce
 from security import authorization
 from utils.group_events import broadcast_removal
 from websocket_manager import manager
@@ -161,7 +161,14 @@ def _perform_deletion(db: Session, current_user: models.User, req: schemas.Accou
         # saying so plainly costs nothing: they hold the key to this account.
         raise HTTPException(status_code=410, detail="This account has already been deleted.")
 
-    message = auth.account_deletion_message(req.nonce, req.mode, signatures.keys())
+    check_signed_for_this_server(req.origin, req.deployment)
+    message = auth.account_deletion_message(
+        req.nonce,
+        req.mode,
+        signatures.keys(),
+        origin=req.origin,
+        deployment=req.deployment,
+    )
     if not auth.verify_message_signature(address, message, req.signature):
         # The one refusal worth a line of its own: somebody holding a live
         # session for this account asked to destroy it and could not prove they

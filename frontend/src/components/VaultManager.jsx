@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react';
 import { usePQC } from '../context/PQCContext';
 import { X, Plus, Trash2, Upload, User, RefreshCw, Timer, Share2 } from 'lucide-react';
 import { vaultService } from '../services/vault';
+import { isEncryptedVaultBlob } from '../utils/crypto';
 import { confirmDialog } from '../utils/confirm';
 import SendKeysModal from './transfer/SendKeysModal';
 
@@ -128,7 +129,7 @@ export default function VaultManager({ onClose }) {
             setImportJson(text);
             try {
                 const data = JSON.parse(text);
-                setImportIsEncrypted(!!(data && data.salt && data.iv && data.data && !data.accounts));
+                setImportIsEncrypted(isEncryptedVaultBlob(data));
             } catch {
                 setImportIsEncrypted(false);
             }
@@ -312,7 +313,7 @@ export default function VaultManager({ onClose }) {
                                     setImportFileName('');
                                     try {
                                         const data = JSON.parse(e.target.value);
-                                        setImportIsEncrypted(!!(data && data.salt && data.iv && data.data && !data.accounts));
+                                        setImportIsEncrypted(isEncryptedVaultBlob(data));
                                     } catch {
                                         setImportIsEncrypted(false);
                                     }

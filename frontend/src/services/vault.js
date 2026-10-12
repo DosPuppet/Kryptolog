@@ -1,4 +1,4 @@
-import { encryptVault, decryptVaultWithKey, encryptVaultWithKey, deriveKey, fromB64, generateAccount, signMessagePQC, decryptMessagePQC, unwrapSessionKey, generateSessionKey, wrapSessionKey, normalizeAccount } from '../utils/crypto';
+import { encryptVault, decryptVaultWithKey, encryptVaultWithKey, deriveKey, vaultKdfOf, vaultPasswordProblem, generateAccount, signMessagePQC, decryptMessagePQC, unwrapSessionKey, generateSessionKey, wrapSessionKey, normalizeAccount } from '../utils/crypto';
 import { backupMethods } from './vaultBackup';
 import { biometricMethods } from './vaultBiometrics';
 
@@ -14,7 +14,10 @@ class VaultService {
 
         // --- Derived key session cache ---
         this._cachedKey = null;      // CryptoKey (non-extractable AES-GCM 256)
-        this._cachedSalt = null;     // Uint8Array(16) — salt used to derive _cachedKey
+        // The KDF descriptor { alg, m, t, p, salt } _cachedKey was derived with
+        // (crypto-core 3.0.0). Written back into every blob sealed with that
+        // key, so the next reader derives the same one.
+        this._cachedKdf = null;
         this._cacheTimer = null;     // setTimeout reference for auto-expiry
         this._signingKey = null;     // active account ML-DSA private key (message signing, audit S1)
         // In-flight WebAuthn ceremony, shared by concurrent callers (vaultBiometrics.js).
@@ -36,13 +39,13 @@ class VaultService {
     }
 
     hasCachedKey() {
-        if (!this._cachedKey || !this._cachedSalt) return false;
+        if (!this._cachedKey || !this._cachedKdf) return false;
         return true;
     }
 
     clearKeyCache() {
         this._cachedKey = null;
-        this._cachedSalt = null;
+        this._cachedKdf = null;
         // Also drop the in-memory message-signing key (audit S1): cleared on
         // lock / tab-hide just like the derived vault key.
         this._signingKey = null;
@@ -52,10 +55,10 @@ class VaultService {
         }
     }
 
-    _cacheKey(key, salt) {
+    _cacheKey(key, kdf) {
         if (this._cacheTTL === 0) return; // "always ask" — no caching
         this._cachedKey = key;
-        this._cachedSalt = salt;
+        this._cachedKdf = kdf;
         this._touchCache();
     }
 
@@ -107,10 +110,10 @@ class VaultService {
 
         // Fall back to password-based derivation
         if (!password) throw new Error("Password required");
-        const salt = fromB64(encrypted.salt);
-        const key = await deriveKey(password, salt);
+        const kdf = vaultKdfOf(encrypted);
+        const key = await deriveKey(password, kdf);
         const vault = await decryptVaultWithKey(encrypted, key);
-        this._cacheKey(key, salt);
+        this._cacheKey(key, kdf);
         return this._normalizeVault(vault);
     }
 
@@ -131,15 +134,14 @@ class VaultService {
         let encrypted;
 
         if (this.hasCachedKey()) {
-            encrypted = await encryptVaultWithKey(fullVault, this._cachedKey, this._cachedSalt);
+            encrypted = await encryptVaultWithKey(fullVault, this._cachedKey, this._cachedKdf);
             this._touchCache();
         } else {
             if (!password) throw new Error("Password required to save");
             encrypted = await encryptVault(fullVault, password);
             // Cache the new key from the freshly encrypted vault
-            const salt = fromB64(encrypted.salt);
-            const key = await deriveKey(password, salt);
-            this._cacheKey(key, salt);
+            const key = await deriveKey(password, encrypted.kdf);
+            this._cacheKey(key, encrypted.kdf);
         }
 
         localStorage.setItem('kryptolog_vault', JSON.stringify(encrypted));
@@ -151,6 +153,10 @@ class VaultService {
 
     async setup(name, password) {
         if (this.hasVault()) throw new Error("Vault already exists");
+        // Enforced here, not only in the form: the vault password is the only
+        // thing between a stolen blob and the keys (audit 2026-10-12 K-08).
+        const problem = vaultPasswordProblem(password);
+        if (problem) throw new Error(problem);
 
         // A biometric registration wraps ONE vault's password, so anything left
         // over from a previous vault on this device is not merely useless — it
@@ -198,7 +204,7 @@ class VaultService {
         if (!encryptedJson) return false;
         try {
             const encrypted = JSON.parse(encryptedJson);
-            const key = await deriveKey(password, fromB64(encrypted.salt));
+            const key = await deriveKey(password, vaultKdfOf(encrypted));
             await decryptVaultWithKey(encrypted, key);
             return true;
         } catch {
@@ -213,15 +219,16 @@ class VaultService {
         try {
             const encrypted = JSON.parse(encryptedJson);
 
-            // 1. Derive key explicitly so we can cache it
-            const salt = fromB64(encrypted.salt);
-            const key = await deriveKey(password, salt);
+            // 1. Derive key explicitly so we can cache it, with the parameters
+            //    the blob itself names (crypto-core 3.0.0).
+            const kdf = vaultKdfOf(encrypted);
+            const key = await deriveKey(password, kdf);
 
             // 2. Decrypt with derived key (normalize legacy field names on load)
             const fullVault = this._normalizeVault(await decryptVaultWithKey(encrypted, key));
 
             // 3. Cache the derived key
-            this._cacheKey(key, salt);
+            this._cacheKey(key, kdf);
 
             // 4. Sanitize for Memory
             this.vault = {

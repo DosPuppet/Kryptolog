@@ -18,7 +18,13 @@ import uuid
 from datetime import timedelta
 
 import pytest
-from conftest import TEST_ENCRYPTION_KEY, auth_header, synthetic_address
+from conftest import (
+    TEST_ENCRYPTION_KEY,
+    TEST_ORIGIN,
+    auth_header,
+    synthetic_address,
+    test_deployment,
+)
 
 import models
 from security import authorization
@@ -396,6 +402,8 @@ class TestLeavingHasOneSpelling:
             json={
                 "mode": "leave",
                 "nonce": nonce,
+                "origin": TEST_ORIGIN,
+                "deployment": test_deployment(),
                 "signature": base64.b64encode(b"\x00" * 2420).decode(),
                 "redactions": [],
             },
@@ -434,6 +442,8 @@ class TestLeavingHasOneSpelling:
                 json={
                     "mode": "leave",
                     "nonce": nonce,
+                    "origin": TEST_ORIGIN,
+                    "deployment": test_deployment(),
                     "signature": base64.b64encode(b"\x00" * 2420).decode(),
                     "redactions": [],
                 },

@@ -15,10 +15,12 @@ from datetime import UTC
 import pytest
 from conftest import (
     TEST_ENCRYPTION_KEY,
+    TEST_ORIGIN,
     TEST_USER_ADDRESS,
     TestingSessionLocal,
     auth_header,
     do_login,
+    test_deployment,
 )
 from fastapi.testclient import TestClient
 
@@ -113,6 +115,8 @@ class TestNonceIsSingleUse:
             "address": TEST_USER_ADDRESS,
             "signature": "fake_signature_for_testing",
             "nonce": nonce,
+            "origin": TEST_ORIGIN,
+            "deployment": test_deployment(),
         }
 
         results = _run_concurrently(lambda c, i: c.post("/auth/login", json=body))
@@ -138,6 +142,8 @@ class TestNonceIsSingleUse:
                     "address": TEST_USER_ADDRESS,
                     "signature": "wrong",
                     "nonce": nonce,
+                    "origin": TEST_ORIGIN,
+                    "deployment": test_deployment(),
                 },
             )
         assert bad.status_code == 401
@@ -149,6 +155,8 @@ class TestNonceIsSingleUse:
                 "address": TEST_USER_ADDRESS,
                 "signature": "fake_signature_for_testing",
                 "nonce": nonce,
+                "origin": TEST_ORIGIN,
+                "deployment": test_deployment(),
             },
         )
         assert retry.status_code == 400, retry.text
@@ -173,6 +181,8 @@ class TestNonceIsSingleUse:
                 "address": TEST_USER_ADDRESS,
                 "signature": "fake_signature_for_testing",
                 "nonce": nonce,
+                "origin": TEST_ORIGIN,
+                "deployment": test_deployment(),
             },
         )
         assert resp.status_code == 400

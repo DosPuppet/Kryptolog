@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { Shield, Smartphone, FileJson, Loader2, ArrowLeft, Upload } from 'lucide-react';
 import { usePQC } from '../../context/PQCContext';
 import { claimTransfer, unpackHandoff } from '../../services/transfer';
+import { vaultPasswordProblem } from '../../utils/crypto';
 import { toast } from '../../utils/toast';
 
 // Receiver side of device-to-device key transfer (target device, not signed in).
@@ -45,7 +46,7 @@ export default function ReceiveKeys() {
         setError(null);
         const parsed = unpackHandoff(code);
         if (!parsed) return setError("That doesn't look like a valid transfer code.");
-        if (newPass.length < 6) return setError("Choose a device password of at least 6 characters.");
+        { const problem = vaultPasswordProblem(newPass); if (problem) return setError(problem); }
         setLoading(true);
         try {
             const blob = await claimTransfer(parsed.id);
@@ -74,7 +75,7 @@ export default function ReceiveKeys() {
         setError(null);
         if (!fileBlob) return setError("Choose a .kvault backup file first.");
         if (!filePass) return setError("Enter the backup passphrase.");
-        if (newPass.length < 6) return setError("Choose a device password of at least 6 characters.");
+        { const problem = vaultPasswordProblem(newPass); if (problem) return setError(problem); }
         setLoading(true);
         try {
             const account = await receiveVault(fileBlob, filePass, newPass);

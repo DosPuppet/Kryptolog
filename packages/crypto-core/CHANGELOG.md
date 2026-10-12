@@ -110,3 +110,34 @@ stops verifying. Two additions, both for account deletion.
   set are both signed: without them a relay could downgrade an erase into a
   leave, escalate a leave into an erase, or drop one id and turn a redaction
   into a deletion.
+
+## 3.0.0
+
+WIRE AND STORAGE FORMAT BREAK — the seventh cutover. Every change below lands in
+this one version so there is a single incompatibility boundary (audit 2026-10-12
+lot 4). Nothing written before it opens or verifies after it: wipe, do not migrate.
+
+- **Every envelope carries `v: 3` and an `alg` id** (K-10): KEM envelopes and
+  wrapped keys `MLKEM768-HKDF-A256GCM`, symmetric envelopes `A256GCM`, the vault
+  blob a KDF descriptor. Decoders refuse anything else with a `FormatError` that
+  says "written by an older version", instead of failing as a bad tag. This is
+  also the hook the hybrid cutover (4.0.0) will hang off.
+- **Vault KDF: PBKDF2-SHA-512 600k → Argon2id** (m = 46 MiB, t = 1, p = 1,
+  OWASP's first configuration; K-08). The blob is
+  `{ v, kdf: { alg, m, t, p, salt }, iv, data }`: parameters travel with the data,
+  so raising them later needs no cutover. `deriveVaultKeyBits`, `deriveKey` and
+  `encryptVaultWithKey` take that descriptor where they took a salt.
+- **`vaultPasswordProblem(password)`**: one rule for both clients — at least 12
+  characters, at least 5 distinct, not a sequence or a well-known password
+  (K-08, 2026-09-11 M-5). The floor was 4 in the extension and 6 in the SPA.
+- **`loginChallengeBody({ nonce, origin, deployment, encryptionKey })`** names the
+  SPA origin and the server deployment (K-02). The server refuses an origin it
+  does not serve and a deployment that is not its own.
+- **`accountDeletionBody({ nonce, mode, redactionKeys, origin, deployment })`**:
+  bound to the server the same way.
+- **`messageSigningBody`** signs `ts` (sender clock, ms) and `seq` (position in
+  the session) (K-06), so replays, gaps and reordering are detectable.
+- Every identifier interpolated into a signed body is checked against its
+  alphabet by signer and verifier alike (`SignedBodyError`), which makes the
+  bodies injective by construction rather than by the habits of honest clients
+  (2026-09-23 Q-6).

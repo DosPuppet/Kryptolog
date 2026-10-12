@@ -50,4 +50,11 @@ regexes = [
   # language can be the one that is right about the bytes, and both
   # backend/tests/test_signed_bodies.py and crypto-core's byte-compat suite pin it.
   '''ecbda0b6fa46f4617545cc91738d3c701b16f52c2de63403c15a5bf3de97d9f6''',
+
+  # The same `keysh`, regenerated for crypto-core 3.0.0: every wrapped key in
+  # `message_keys` gained `"v": 3` and `"alg": "MLKEM768-HKDF-A256GCM"`, so the
+  # digest moved. Same class, same check — recompute it from that file's
+  # `message_keys` with backend/auth.py's _canonical_json. The 2.x value above
+  # stays: the scan covers history, where it still lives.
+  '''060aaf6e6409db5164f3f20e904b0a063d05e472992ddf3ee9f96e6c4d968acc''',
 ]

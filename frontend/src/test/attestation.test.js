@@ -50,9 +50,12 @@ describe('assertSafeRecipient (fail-closed gate)', () => {
         expect(await assertSafeRecipient(user)).toBe('verified');
     });
 
-    it('passes an unattested recipient we have never seen attested (legacy account)', async () => {
+    it('refuses an unattested recipient, even one never seen before (K-04)', async () => {
+        // It used to pass as a "legacy account" — which let the directory
+        // substitute the key of anyone the user had not yet seen attested.
         const user = await makeIdentity();
-        expect(await assertSafeRecipient({ ...user, encryption_key_attestation: null })).toBe('unattested');
+        await expect(assertSafeRecipient({ ...user, encryption_key_attestation: null }))
+            .rejects.toThrow(/No key attestation/);
     });
 
     it('throws on an invalid attestation', async () => {
@@ -112,7 +115,7 @@ describe('attestation downgrade (TOFU-scoped unattested)', () => {
         const attested = await makeIdentity();
         const legacy = await makeIdentity();
         await assertSafeRecipient(attested);
-        expect(await assertSafeRecipient({ ...legacy, encryption_key_attestation: null }))
+        expect(await attestationVerdict({ ...legacy, encryption_key_attestation: null }))
             .toBe('unattested');
     });
 

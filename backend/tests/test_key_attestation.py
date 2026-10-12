@@ -15,10 +15,11 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from conftest import (
     TEST_ENCRYPTION_KEY,
+    TEST_ORIGIN,
     TEST_USER_ADDRESS,
     auth_header,
-    do_login,
     get_nonce,
+    test_deployment,
 )
 
 import auth as auth_module
@@ -32,6 +33,8 @@ def login_with_attestation(client, address, enc_key, attestation, username=None)
         "address": address,
         "signature": "fake_signature_for_testing",
         "nonce": nonce,
+        "origin": TEST_ORIGIN,
+        "deployment": test_deployment(),
         "encryption_public_key": enc_key,
         "encryption_key_attestation": attestation,
     }
@@ -56,14 +59,53 @@ class TestAttestationStorage:
         assert r.status_code == 200
         assert r.json()["encryption_key_attestation"] == FAKE_ATTESTATION
 
-    def test_login_without_attestation_still_works(self, client):
-        token, user = do_login(client, TEST_USER_ADDRESS, TEST_ENCRYPTION_KEY, "NoAtt")
-        assert user["encryption_key_attestation"] is None
+    def test_a_key_without_its_attestation_is_refused(self, client):
+        """Audit 2026-10-12 K-04. Optional "for older clients", the attestation
+        could simply be left out — and every new contact then had to accept an
+        unattested key on first sight, which is the substitution it exists to
+        stop. Since the crypto-core 3.0.0 cutover there are no older clients."""
+        nonce = get_nonce(client, TEST_USER_ADDRESS)
+        body = {
+            "address": TEST_USER_ADDRESS,
+            "signature": "fake_signature_for_testing",
+            "nonce": nonce,
+            "origin": TEST_ORIGIN,
+            "deployment": test_deployment(),
+            "encryption_public_key": TEST_ENCRYPTION_KEY,
+        }
+        resp = client.post("/auth/login", json=body)
+        assert resp.status_code == 400
+        assert "attestation" in resp.json()["detail"].lower()
 
-    def test_backfill_on_existing_account(self, client):
-        # Account created without an attestation…
-        do_login(client, TEST_USER_ADDRESS, TEST_ENCRYPTION_KEY, "Backfill")
-        # …starts sending one later (same key): it gets stored.
+    def test_a_login_that_submits_no_key_keeps_the_stored_binding(self, client):
+        login_with_attestation(
+            client, TEST_USER_ADDRESS, TEST_ENCRYPTION_KEY, FAKE_ATTESTATION, "Keeps"
+        )
+        nonce = get_nonce(client, TEST_USER_ADDRESS)
+        resp = client.post(
+            "/auth/login",
+            json={
+                "address": TEST_USER_ADDRESS,
+                "signature": "fake_signature_for_testing",
+                "nonce": nonce,
+                "origin": TEST_ORIGIN,
+                "deployment": test_deployment(),
+            },
+        )
+        assert resp.status_code == 200
+        user = resp.json()["user"]
+        assert user["encryption_public_key"] == TEST_ENCRYPTION_KEY
+        assert user["encryption_key_attestation"] == FAKE_ATTESTATION
+
+    def test_backfill_on_an_account_stored_without_one(self, client, db_session):
+        # A row from before attestations existed: key, no attestation…
+        import models
+
+        db_session.add(
+            models.User(address=TEST_USER_ADDRESS, encryption_public_key=TEST_ENCRYPTION_KEY)
+        )
+        db_session.commit()
+        # …gets one the first time its client logs in with it.
         resp = login_with_attestation(
             client, TEST_USER_ADDRESS, TEST_ENCRYPTION_KEY, FAKE_ATTESTATION
         )
@@ -82,11 +124,16 @@ class TestAttestationStorage:
         assert resp.status_code == 200
         assert resp.json()["user"]["encryption_key_attestation"] == new_att
 
-    def test_key_change_without_attestation_clears_stale_one(self, client):
+    def test_a_key_change_without_attestation_is_refused_and_changes_nothing(
+        self, client, db_session
+    ):
+        """It used to REPLACE the key and ERASE the stored attestation. Now the
+        old, attested binding is exactly what stays."""
+        import models
+
         login_with_attestation(
             client, TEST_USER_ADDRESS, TEST_ENCRYPTION_KEY, FAKE_ATTESTATION, "Stale"
         )
-        new_key = "2b" * 1184
         nonce = get_nonce(client, TEST_USER_ADDRESS)
         resp = client.post(
             "/auth/login",
@@ -94,11 +141,16 @@ class TestAttestationStorage:
                 "address": TEST_USER_ADDRESS,
                 "signature": "fake_signature_for_testing",
                 "nonce": nonce,
-                "encryption_public_key": new_key,
+                "origin": TEST_ORIGIN,
+                "deployment": test_deployment(),
+                "encryption_public_key": "2b" * 1184,
             },
         )
-        assert resp.status_code == 200
-        assert resp.json()["user"]["encryption_key_attestation"] is None
+        assert resp.status_code == 400
+        db_session.expire_all()
+        row = db_session.query(models.User).filter_by(address=TEST_USER_ADDRESS).one()
+        assert row.encryption_public_key == TEST_ENCRYPTION_KEY
+        assert row.encryption_key_attestation == FAKE_ATTESTATION
 
 
 class TestAttestationRejection:
@@ -118,6 +170,8 @@ class TestAttestationRejection:
                 "address": TEST_USER_ADDRESS,
                 "signature": "fake_signature_for_testing",
                 "nonce": nonce,
+                "origin": TEST_ORIGIN,
+                "deployment": test_deployment(),
                 "encryption_key_attestation": FAKE_ATTESTATION,
             },
         )

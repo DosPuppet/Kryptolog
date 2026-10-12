@@ -33,21 +33,18 @@ describe('golden constants (wire/storage format contract)', () => {
         });
     });
 
-    // Golden vector regenerated deliberately for v1.4.0 (audit M-8): the body
-    // gained `gid` and `keysh`. `keysh` here is sha256("null") — the digest of
-    // an absent key envelope — which is also what `echo -n null | sha256sum`
-    // gives, so this vector is checkable by hand.
-    //
-    // UNCHANGED at 2.1.0, and deliberately so: 2.1.0 added a redacted branch
-    // taken only when `ct` is absent, so a message WITH a ciphertext must still
-    // produce these exact bytes. This vector is the proof that release was
-    // additive — if it ever needs regenerating, the change was a cutover.
+    // Golden vector regenerated deliberately for 3.0.0 (audit 2026-10-12 K-06):
+    // the body gained `ts` and `seq`, between `sid` and `keysh`. `keysh` is still
+    // sha256("null") — the digest of an absent key envelope — checkable by hand
+    // with `echo -n null | sha256sum`. The 1.4.0 vector it replaces was the
+    // proof that 2.1.0 was additive; this one is a cutover, and says so.
     const NULL_KEYS_DIGEST = '74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b';
+    const BASE = { from: 'aa', conv: 'bb', sid: 'S', ts: 1700000000000, seq: 4 };
 
-    it('message signing body is byte-exact', async () => {
-        expect(await core.messageSigningBody({ from: 'A', conv: 'B', sid: 'S', ct: 'C' }))
+    it('message signing body is byte-exact (3.0.0)', async () => {
+        expect(await core.messageSigningBody({ ...BASE, ct: 'C' }))
             .toBe('Kryptolog Signed Message v1\ncontext=message\n' +
-                `from=A\nconv=B\ngid=\nsid=S\nkeysh=${NULL_KEYS_DIGEST}\nct=C`);
+                `from=aa\nconv=bb\ngid=\nsid=S\nts=1700000000000\nseq=4\nkeysh=${NULL_KEYS_DIGEST}\nct=C`);
         expect(NULL_KEYS_DIGEST).toBe(createHash('sha256').update('null').digest('hex'));
     });
 
@@ -55,87 +52,112 @@ describe('golden constants (wire/storage format contract)', () => {
         // Production passes the AES-GCM envelope object, not a string. The signed
         // bytes must commit to the actual iv+content so a same-session ciphertext
         // cannot be swapped under a valid signature.
-        expect(await core.messageSigningBody({ from: 'A', conv: 'B', sid: 'S', ct: { iv: '00', content: 'ff' } }))
+        expect(await core.messageSigningBody({ ...BASE, ct: { iv: '00', content: 'ff' } }))
             .toBe('Kryptolog Signed Message v1\ncontext=message\n' +
-                `from=A\nconv=B\ngid=\nsid=S\nkeysh=${NULL_KEYS_DIGEST}\nct=00.ff`);
-        // Different ciphertext => different signed bytes.
-        expect(await core.messageSigningBody({ from: 'A', conv: 'B', sid: 'S', ct: { iv: '00', content: 'ee' } }))
-            .not.toBe(await core.messageSigningBody({ from: 'A', conv: 'B', sid: 'S', ct: { iv: '00', content: 'ff' } }));
+                `from=aa\nconv=bb\ngid=\nsid=S\nts=1700000000000\nseq=4\nkeysh=${NULL_KEYS_DIGEST}\nct=00.ff`);
+        expect(await core.messageSigningBody({ ...BASE, ct: { iv: '00', content: 'ee' } }))
+            .not.toBe(await core.messageSigningBody({ ...BASE, ct: { iv: '00', content: 'ff' } }));
     });
 
-    it('an author-redacted body drops the ciphertext and keeps everything else (2.1.0)', async () => {
-        // Removal has to keep `keys`: a DM epoch's session key lives in the
-        // first message under that sid and the partner's own replies reuse it,
-        // so deleting that message takes the partner's authored history too.
-        const base = { from: 'A', conv: 'B', sid: 'S' };
-        expect(await core.messageSigningBody({ ...base, ct: null }))
-            .toBe('Kryptolog Signed Message v1\ncontext=message\n' +
-                `from=A\nconv=B\ngid=\nsid=S\nkeysh=${NULL_KEYS_DIGEST}\nredacted=1`);
-        // Absent and explicitly-null are the same statement, so the two
-        // languages cannot diverge on which one they emit.
-        expect(await core.messageSigningBody({ ...base, ct: undefined }))
-            .toBe(await core.messageSigningBody({ ...base, ct: null }));
-    });
-
-    it('no ciphertext value can spell a redaction (2.1.0)', async () => {
-        // The disjointness the design rests on. If a ciphertext could produce
-        // the redacted body, one signature would be valid for two different
-        // messages — the L-12 defect in a new place — and a server could pass a
-        // live message off as author-redacted.
-        const base = { from: 'A', conv: 'B', sid: 'S' };
-        const redacted = await core.messageSigningBody({ ...base, ct: null });
-        for (const ct of ['null', 'undefined', 'redacted=1', '', '1']) {
-            expect(await core.messageSigningBody({ ...base, ct })).not.toBe(redacted);
+    it('the timestamp and the sequence number are both signed (3.0.0, K-06)', async () => {
+        // A replay re-delivers the same bytes; a reorder or a drop shows up as a
+        // seq out of place. Neither is detectable unless both are signed.
+        const signed = await core.messageSigningBody({ ...BASE, ct: 'C' });
+        expect(await core.messageSigningBody({ ...BASE, ts: BASE.ts + 1, ct: 'C' })).not.toBe(signed);
+        expect(await core.messageSigningBody({ ...BASE, seq: BASE.seq + 1, ct: 'C' })).not.toBe(signed);
+        for (const bad of [undefined, null, -1, 1.5, '4', Number.MAX_SAFE_INTEGER + 1]) {
+            await expect(core.messageSigningBody({ ...BASE, seq: bad, ct: 'C' })).rejects.toThrow(core.SignedBodyError);
+            await expect(core.messageSigningBody({ ...BASE, ts: bad, ct: 'C' })).rejects.toThrow(core.SignedBodyError);
         }
     });
 
-    it('the account-deletion body binds the mode and the redaction set (2.1.0)', async () => {
-        const keys = ['dm:2', 'group:10', 'dm:10'];
-        const body = await core.accountDeletionBody('N', 'erase', keys);
-        expect(body.startsWith('Kryptolog Signed Message v1\ncontext=account-deletion\n')).toBe(true);
-        expect(body).toContain('\nmode=erase\n');
+    it('identifiers that could forge a line are refused (3.0.0, 2026-09-23 Q-6)', async () => {
+        // The body is `key=value` lines without escaping: a sid carrying a line
+        // break and a label could make one body read two ways.
+        for (const sid of ['S\nkeysh=00', '', 'x'.repeat(65), 'a b', 'é']) {
+            await expect(core.messageSigningBody({ ...BASE, sid, ct: 'C' })).rejects.toThrow(core.SignedBodyError);
+        }
+        await expect(core.messageSigningBody({ ...BASE, gid: 'g\nsid=x', ct: 'C' })).rejects.toThrow(core.SignedBodyError);
+        await expect(core.messageSigningBody({ ...BASE, from: 'AA', ct: 'C' })).rejects.toThrow(core.SignedBodyError);
+        // UUIDs (sids, channel ids) and lowercase hex (addresses) are what real
+        // clients send, and pass.
+        await core.messageSigningBody({ ...BASE, sid: '9c8d7e6f-1a2b-3c4d-5e6f-708192a3b4c5', gid: '0f0e-aa', ct: 'C' });
+    });
 
-        // Namespaced ids, not bare numbers: DMs and group messages have
-        // independent id sequences, so "10" names two different rows and a
-        // relay could drop one while the set still matched.
-        expect(body).toContain(`redactions=${createHash('sha256')
-            .update('["dm:10","dm:2","group:10"]').digest('hex')}`);
+    it('an author-redacted body drops the ciphertext and keeps everything else (2.1.0)', async () => {
+        expect(await core.messageSigningBody({ ...BASE, ct: null }))
+            .toBe('Kryptolog Signed Message v1\ncontext=message\n' +
+                `from=aa\nconv=bb\ngid=\nsid=S\nts=1700000000000\nseq=4\nkeysh=${NULL_KEYS_DIGEST}\nredacted=1`);
+        // Absent and explicitly-null are the same statement, so the two
+        // languages cannot diverge on which one they emit.
+        expect(await core.messageSigningBody({ ...BASE, ct: undefined }))
+            .toBe(await core.messageSigningBody({ ...BASE, ct: null }));
+    });
+
+    it('no ciphertext value can spell a redaction (2.1.0)', async () => {
+        // If a ciphertext could produce the redacted body, one signature would
+        // be valid for two different messages, and a server could pass a live
+        // message off as author-redacted.
+        const redacted = await core.messageSigningBody({ ...BASE, ct: null });
+        for (const ct of ['null', 'undefined', 'redacted=1', '', '1']) {
+            expect(await core.messageSigningBody({ ...BASE, ct })).not.toBe(redacted);
+        }
+    });
+
+    const DEL = { nonce: '0f', mode: 'erase', origin: 'https://k.example', deployment: 'dep-1' };
+
+    it('the account-deletion body binds the server, the mode and the redaction set (3.0.0)', async () => {
+        const redactionKeys = ['dm:2', 'group:10', 'dm:10'];
+        const body = await core.accountDeletionBody({ ...DEL, redactionKeys });
+        expect(body).toBe('Kryptolog Signed Message v1\ncontext=account-deletion\n' +
+            'origin=https://k.example\ndeployment=dep-1\nnonce=0f\nmode=erase\n' +
+            `redactions=${createHash('sha256').update('["dm:10","dm:2","group:10"]').digest('hex')}`);
 
         // Order in, order out: the caller's array must not decide the bytes.
-        expect(await core.accountDeletionBody('N', 'erase', [...keys].reverse())).toBe(body);
-        // ...but the mode and the membership of the set both must.
-        expect(await core.accountDeletionBody('N', 'leave', keys)).not.toBe(body);
-        expect(await core.accountDeletionBody('N', 'erase', ['dm:2', 'dm:10'])).not.toBe(body);
-        // Dropping the namespace would collapse two distinct rows into one.
-        expect(await core.accountDeletionBody('N', 'erase', ['dm:2', 'dm:10', 'dm:10']))
-            .not.toBe(body);
+        expect(await core.accountDeletionBody({ ...DEL, redactionKeys: [...redactionKeys].reverse() })).toBe(body);
+        // ...but the mode, the server and the membership of the set all must.
+        expect(await core.accountDeletionBody({ ...DEL, mode: 'leave', redactionKeys })).not.toBe(body);
+        expect(await core.accountDeletionBody({ ...DEL, origin: 'https://evil.example', redactionKeys })).not.toBe(body);
+        expect(await core.accountDeletionBody({ ...DEL, deployment: 'other', redactionKeys })).not.toBe(body);
+        expect(await core.accountDeletionBody({ ...DEL, redactionKeys: ['dm:2', 'dm:10'] })).not.toBe(body);
+        await expect(core.accountDeletionBody({ ...DEL, mode: 'nuke' })).rejects.toThrow(core.SignedBodyError);
     });
 
     it('message signing body binds the key envelope and the group id (M-8)', async () => {
         const keys = { alice: { kem: 'aa', iv: 'bb', encKey: 'cc' }, bob: { kem: 'dd', iv: 'ee', encKey: 'ff' } };
-        const base = { from: 'A', conv: 'B', gid: 'B', sid: 'S', ct: 'C' };
+        const base = { ...BASE, gid: 'bb', ct: 'C' };
         const signed = await core.messageSigningBody({ ...base, keys });
 
         // Dropping a member's wrapped key changes the signed bytes — the relay's
         // targeted-exclusion attack no longer survives verification.
-        const dropped = { alice: keys.alice };
-        expect(await core.messageSigningBody({ ...base, keys: dropped })).not.toBe(signed);
-
+        expect(await core.messageSigningBody({ ...base, keys: { alice: keys.alice } })).not.toBe(signed);
         // Substituting one entry does too.
         const swapped = { ...keys, bob: { kem: '00', iv: '11', encKey: '22' } };
         expect(await core.messageSigningBody({ ...base, keys: swapped })).not.toBe(signed);
-
         // Re-homing under another gid does too.
         expect(await core.messageSigningBody({ ...base, gid: 'other', keys })).not.toBe(signed);
-
-        // Key INSERTION ORDER does not: sender and verifier must agree whatever
-        // order the payload happened to serialize in.
-        const reordered = { bob: keys.bob, alice: keys.alice };
-        expect(await core.messageSigningBody({ ...base, keys: reordered })).toBe(signed);
-
+        // Key INSERTION ORDER does not.
+        expect(await core.messageSigningBody({ ...base, keys: { bob: keys.bob, alice: keys.alice } })).toBe(signed);
         // An absent envelope and an explicit null are the same statement.
         expect(await core.messageSigningBody({ ...base, keys: null }))
             .toBe(await core.messageSigningBody(base));
+    });
+
+    it('the login challenge names the origin and the deployment (3.0.0, K-02)', () => {
+        const args = { nonce: 'ab', origin: 'https://k.example', deployment: 'dep-1', encryptionKey: 'cd' };
+        expect(core.loginChallengeBody(args)).toBe('Kryptolog Signed Message v1\ncontext=login\n' +
+            'Sign in to Kryptolog\norigin=https://k.example\ndeployment=dep-1\nnonce=ab\nencryption-key=cd');
+        // No key: the line is still there, empty, so the body has one shape.
+        expect(core.loginChallengeBody({ ...args, encryptionKey: null }).endsWith('\nencryption-key=')).toBe(true);
+        expect(core.loginChallengeBody({ ...args, origin: 'https://evil.example' }))
+            .not.toBe(core.loginChallengeBody(args));
+        // Origins are the browser's serialisation — anything else is refused, so
+        // the extension can compare the line to sender.origin as a string.
+        for (const origin of ['https://K.example', 'https://k.example/', 'https://k.example/path',
+            'k.example', 'https://k.example\nnonce=00', '']) {
+            expect(() => core.loginChallengeBody({ ...args, origin })).toThrow(core.SignedBodyError);
+        }
+        expect(core.isCanonicalOrigin('http://localhost:5173')).toBe(true);
     });
 
     it('canonicalJson sorts keys recursively and is insertion-order independent', () => {
@@ -179,6 +201,8 @@ describe('randomized envelope round-trips', () => {
     it('KEM message envelope: encrypt -> decrypt', async () => {
         const { publicKey, privateKey } = await core.generateMlKemKeyPair();
         const env = await core.encryptMessage('secret payload', publicKey);
+        expect(env.v).toBe(3);
+        expect(env.alg).toBe('MLKEM768-HKDF-A256GCM');
         expect(env).toHaveProperty('kem');
         expect(env).toHaveProperty('iv');
         expect(env).toHaveProperty('content');
@@ -189,6 +213,8 @@ describe('randomized envelope round-trips', () => {
         const { publicKey, privateKey } = await core.generateMlKemKeyPair();
         const sessionKey = await core.generateSessionKey();
         const wrapped = await core.wrapSessionKey(sessionKey, publicKey);
+        expect(wrapped.v).toBe(3);
+        expect(wrapped.alg).toBe('MLKEM768-HKDF-A256GCM');
         expect(wrapped).toHaveProperty('encKey');
         expect(await core.unwrapSessionKey(wrapped, privateKey)).toBe(sessionKey);
 
@@ -202,10 +228,32 @@ describe('randomized envelope round-trips', () => {
         // cannot come back as a kindness to old data.
         const { publicKey, privateKey } = await core.generateMlKemKeyPair();
         const sessionKey = await core.generateSessionKey();
-        const { kem, iv, encKey } = await core.wrapSessionKey(sessionKey, publicKey);
+        const { v, alg, kem, iv, encKey } = await core.wrapSessionKey(sessionKey, publicKey);
         await expect(
-            core.unwrapSessionKey({ kem, iv, ct: encKey }, privateKey)
+            core.unwrapSessionKey({ v, alg, kem, iv, ct: encKey }, privateKey)
         ).rejects.toThrow();
+    });
+
+    it('every decoder refuses an older or foreign format BY NAME (3.0.0, K-10)', async () => {
+        // Before 3.0.0 nothing carried a version, so old data failed as an
+        // opaque tag error. Now the refusal says what it is, before any crypto.
+        const { publicKey, privateKey } = await core.generateMlKemKeyPair();
+        const sessionKey = await core.generateSessionKey();
+        const wrapped = await core.wrapSessionKey(sessionKey, publicKey);
+        const env = await core.encryptMessage('m', publicKey);
+        const sym = await core.encryptWithSessionKey('m', sessionKey);
+
+        const unversioned = (env) => {
+            const rest = { ...env };
+            delete rest.v;
+            delete rest.alg;
+            return rest;
+        };
+        await expect(core.unwrapSessionKey(unversioned(wrapped), privateKey)).rejects.toThrow(/older Kryptolog version/);
+        await expect(core.decryptMessage(unversioned(env), privateKey)).rejects.toThrow(/older Kryptolog version/);
+        await expect(core.decryptWithSessionKey(unversioned(sym), sessionKey)).rejects.toThrow(/older Kryptolog version/);
+        await expect(core.unwrapSessionKey({ ...wrapped, alg: 'X25519' }, privateKey)).rejects.toThrow(core.FormatError);
+        await expect(core.decryptWithSessionKey({ ...sym, v: 4 }, sessionKey)).rejects.toThrow(core.FormatError);
     });
 
     it('symmetric envelope: encrypt -> decrypt', async () => {
@@ -243,24 +291,28 @@ describe('randomized envelope round-trips', () => {
         await expect(core.decryptChunk('00', '00', key)).rejects.toThrow(/aad is required/);
     });
 
-    it('vault: password encrypt -> decrypt (PBKDF2 600k / SHA-512)', async () => {
+    const GOLDEN_KDF = {
+        alg: 'argon2id', m: 46 * 1024, t: 1, p: 1,
+        salt: core.toB64(core.fromHex('000102030405060708090a0b0c0d0e0f')),
+    };
+
+    it('vault: password encrypt -> decrypt (Argon2id, 3.0.0)', async () => {
         const vault = await core.encryptVault({ a: 1, b: 'two' }, 'hunter2');
-        expect(vault).toHaveProperty('salt');
+        expect(vault.v).toBe(3);
+        expect(vault.kdf).toMatchObject({ alg: 'argon2id', m: 46 * 1024, t: 1, p: 1 });
         expect(vault).toHaveProperty('iv');
         expect(vault).toHaveProperty('data');
         expect(await core.decryptVault(vault, 'hunter2')).toEqual({ a: 1, b: 'two' });
         await expect(core.decryptVault(vault, 'wrong')).rejects.toThrow();
     });
 
-    // The vault KDF is pinned as a golden vector because deriveKey() is now
-    // COMPOSED from deriveVaultKeyBits() + importVaultKey() (v1.5.0, audit M-4).
-    // That refactor must not have moved the key by a single byte — every vault
-    // already on disk was written under the old one-shot deriveKey.
-    it('vault KDF output is byte-exact (PBKDF2-SHA512, 600k, 256 bits)', async () => {
-        const salt = core.fromHex('000102030405060708090a0b0c0d0e0f');
-        const bits = await core.deriveVaultKeyBits('correct horse battery staple', salt);
+    // Pinned as a golden vector, and checked once against the reference C
+    // implementation (argon2-cffi's hash_secret_raw, Type.ID, same inputs) when
+    // it was generated — so this is not noble agreeing with itself.
+    it('vault KDF output is byte-exact (Argon2id m=46MiB t=1 p=1, 256 bits)', async () => {
+        const bits = await core.deriveVaultKeyBits('correct horse battery staple', GOLDEN_KDF);
         expect(core.toHex(bits))
-            .toBe('1cf30a518878f44aecb75c0e0d0d69a02ac5f9181a53b5292092e10a3c0cbb41');
+            .toBe('fdca024fae17b143175e4e725b9341fbbd176aaf77d79d78c44d28007d7b11a7');
         expect(bits).toBeInstanceOf(Uint8Array);
         expect(bits.length).toBe(32);
     });
@@ -269,30 +321,60 @@ describe('randomized envelope round-trips', () => {
         // Resuming a session from cached key BYTES has to open a vault that was
         // sealed by the password path, and vice versa — otherwise a worker
         // restart would look exactly like a wrong password.
-        const salt = crypto.getRandomValues(new Uint8Array(16));
-        const fromPassword = await core.deriveKey('hunter2', salt);
-        const fromBytes = await core.importVaultKey(await core.deriveVaultKeyBits('hunter2', salt));
+        const kdf = core.newVaultKdf();
+        const fromPassword = await core.deriveKey('hunter2', kdf);
+        const fromBytes = await core.importVaultKey(await core.deriveVaultKeyBits('hunter2', kdf));
 
-        const sealed = await core.encryptVaultWithKey({ a: 1 }, fromPassword, salt);
+        const sealed = await core.encryptVaultWithKey({ a: 1 }, fromPassword, kdf);
         expect(await core.decryptVaultWithKey(sealed, fromBytes)).toEqual({ a: 1 });
+        // The descriptor travels with the blob, so the next reader can derive.
+        expect(core.vaultKdfOf(sealed)).toEqual(kdf);
 
-        const resealed = await core.encryptVaultWithKey({ b: 2 }, fromBytes, salt);
+        const resealed = await core.encryptVaultWithKey({ b: 2 }, fromBytes, kdf);
         expect(await core.decryptVaultWithKey(resealed, fromPassword)).toEqual({ b: 2 });
     });
 
-    it('a different password or salt yields a different vault key', async () => {
-        const salt = core.fromHex('000102030405060708090a0b0c0d0e0f');
-        const other = core.fromHex('0f0e0d0c0b0a09080706050403020100');
-        const base = core.toHex(await core.deriveVaultKeyBits('pw', salt));
-        expect(core.toHex(await core.deriveVaultKeyBits('pw2', salt))).not.toBe(base);
-        expect(core.toHex(await core.deriveVaultKeyBits('pw', other))).not.toBe(base);
+    it('a different password, salt or parameter yields a different vault key', async () => {
+        const base = core.toHex(await core.deriveVaultKeyBits('pw', GOLDEN_KDF));
+        expect(core.toHex(await core.deriveVaultKeyBits('pw2', GOLDEN_KDF))).not.toBe(base);
+        const otherSalt = { ...GOLDEN_KDF, salt: core.toB64(core.fromHex('0f0e0d0c0b0a09080706050403020100')) };
+        expect(core.toHex(await core.deriveVaultKeyBits('pw', otherSalt))).not.toBe(base);
+        expect(core.toHex(await core.deriveVaultKeyBits('pw', { ...GOLDEN_KDF, t: 2 }))).not.toBe(base);
+    });
+
+    it('KDF parameters from a blob are bounded before anything is derived', async () => {
+        // An imported backup chooses its own parameters; an absurd `m` would be
+        // a memory bomb, and an unknown alg must not be guessed at.
+        for (const bad of [{ m: 1 << 30 }, { m: 16 }, { t: 0 }, { t: 100 }, { p: 9 }, { alg: 'pbkdf2' }, { salt: core.toB64(new Uint8Array(4)) }]) {
+            await expect(core.deriveVaultKeyBits('pw', { ...GOLDEN_KDF, ...bad })).rejects.toThrow(core.FormatError);
+        }
+    });
+
+    it('a pre-3.0.0 vault or backup is refused by name, not as a wrong password', async () => {
+        const legacy = { salt: 'AAAAAAAAAAAAAAAAAAAAAA==', iv: 'AAAAAAAAAAAAAAAA', data: 'AAAA' };
+        expect(core.isEncryptedVaultBlob(legacy)).toBe(true);
+        await expect(core.decryptVault(legacy, 'pw')).rejects.toThrow(/older Kryptolog version/);
+        const key = await core.deriveKey('pw', core.newVaultKdf());
+        await expect(core.decryptVaultWithKey(legacy, key)).rejects.toThrow(/older Kryptolog version/);
+        // A plain (unencrypted) account export is not a blob.
+        expect(core.isEncryptedVaultBlob({ accounts: [] })).toBe(false);
     });
 
     it('vault: pre-derived key encrypt -> decrypt', async () => {
-        const salt = crypto.getRandomValues(new Uint8Array(16));
-        const key = await core.deriveKey('pw', salt);
-        const vault = await core.encryptVaultWithKey({ x: 9 }, key, salt);
+        const kdf = core.newVaultKdf();
+        const key = await core.deriveKey('pw', kdf);
+        const vault = await core.encryptVaultWithKey({ x: 9 }, key, kdf);
         expect(await core.decryptVaultWithKey(vault, key)).toEqual({ x: 9 });
+    });
+
+    it('the vault password rule (3.0.0, K-08)', () => {
+        expect(core.vaultPasswordProblem('correct horse battery staple')).toBeNull();
+        expect(core.vaultPasswordProblem('Tr0ub4dor&3xyz')).toBeNull();
+        for (const weak of ['', 'short', 'hunter2', '12345678901', 'aaaaaaaaaaaaaaaa',
+            'abababababab', 'Password1234', '123456789012', 'abcdefghijklmn', 'zyxwvutsrqpo']) {
+            expect(core.vaultPasswordProblem(weak), weak).toEqual(expect.any(String));
+        }
+        expect(core.VAULT_PASSWORD_MIN_LENGTH).toBe(12);
     });
 });
 
@@ -362,7 +444,8 @@ describe('encoding split: blobs base64, identifiers hex (v2.0.0, audit L-12)', (
 
     it('the vault blob is base64 on every field', async () => {
         const vault = await core.encryptVault({ a: 1 }, 'hunter2');
-        for (const f of ['salt', 'iv', 'data']) isB64(vault[f]);
+        for (const f of ['iv', 'data']) isB64(vault[f]);
+        isB64(vault.kdf.salt);
         expect(await core.decryptVault(vault, 'hunter2')).toEqual({ a: 1 });
     });
 
@@ -488,7 +571,7 @@ describe('encryption-key attestation (audit M-1, v1.3.0)', () => {
 
 describe('single-source / version guard', () => {
     it('exports a version both app builds can assert against', () => {
-        expect(core.CRYPTO_CORE_VERSION).toBe('2.1.0');
+        expect(core.CRYPTO_CORE_VERSION).toBe('3.0.0');
     });
 });
 
@@ -504,13 +587,16 @@ describe('signed bodies match the server, byte for byte', () => {
         readFileSync(new URL('../../../tests/fixtures/signed_bodies.json', import.meta.url), 'utf8')
     );
 
+    const login = (encryptionKey = null) => core.loginChallengeBody({
+        nonce: vectors.nonce, origin: vectors.origin, deployment: vectors.deployment, encryptionKey,
+    });
+
     it('login challenge', () => {
-        expect(core.loginChallengeBody(vectors.nonce)).toBe(vectors.bodies.login);
+        expect(login()).toBe(vectors.bodies.login);
     });
 
     it('login challenge with the encryption key bound in (M-2)', () => {
-        expect(core.loginChallengeBody(vectors.nonce, vectors.mlkem_public_key))
-            .toBe(vectors.bodies.login_with_encryption_key);
+        expect(login(vectors.mlkem_public_key)).toBe(vectors.bodies.login_with_encryption_key);
     });
 
     it('key attestation', () => {
@@ -527,21 +613,24 @@ describe('signed bodies match the server, byte for byte', () => {
     it('message body', async () => {
         expect(await core.messageSigningBody({
             from: vectors.message_from, conv: vectors.message_conv, gid: vectors.message_gid,
-            sid: vectors.message_sid, ct: vectors.message_ct, keys: vectors.message_keys,
+            sid: vectors.message_sid, ts: vectors.message_ts, seq: vectors.message_seq,
+            ct: vectors.message_ct, keys: vectors.message_keys,
         })).toBe(vectors.bodies.message);
     });
 
     it('author-redacted message body', async () => {
         expect(await core.messageSigningBody({
             from: vectors.message_from, conv: vectors.message_conv, gid: vectors.message_gid,
-            sid: vectors.message_sid, ct: null, keys: vectors.message_keys,
+            sid: vectors.message_sid, ts: vectors.message_ts, seq: vectors.message_seq,
+            ct: null, keys: vectors.message_keys,
         })).toBe(vectors.bodies.message_redacted);
     });
 
     it('account deletion', async () => {
-        expect(await core.accountDeletionBody(
-            vectors.nonce, vectors.deletion_mode, vectors.redaction_keys
-        )).toBe(vectors.bodies.account_deletion);
+        expect(await core.accountDeletionBody({
+            nonce: vectors.nonce, mode: vectors.deletion_mode, redactionKeys: vectors.redaction_keys,
+            origin: vectors.origin, deployment: vectors.deployment,
+        })).toBe(vectors.bodies.account_deletion);
     });
 
     it('the fixture is what we think it is, not just what both sides produce', () => {
@@ -565,9 +654,7 @@ describe('signed bodies match the server, byte for byte', () => {
         // server half needs liboqs, so it lives in backend/tests/test_pqc.py.
         const { publicKey, privateKey } = await core.generateMlDsaKeyPair();
         const sig = await core.signMessage(vectors.bodies.login_with_encryption_key, privateKey);
-        expect(await core.verifySignature(
-            core.loginChallengeBody(vectors.nonce, vectors.mlkem_public_key), sig, publicKey
-        )).toBe(true);
+        expect(await core.verifySignature(login(vectors.mlkem_public_key), sig, publicKey)).toBe(true);
         // ...and not against the challenge without the key bound in.
         expect(await core.verifySignature(vectors.bodies.login, sig, publicKey)).toBe(false);
     });

@@ -1,6 +1,7 @@
 # Backend Configuration
 
 import os
+import re
 
 # Maximum total size for a chunked file upload (50MB)
 MAX_TOTAL_FILE_SIZE = 50 * 1024 * 1024
@@ -42,6 +43,34 @@ def get_allowed_origins() -> list[str]:
     return [o.strip().rstrip("/") for o in env_origins.split(",") if o.strip()]
 
 
+# Development's deployment id when none is configured. Production refuses to
+# start without a real one (check_production_settings).
+DEV_DEPLOYMENT_ID = "dev"
+
+
+def deployment_id() -> str:
+    """This server's identity inside signed login and deletion bodies.
+
+    Returned by GET /auth/nonce and checked at login (crypto-core 3.0.0, audit
+    2026-10-12 K-02): a signature produced for another Kryptolog deployment —
+    one the same identity also uses — does not open a session here, even when
+    it names an origin this server accepts. KRYPTOLOG_DEPLOYMENT_ID; letters,
+    digits, '-' and '_', at most 64 (the signed-identifier alphabet).
+    """
+    return (os.getenv("KRYPTOLOG_DEPLOYMENT_ID") or "").strip() or DEV_DEPLOYMENT_ID
+
+
+def login_origin_allowed(origin: str) -> bool:
+    """Whether a login or deletion signed for `origin` may be honoured here.
+
+    The SPA origins are exactly ALLOWED_ORIGINS, the list CORS and the WebSocket
+    Origin check already use. With no list (development only — production
+    refuses to start without one) any canonical origin is accepted.
+    """
+    allowed = get_allowed_origins()
+    return not allowed or origin in allowed
+
+
 def api_docs_settings() -> dict:
     """FastAPI kwargs for /docs, /redoc and /openapi.json.
 
@@ -78,5 +107,9 @@ def check_production_settings() -> None:
         )
     if not get_allowed_origins():
         problems.append("ALLOWED_ORIGINS must list the SPA origin(s) in production")
+    if deployment_id() == DEV_DEPLOYMENT_ID:
+        problems.append("KRYPTOLOG_DEPLOYMENT_ID must be set in production")
+    elif not re.fullmatch(r"[A-Za-z0-9_-]{1,64}", deployment_id()):
+        problems.append("KRYPTOLOG_DEPLOYMENT_ID must be 1-64 letters, digits, '-' or '_'")
     if problems:
         raise RuntimeError("Refusing to start: " + "; ".join(problems))

@@ -133,8 +133,14 @@ def _is_signable(payload: dict) -> bool:
     making — refused the entire erase, permanently, with no way to complete it
     and nothing saying which row was to blame (audit 2026-09-12 M-2b/M-2c).
     """
-    if not isinstance(payload.get("sid"), str) or not payload["sid"]:
+    if not auth.is_signed_identifier(payload.get("sid")):
         return False
+    # The signed position (crypto-core 3.0.0, K-06) is part of the redacted body
+    # too; a payload without one cannot be re-signed in the form readers rebuild.
+    for field in ("ts", "seq"):
+        value = payload.get(field)
+        if not isinstance(value, int) or isinstance(value, bool) or value < 0:
+            return False
     try:
         auth.check_envelope_shape(payload["keys"])
     except auth.NonCanonicalKeyEnvelope:
@@ -200,6 +206,8 @@ def redactable_messages(db: Session, address: str, *, limit: int, offset: int) -
                 "conv": conv,
                 "gid": gid,
                 "sid": payload.get("sid"),
+                "ts": payload["ts"],
+                "seq": payload["seq"],
                 "keys": payload["keys"],
             }
         )
@@ -279,6 +287,8 @@ def _redacted_content(kind: str, payload: dict, signature: str, gid: str = "") -
     content = {
         "v": payload.get("v"),
         "sid": payload.get("sid"),
+        "ts": payload["ts"],
+        "seq": payload["seq"],
         "keys": payload["keys"],
         "ct": None,
         "sig": signature,
@@ -348,6 +358,8 @@ def _verified_redactions(db: Session, address: str, signatures: dict[str, str]) 
                 conv=conv,
                 gid=signed_gid,
                 sid=payload.get("sid"),
+                ts=payload.get("ts"),
+                seq=payload.get("seq"),
                 ct=None,
                 keys=payload["keys"],
             )

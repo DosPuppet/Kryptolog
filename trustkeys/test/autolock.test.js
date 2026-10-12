@@ -21,11 +21,13 @@ describe('what the session stores (1: not the password)', () => {
         expect(sessionObj(h).sessionPassword).toBeUndefined();
     });
 
-    it('stores the derived key and salt as hex, so a worker restart can use them', async () => {
+    it('stores the derived key and its KDF descriptor, so a worker restart can use them', async () => {
         const h = await bootWithVault();
         const s = sessionObj(h);
         expect(s.vaultKeyHex).toMatch(/^[0-9a-f]{64}$/);   // 32 bytes
-        expect(s.vaultSaltHex).toMatch(/^[0-9a-f]{32}$/);  // 16 bytes
+        // The descriptor, not just a salt (crypto-core 3.0.0): the parameters
+        // that produced the key travel with it.
+        expect(s.vaultKdf).toMatchObject({ alg: 'argon2id', salt: expect.any(String) });
         expect(typeof s.lastActive).toBe('number');
     });
 

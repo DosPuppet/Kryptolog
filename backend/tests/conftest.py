@@ -107,17 +107,43 @@ def get_nonce(client, address):
     return resp.json()["nonce"]
 
 
-def do_login(client, address, encryption_key=None, username=None):
-    nonce = get_nonce(client, address)
+# What a 3.0.0 client signs a login FOR (audit 2026-10-12 K-02). The suite runs
+# without ALLOWED_ORIGINS, so any canonical origin is accepted; the deployment is
+# the server's own, "dev" unless KRYPTOLOG_DEPLOYMENT_ID is set.
+TEST_ORIGIN = "http://localhost:5173"
+
+
+def test_deployment() -> str:
+    import config
+
+    return config.deployment_id()
+
+
+def login_body(address, nonce, encryption_key=None, username=None, **extra):
+    """A complete login request: the fields every 3.0.0 login carries.
+
+    An encryption key always comes with an attestation now (K-04); the
+    placeholder passes because `_mock_pqc` stubs the verifier.
+    """
     body = {
         "address": address,
         "signature": "fake_signature_for_testing",
         "nonce": nonce,
+        "origin": TEST_ORIGIN,
+        "deployment": test_deployment(),
     }
     if encryption_key:
         body["encryption_public_key"] = encryption_key
+        body["encryption_key_attestation"] = "fake_attestation_for_testing"
     if username:
         body["username"] = username
+    body.update(extra)
+    return body
+
+
+def do_login(client, address, encryption_key=None, username=None):
+    nonce = get_nonce(client, address)
+    body = login_body(address, nonce, encryption_key, username)
     resp = client.post("/auth/login", json=body)
     assert resp.status_code == 200, resp.text
     data = resp.json()

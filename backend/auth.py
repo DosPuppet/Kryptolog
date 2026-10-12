@@ -3,6 +3,7 @@ import hashlib
 import json
 import logging
 import os
+import re
 import secrets
 from datetime import UTC, datetime, timedelta
 
@@ -87,16 +88,56 @@ def _domain_separate(context: str, body: str) -> str:
     return f"{_DS_HEADER}\ncontext={context}\n{body}"
 
 
-def _login_message(nonce: str, encryption_public_key: str | None = None) -> str:
-    """Canonical login challenge. When an encryption (ML-KEM) key is supplied it
-    is folded in, so the identity's signature cryptographically authorizes that
-    key — a network attacker can't substitute their own KEM key at login (M-2).
-    The whole thing is domain-separated under the `login` context (H1) so a
-    content-signing operation can never produce these exact bytes.
-    Must be byte-identical to what the clients build."""
-    body = f"Sign in to Kryptolog with nonce: {nonce}"
-    if encryption_public_key:
-        body += f"\nEncryption key: {encryption_public_key}"
+# Alphabets of every value interpolated into a signed body (crypto-core 3.0.0,
+# audit 2026-09-23 Q-6). The bodies are `key=value` lines without escaping, so
+# they are injective only if no value can carry a line break and a label. Same
+# patterns as crypto-core's signing.js; a value outside them is refused, never
+# spelled.
+_ID_RE = re.compile(r"[A-Za-z0-9_-]{1,64}")
+_HEX_RE = re.compile(r"[0-9a-f]+")
+# An origin as browsers serialise it — what `window.location.origin` and
+# Chrome's `sender.origin` produce, so the extension compares it as a string.
+_ORIGIN_RE = re.compile(r"https?://[a-z0-9.-]+(:[0-9]{1,5})?")
+
+
+def is_canonical_origin(origin) -> bool:
+    return isinstance(origin, str) and _ORIGIN_RE.fullmatch(origin) is not None
+
+
+def is_signed_identifier(value) -> bool:
+    return isinstance(value, str) and _ID_RE.fullmatch(value) is not None
+
+
+def _is_hex(value) -> bool:
+    return isinstance(value, str) and _HEX_RE.fullmatch(value) is not None
+
+
+def _login_message(
+    nonce: str, *, origin: str, deployment: str, encryption_public_key: str | None = None
+) -> str:
+    """Canonical login challenge (crypto-core 3.0.0 `loginChallengeBody`).
+
+    Names WHERE the login is for (audit 2026-10-12 K-02): the SPA origin and this
+    server's deployment id. The challenge used to name no server, so any site
+    able to obtain a signature over it — a connected site asking TrustKeys,
+    another Kryptolog deployment the same identity uses — could relay a nonce
+    from this server and open a session here. The login route refuses an origin
+    it does not serve and a deployment that is not its own.
+
+    The ML-KEM key is folded in so the identity's signature authorizes it (M-2);
+    the line is always present, empty without a key, so the body has one shape.
+    Domain-separated under `login` (H1). Must be byte-identical to the clients'.
+    """
+    if not _is_hex(nonce):
+        raise NonCanonicalSignedBody("login: invalid nonce")
+    if not is_canonical_origin(origin) or not is_signed_identifier(deployment):
+        raise NonCanonicalSignedBody("login: invalid origin or deployment")
+    if encryption_public_key and not _is_hex(encryption_public_key):
+        raise NonCanonicalSignedBody("login: invalid encryption key")
+    body = (
+        f"Sign in to Kryptolog\norigin={origin}\ndeployment={deployment}\nnonce={nonce}"
+        f"\nencryption-key={encryption_public_key or ''}"
+    )
     return _domain_separate(_CTX_LOGIN, body)
 
 
@@ -192,6 +233,12 @@ def check_envelope_shape(keys) -> None:
     def ascii_str(v) -> bool:
         return isinstance(v, str) and v.isascii()
 
+    def small_int(v) -> bool:
+        # The format version crypto-core 3.0.0 writes into every wrapped key
+        # (`v: 3`). Integers render identically in both languages; bools do
+        # not, and are not ints here even though Python says they are.
+        return isinstance(v, int) and not isinstance(v, bool) and 0 <= v < 2**31
+
     if not isinstance(keys, dict) or not keys:
         raise NonCanonicalKeyEnvelope("key envelope must be a non-empty object")
     for name, entry in keys.items():
@@ -200,8 +247,10 @@ def check_envelope_shape(keys) -> None:
         if not isinstance(entry, dict) or not entry:
             raise NonCanonicalKeyEnvelope("each wrapped key must be a non-empty object")
         for field, value in entry.items():
-            if not ascii_str(field) or not ascii_str(value):
-                raise NonCanonicalKeyEnvelope("wrapped key fields must be ASCII strings")
+            if not ascii_str(field) or not (ascii_str(value) or small_int(value)):
+                raise NonCanonicalKeyEnvelope(
+                    "wrapped key fields must be ASCII strings or small integers"
+                )
 
 
 def _canonical_ciphertext(ct) -> str:
@@ -213,7 +262,9 @@ def _canonical_ciphertext(ct) -> str:
     return ct
 
 
-def message_signing_body(*, from_: str, conv: str, sid: str, ct, gid: str = "", keys=None) -> str:
+def message_signing_body(
+    *, from_: str, conv: str, sid: str, ts: int, seq: int, ct, gid: str = "", keys=None
+) -> str:
     """The bytes a sender signs for one chat message (audit S1).
 
     Must stay byte-identical to crypto-core's `messageSigningBody` — and unlike
@@ -235,15 +286,29 @@ def message_signing_body(*, from_: str, conv: str, sid: str, ct, gid: str = "", 
     # (conversation, sid), so a payload without it is not a session at all.
     # Refused rather than spelled, because the two spellings would verify on
     # neither side (audit 2026-09-12 M-2c).
-    if not isinstance(sid, str) or not sid:
-        raise NonCanonicalSignedBody("a signed message body needs a session id")
+    if not is_signed_identifier(sid):
+        raise NonCanonicalSignedBody("a signed message body needs a valid session id")
+    # Same alphabets as crypto-core (audit 2026-09-23 Q-6), and `ts`/`seq` as
+    # non-negative integers (K-06) — a bool is an int to Python and not to JS.
+    if not _is_hex(from_) or not (_is_hex(conv) or is_signed_identifier(conv)):
+        raise NonCanonicalSignedBody("a signed message body needs a valid sender and conversation")
+    if gid and not is_signed_identifier(gid):
+        raise NonCanonicalSignedBody("a signed message body needs a valid group id")
+    for value in (ts, seq):
+        if not isinstance(value, int) or isinstance(value, bool) or not 0 <= value < 2**53:
+            raise NonCanonicalSignedBody("a signed message body needs integer ts and seq")
     tail = "\nredacted=1" if ct is None else f"\nct={_canonical_ciphertext(ct)}"
     keysh = hashlib.sha256(_canonical_json(keys).encode("utf-8")).hexdigest()
-    body = f"from={from_}\nconv={conv}\ngid={gid or ''}\nsid={sid}\nkeysh={keysh}" + tail
+    body = (
+        f"from={from_}\nconv={conv}\ngid={gid or ''}\nsid={sid}\nts={ts}\nseq={seq}"
+        f"\nkeysh={keysh}" + tail
+    )
     return _domain_separate(_CTX_MESSAGE, body)
 
 
-def account_deletion_message(nonce: str, mode: str, redaction_keys=()) -> str:
+def account_deletion_message(
+    nonce: str, mode: str, redaction_keys=(), *, origin: str, deployment: str
+) -> str:
     """The bytes a client signs to authorize destroying its own account.
 
     Its own context (H1), so a login signature cannot be replayed as one — and
@@ -264,11 +329,20 @@ def account_deletion_message(nonce: str, mode: str, redaction_keys=()) -> str:
     both compare ASCII code points. Numeric ids would NOT have been safe —
     JS's default sort is lexicographic, so [2, 10] spells [10, 2] there.
 
+    Bound to the server like the login challenge (crypto-core 3.0.0, audit
+    2026-10-12 K-02): `origin` and `deployment` lead the body.
+
     Must be byte-identical to crypto-core's accountDeletionBody().
     """
+    if not _is_hex(nonce) or mode not in ("leave", "erase"):
+        raise NonCanonicalSignedBody("account deletion: invalid nonce or mode")
+    if not is_canonical_origin(origin) or not is_signed_identifier(deployment):
+        raise NonCanonicalSignedBody("account deletion: invalid origin or deployment")
     digest = hashlib.sha256(_canonical_json(sorted(redaction_keys)).encode("utf-8")).hexdigest()
     return _domain_separate(
-        _CTX_ACCOUNT_DELETION, f"nonce={nonce}\nmode={mode}\nredactions={digest}"
+        _CTX_ACCOUNT_DELETION,
+        f"origin={origin}\ndeployment={deployment}\nnonce={nonce}\nmode={mode}"
+        f"\nredactions={digest}",
     )
 
 
@@ -304,13 +378,24 @@ def verify_message_signature(address: str, message: str, signature: str) -> bool
 
 
 def verify_pqc_signature(
-    public_key: str, nonce: str, signature: str, encryption_public_key: str | None = None
+    public_key: str,
+    signature: str,
+    *,
+    nonce: str,
+    origin: str,
+    deployment: str,
+    encryption_public_key: str | None = None,
 ) -> bool:
-    """Verify a client login challenge: ML-DSA-44 over the (key-bound) login message.
-    `public_key` is hex, `signature` is base64; the client signs with
-    @noble/post-quantum."""
+    """Verify a client login challenge: ML-DSA-44 over the (key- and server-bound)
+    login message. `public_key` is hex, `signature` is base64; the client signs
+    with @noble/post-quantum."""
     try:
-        message = _login_message(nonce, encryption_public_key).encode("utf-8")
+        message = _login_message(
+            nonce,
+            origin=origin,
+            deployment=deployment,
+            encryption_public_key=encryption_public_key,
+        ).encode("utf-8")
         sig_bytes = _sig_bytes(signature)
         pk_bytes = bytes.fromhex(public_key)
         with oqs.Signature(SIG_ALG) as verifier:
@@ -320,12 +405,10 @@ def verify_pqc_signature(
         return False
 
 
-def verify_signature(
-    address: str, nonce: str, signature: str, encryption_public_key: str | None = None
-) -> bool:
+def verify_signature(address: str, signature: str, **body) -> bool:
     """Verify a login challenge. Identities are ML-DSA-44 public keys, so this is
-    a thin wrapper over verify_pqc_signature (kept for call-site stability)."""
-    return verify_pqc_signature(address, nonce, signature, encryption_public_key)
+    a thin wrapper over verify_pqc_signature — the seam the test suite stubs."""
+    return verify_pqc_signature(address, signature, **body)
 
 
 ACCESS_TOKEN_EXPIRE_MINUTES = 30

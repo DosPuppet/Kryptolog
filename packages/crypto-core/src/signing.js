@@ -33,6 +33,36 @@ export const domainSeparate = (context, body) => `${DS_HEADER}\ncontext=${contex
 // never a login / multisig / content signature (those use other contexts).
 export const MESSAGE_SIGNING_PREFIX = domainSeparate(SIGNING_CONTEXT.MESSAGE, '');
 
+// --- Identifiers inside signed bodies (crypto-core 3.0.0, audit 2026-09-23 Q-6) ---
+//
+// The bodies are `key=value` lines with no escaping, so they are only injective
+// — one body, one meaning — if no interpolated value can contain a line break
+// followed by another label. That used to hold by circumstance: honest clients
+// generate UUIDs. It holds by construction now: every identifier is checked
+// against its alphabet on the way in, by the signer and the verifier alike, and
+// the Python mirror applies the same patterns.
+const ID_RE = /^[A-Za-z0-9_-]{1,64}$/;
+const HEX_RE = /^[0-9a-f]+$/;
+// An origin as browsers serialise it: scheme, host, optional port, no path, no
+// trailing slash, lowercase. Exactly what `window.location.origin` and Chrome's
+// `sender.origin` produce, so the extension can compare them as strings.
+const ORIGIN_RE = /^https?:\/\/[a-z0-9.-]+(:[0-9]{1,5})?$/;
+
+export class SignedBodyError extends Error {
+    constructor(message) {
+        super(message);
+        this.name = 'SignedBodyError';
+    }
+}
+
+const need = (ok, what) => {
+    if (!ok) throw new SignedBodyError(`signed body: invalid ${what}`);
+};
+const isCount = (n) => Number.isSafeInteger(n) && n >= 0;
+
+export const isCanonicalOrigin = (origin) => typeof origin === 'string' && ORIGIN_RE.test(origin);
+export const isSignedIdentifier = (id) => typeof id === 'string' && ID_RE.test(id);
+
 // Canonicalize the ciphertext field for signing. Production passes the AES-GCM
 // envelope OBJECT { iv, content } (as returned by encryptWithSessionKey); a bare
 // string (an already-serialized ct) is signed as-is. This explicit serialization
@@ -85,11 +115,24 @@ const canonicalCiphertext = (ct) =>
 // null" cannot diverge between the two languages.
 //
 // Async because of the digest — every call site must await it.
-export const messageSigningBody = async ({ from, conv, sid, ct, gid = '', keys = null }) =>
-    domainSeparate(SIGNING_CONTEXT.MESSAGE,
-        `from=${from}\nconv=${conv}\ngid=${gid ?? ''}\nsid=${sid}` +
+export const messageSigningBody = async ({ from, conv, sid, ct, gid = '', keys = null, ts, seq }) => {
+    need(typeof from === 'string' && HEX_RE.test(from), 'sender');
+    need(typeof conv === 'string' && (HEX_RE.test(conv) || ID_RE.test(conv)), 'conversation');
+    need(gid === '' || gid == null || isSignedIdentifier(gid), 'group id');
+    need(isSignedIdentifier(sid), 'session id');
+    // `ts` and `seq` (crypto-core 3.0.0, audit 2026-10-12 K-06): the sender's
+    // clock in ms and its position in the session. Neither existed, so a server
+    // could re-deliver an old, perfectly verified message as new, drop one, or
+    // reorder them, and every copy still showed "verified". With both signed,
+    // the receiver can tell a replay (a seq it has seen, or a ts far from the
+    // delivery time), a gap, and a reordering — see messenger/freshness.js.
+    need(isCount(ts), 'timestamp');
+    need(isCount(seq), 'sequence number');
+    return domainSeparate(SIGNING_CONTEXT.MESSAGE,
+        `from=${from}\nconv=${conv}\ngid=${gid ?? ''}\nsid=${sid}\nts=${ts}\nseq=${seq}` +
         `\nkeysh=${await sha256Hex(canonicalJson(keys ?? null))}` +
         (ct == null ? '\nredacted=1' : `\nct=${canonicalCiphertext(ct)}`));
+};
 
 // --- Login challenge ---
 // The bytes a client signs to prove it holds the identity key, domain-separated
@@ -104,12 +147,24 @@ export const messageSigningBody = async ({ from, conv, sid, ct, gid = '', keys =
 // fail on a mismatch — backend/tests/conftest.py stubs the verifier, so a typo
 // in either copy would have passed the whole suite and broken every login.
 // Must stay byte-identical to backend/auth.py `_login_message`.
-export const loginChallengeBody = (nonce, encryptionPublicKeyHex = null) =>
-    domainSeparate(
+export const loginChallengeBody = ({ nonce, origin, deployment, encryptionKey = null }) => {
+    need(typeof nonce === 'string' && HEX_RE.test(nonce), 'nonce');
+    // WHERE this login is for (crypto-core 3.0.0, audit 2026-10-12 K-02). The
+    // challenge named no server, so any site that could obtain a signature over
+    // it — a connected site asking TrustKeys, another Kryptolog deployment the
+    // same identity uses — could relay a nonce from the real server and open a
+    // session there. The server now refuses an origin it does not serve and a
+    // deployment that is not its own; TrustKeys refuses to sign an origin that
+    // is not the one the browser says is asking.
+    need(isCanonicalOrigin(origin), 'origin');
+    need(isSignedIdentifier(deployment), 'deployment');
+    need(encryptionKey == null || encryptionKey === '' || HEX_RE.test(encryptionKey), 'encryption key');
+    return domainSeparate(
         SIGNING_CONTEXT.LOGIN,
-        `Sign in to Kryptolog with nonce: ${nonce}` +
-        (encryptionPublicKeyHex ? `\nEncryption key: ${encryptionPublicKeyHex}` : '')
+        `Sign in to Kryptolog\norigin=${origin}\ndeployment=${deployment}\nnonce=${nonce}` +
+        `\nencryption-key=${encryptionKey || ''}`
     );
+};
 
 // --- Account deletion ---
 // The bytes a client signs to authorize destroying its own account. Its own
@@ -139,10 +194,17 @@ export const loginChallengeBody = (nonce, encryptionPublicKeyHex = null) =>
 // exactly over the ASCII these ids are made of. (Numeric ids would not have
 // been safe here — JS's default sort is lexicographic, so [2, 10] would spell
 // [10, 2] on one side and [2, 10] on the other.)
-export const accountDeletionBody = async (nonce, mode, redactionKeys = []) =>
-    domainSeparate(SIGNING_CONTEXT.ACCOUNT_DELETION,
-        `nonce=${nonce}\nmode=${mode}\nredactions=${await sha256Hex(
-            canonicalJson([...redactionKeys].sort()))}`);
+export const accountDeletionBody = async ({ nonce, mode, redactionKeys = [], origin, deployment }) => {
+    need(typeof nonce === 'string' && HEX_RE.test(nonce), 'nonce');
+    need(mode === 'leave' || mode === 'erase', 'mode');
+    // Bound to the server like the login challenge (K-02): destroying an
+    // account is not a signature a relay should be able to carry elsewhere.
+    need(isCanonicalOrigin(origin), 'origin');
+    need(isSignedIdentifier(deployment), 'deployment');
+    return domainSeparate(SIGNING_CONTEXT.ACCOUNT_DELETION,
+        `origin=${origin}\ndeployment=${deployment}\nnonce=${nonce}\nmode=${mode}` +
+        `\nredactions=${await sha256Hex(canonicalJson([...redactionKeys].sort()))}`);
+};
 
 // --- Encryption-key attestation (audit M-1) ---
 // The address IS the ML-DSA public key (self-certifying), but the ML-KEM

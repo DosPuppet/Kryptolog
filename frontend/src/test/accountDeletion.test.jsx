@@ -58,9 +58,11 @@ const carrier = (id) => ({
     id,
     kind: 'dm',
     key: `dm:${id}`,
-    conv: 'partner-address',
+    conv: 'ab12cd',
     gid: '',
     sid: `sid-${id}`,
+    ts: 1760264400000 + id,
+    seq: 0,
     keys: { recip: { kem: 'k', iv: 'i', encKey: 'e' }, sender: null },
 });
 
@@ -80,7 +82,7 @@ const stubServer = ({ total = 0, perRound = Infinity } = {}) => {
             const limit = Number(new URL(href).searchParams.get('limit'));
             return { ok: true, status: 200, json: async () => pending.slice(offset, offset + limit) };
         }
-        if (/nonce/.test(href)) return { ok: true, status: 200, json: async () => ({ nonce: 'N' }) };
+        if (/nonce/.test(href)) return { ok: true, status: 200, json: async () => ({ nonce: 'ab12', deployment: 'dev' }) };
         if (/account\/delete/.test(href)) {
             const body = JSON.parse(init.body);
             if (body.redactions.length > perRound) {
@@ -121,6 +123,12 @@ const deleteCall = () =>
     global.fetch.mock.calls.find(([url]) => /account\/delete/.test(String(url)));
 
 const deleteBody = () => JSON.parse(deleteCall()[1].body);
+
+/** The deletion body the client must sign against the stub server above:
+ * its nonce and deployment, and this page's own origin (crypto-core 3.0.0). */
+const deletionBody = (mode, redactionKeys) => accountDeletionBody({
+    nonce: 'ab12', mode, redactionKeys, origin: window.location.origin, deployment: 'dev',
+});
 
 /**
  * Run something that deletes, answering the password prompts it raises.
@@ -219,7 +227,7 @@ describe('leaving', () => {
         // `null` is what requestPassword answers from a warm key cache, and
         // this one operation refuses that shortcut (audit L-2).
         expect(vault.sign).toHaveBeenCalledWith(
-            await accountDeletionBody('N', 'leave', []),
+            await deletionBody('leave', []),
             PASSWORD
         );
         expect(promptsAnswered).toBe(1);
@@ -251,9 +259,11 @@ describe('erasing', () => {
         // our own choosing would only produce a signature it rejects.
         const expected = await messageSigningBody({
             from: ADDRESS,
-            conv: 'partner-address',
+            conv: 'ab12cd',
             gid: '',
             sid: 'sid-1',
+            ts: carrier(1).ts,
+            seq: 0,
             keys: carrier(1).keys,
             ct: null,
         });
@@ -271,7 +281,7 @@ describe('erasing', () => {
         // Dropping one id en route turns that redaction into a deletion, which
         // takes the partner's own history with it.
         expect(vault.sign).toHaveBeenCalledWith(
-            await accountDeletionBody('N', 'erase', ['dm:1', 'dm:2']),
+            await deletionBody('erase', ['dm:1', 'dm:2']),
             PASSWORD
         );
     });
@@ -306,7 +316,7 @@ describe('erasing', () => {
         // between rounds; one covering nothing would let it drop them.
         for (const round of rounds) {
             expect(vault.sign).toHaveBeenCalledWith(
-                await accountDeletionBody('N', 'erase', round.redactions.map((r) => r.key)),
+                await deletionBody('erase', round.redactions.map((r) => r.key)),
                 PASSWORD
             );
         }
@@ -321,7 +331,7 @@ describe('erasing', () => {
         global.fetch = vi.fn(async (url) => {
             const href = String(url);
             if (/redactable-messages/.test(href)) return { ok: true, status: 200, json: async () => [] };
-            if (/nonce/.test(href)) return { ok: true, status: 200, json: async () => ({ nonce: 'N' }) };
+            if (/nonce/.test(href)) return { ok: true, status: 200, json: async () => ({ nonce: 'ab12', deployment: 'dev' }) };
             if (/account\/delete/.test(href)) {
                 return {
                     ok: false,
@@ -347,7 +357,7 @@ describe('erasing', () => {
                 const offset = Number(new URL(href).searchParams.get('offset'));
                 return { ok: true, status: 200, json: async () => (offset ? [] : [carrier(1)]) };
             }
-            if (/nonce/.test(href)) return { ok: true, status: 200, json: async () => ({ nonce: 'N' }) };
+            if (/nonce/.test(href)) return { ok: true, status: 200, json: async () => ({ nonce: 'ab12', deployment: 'dev' }) };
             if (/account\/delete/.test(href)) {
                 return {
                     ok: false,
@@ -376,7 +386,7 @@ describe('erasing', () => {
                 const offset = Number(new URL(href).searchParams.get('offset'));
                 return { ok: true, status: 200, json: async () => (offset ? [] : [carrier(1)]) };
             }
-            if (/nonce/.test(href)) return { ok: true, status: 200, json: async () => ({ nonce: 'N' }) };
+            if (/nonce/.test(href)) return { ok: true, status: 200, json: async () => ({ nonce: 'ab12', deployment: 'dev' }) };
             if (/account\/delete/.test(href)) {
                 round += 1;
                 return round === 1
@@ -404,7 +414,7 @@ describe('erasing', () => {
         global.fetch = vi.fn(async (url) => {
             const href = String(url);
             if (/redactable-messages/.test(href)) return { ok: true, status: 200, json: async () => [] };
-            if (/nonce/.test(href)) return { ok: true, status: 200, json: async () => ({ nonce: 'N' }) };
+            if (/nonce/.test(href)) return { ok: true, status: 200, json: async () => ({ nonce: 'ab12', deployment: 'dev' }) };
             if (/account\/delete/.test(href)) {
                 return {
                     ok: true,
@@ -581,7 +591,7 @@ describe('a login refused because the key was erased', () => {
         // code could ever admit.
         global.fetch = vi.fn(async (url) =>
             /nonce/.test(String(url))
-                ? { ok: true, status: 200, json: async () => ({ nonce: 'N' }) }
+                ? { ok: true, status: 200, json: async () => ({ nonce: 'ab12', deployment: 'dev' }) }
                 : {
                     ok: false,
                     status: 410,

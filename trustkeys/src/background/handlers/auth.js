@@ -1,5 +1,6 @@
 import {
-    fromB64, deriveVaultKeyBits, importVaultKey, decryptVaultWithKey, normalizeAccount,
+    deriveVaultKeyBits, importVaultKey, decryptVaultWithKey, normalizeAccount, vaultKdfOf,
+    vaultPasswordProblem,
 } from '../../utils/crypto.js';
 import { state } from '../state.js';
 import { saveVault } from '../utils.js';
@@ -7,6 +8,10 @@ import { persistSession, clearSession, readSession } from '../session.js';
 
 export const setupPassword = async (password) => {
     if (state.hasPassword) throw new Error("Password already set");
+    // Enforced here, where the vault is sealed, not only in the popup form:
+    // the floor was 4 characters (audit 2026-10-12 K-08, 2026-09-11 M-5).
+    const problem = vaultPasswordProblem(password);
+    if (problem) throw new Error(problem);
 
     state.vault = { accounts: [], activeAccountId: null, permissions: {}, autoSignSites: {} };
     await saveVault(password);
@@ -18,7 +23,7 @@ export const setupPassword = async (password) => {
  * Install the decrypted vault as the unlocked session. Shared by the password
  * path and the session-restore path so "unlocked" means one thing.
  */
-const openVault = async (vaultData, keyBytes, salt) => {
+const openVault = async (vaultData, keyBytes, kdf) => {
     const key = await importVaultKey(keyBytes);
     const vault = await decryptVaultWithKey(vaultData, key); // throws on a wrong key
 
@@ -34,7 +39,7 @@ const openVault = async (vaultData, keyBytes, salt) => {
     state.vault = vault;
     state.vaultKey = key;
     state.vaultKeyBytes = keyBytes;
-    state.vaultSalt = salt;
+    state.vaultKdf = kdf;
     state.isLocked = false;
     return true;
 };
@@ -48,9 +53,10 @@ export const unlock = async (password) => {
         // save reuses it instead of re-running the deliberately-slow 600k-iter
         // PBKDF2. The raw bytes are kept alongside the CryptoKey because only
         // they can survive a service-worker restart (audit M-4).
-        const salt = fromB64(vaultData.salt);
-        const keyBytes = await deriveVaultKeyBits(password, salt);
-        return await openVault(vaultData, keyBytes, salt);
+        // Parameters from the blob itself (crypto-core 3.0.0).
+        const kdf = vaultKdfOf(vaultData);
+        const keyBytes = await deriveVaultKeyBits(password, kdf);
+        return await openVault(vaultData, keyBytes, kdf);
     } catch (e) {
         console.error("Unlock failed", e);
         return false;
@@ -62,7 +68,7 @@ export const lock = () => {
     state.isLocked = true;
     state.vaultKey = null;
     state.vaultKeyBytes = null;
-    state.vaultSalt = null;
+    state.vaultKdf = null;
 };
 
 export const unlockWithSession = async (password) => {
@@ -84,7 +90,7 @@ export const restoreSession = async () => {
     if (!vaultData) return false;
 
     try {
-        return await openVault(vaultData, session.keyBytes, session.salt);
+        return await openVault(vaultData, session.keyBytes, session.kdf);
     } catch (e) {
         // Stale key (the vault was re-saved under a new salt elsewhere) — drop
         // it rather than leaving material around that no longer opens anything.

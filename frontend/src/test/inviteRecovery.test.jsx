@@ -58,7 +58,7 @@ const Login = (await import('../components/Login')).default;
 const stubServer = (...statuses) => {
     const queue = [...statuses];
     global.fetch = vi.fn(async (url) => {
-        if (/nonce/i.test(String(url))) return { ok: true, json: async () => ({ nonce: 'n' }) };
+        if (/nonce/i.test(String(url))) return { ok: true, json: async () => ({ nonce: 'ab12', deployment: 'dev' }) };
         const status = queue.length > 1 ? queue.shift() : queue[0];
         if (status === 200) {
             return { ok: true, json: async () => ({ user: { address: account.mldsa.publicKey }, access_token: 't' }) };

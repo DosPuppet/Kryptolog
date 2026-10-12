@@ -1,4 +1,12 @@
-import { encryptVault, decryptVault, normalizeAccount } from '../utils/crypto';
+import { encryptVault, decryptVault, normalizeAccount, isEncryptedVaultBlob, vaultPasswordProblem } from '../utils/crypto';
+
+// One rule for every password that seals keys (crypto-core 3.0.0, audit
+// 2026-10-12 K-08): the floor here was 6 characters. Throws the rule's own
+// user-facing reason.
+const requireStrongPassword = (password) => {
+    const problem = vaultPasswordProblem(password);
+    if (problem) throw new Error(problem);
+};
 
 // Backup / transfer / import-export methods for VaultService. Defined here and
 // merged onto VaultService.prototype in vault.js — `this` is the singleton, so
@@ -12,9 +20,7 @@ export const backupMethods = {
         if (this.hasVault()) {
             throw new Error("A vault already exists on this device. Import accounts from Settings instead.");
         }
-        if (!password || password.length < 6) {
-            throw new Error("Password must be at least 6 characters");
-        }
+        requireStrongPassword(password);
 
         let data;
         try {
@@ -77,6 +83,10 @@ export const backupMethods = {
     async exportEncryptedBlob(transferPassphrase, vaultPassword) {
         if (this.isLocked) throw new Error("Vault locked");
         if (!transferPassphrase) throw new Error("Transfer passphrase required");
+        // The generated 128-bit transfer code passes this; a passphrase a
+        // person picked for a .kvault backup has to, too — the file is attacked
+        // offline once it leaves the device.
+        requireStrongPassword(transferPassphrase);
         const fullVault = await this._getFullVault(vaultPassword);
         const encrypted = await encryptVault(fullVault, transferPassphrase);
         return JSON.stringify(encrypted);
@@ -89,9 +99,7 @@ export const backupMethods = {
         if (this.hasVault()) {
             throw new Error("A vault already exists on this device. Import from the Vault Manager while signed in.");
         }
-        if (!newLocalPassword || newLocalPassword.length < 6) {
-            throw new Error("Password must be at least 6 characters");
-        }
+        requireStrongPassword(newLocalPassword);
         let encrypted;
         try {
             encrypted = JSON.parse(blobString);
@@ -114,10 +122,12 @@ export const backupMethods = {
         try {
             const parsed = JSON.parse(jsonString);
 
-            // An encrypted .kvault backup carries {salt, iv, data} and no cleartext
-            // accounts; decrypt it with its passphrase before merging.
+            // An encrypted .kvault backup carries no cleartext accounts; decrypt
+            // it with its passphrase before merging. Older-format backups are
+            // recognised too, so they get crypto-core's "older version" refusal
+            // rather than "Invalid vault format".
             let data = parsed;
-            if (parsed && parsed.salt && parsed.iv && parsed.data && !parsed.accounts) {
+            if (isEncryptedVaultBlob(parsed)) {
                 if (!passphrase) throw new Error("This is an encrypted .kvault backup — enter its passphrase");
                 data = await decryptVault(parsed, passphrase);
             }

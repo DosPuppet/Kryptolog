@@ -1,4 +1,4 @@
-import { generateAccount, decryptVault, encryptVault, normalizeAccount } from '../../utils/crypto.js';
+import { generateAccount, decryptVault, encryptVault, normalizeAccount, isEncryptedVaultBlob, vaultPasswordProblem } from '../../utils/crypto.js';
 import { state, requireUnlocked, requireActiveAccount } from '../state.js';
 import { saveVault, saveVaultWithSessionKey } from '../utils.js';
 
@@ -65,11 +65,14 @@ const accountForExport = () => {
 // Encrypted, portable backup (.kvault) of the ACTIVE account. Verifies the vault
 // password as a gate, then encrypts a SPA-compatible vault shape
 // ({accounts:[active], activeAccountId}) under a separate transfer passphrase
-// using the SAME format the web app produces (encryptVault -> {salt, iv, data}),
+// using the SAME format the web app produces (encryptVault -> {v, kdf, iv, data}),
 // so it round-trips between extension and SPA.
 export const exportEncryptedVault = async (password, passphrase) => {
     requireUnlocked();
     if (!passphrase) throw new Error("Backup passphrase required");
+    // The .kvault is attacked offline once it leaves the device (K-08).
+    const problem = vaultPasswordProblem(passphrase);
+    if (problem) throw new Error(problem);
 
     // Confirm the vault password (same gate as the plaintext export).
     const { vaultData } = await chrome.storage.local.get('vaultData');
@@ -93,7 +96,7 @@ export const exportActiveAccount = async (password) => {
 };
 
 // Import plaintext JSON ({accounts:[...]}) or an encrypted .kvault backup
-// ({salt, iv, data}). `password` is the vault password used to re-save the merged
+// ({v, kdf, iv, data}). `password` is the vault password used to re-save the merged
 // vault; `passphrase` is the SEPARATE backup passphrase that decrypts a .kvault
 // file (they are different secrets — a .kvault is encrypted under a transfer
 // passphrase, not the vault password). Falls back to `password` when no
@@ -108,9 +111,10 @@ export const importVault = async (vaultObj, password, passphrase) => {
         }
     }
 
-    // Check if it's already encrypted (has salt) or plaintext (has accounts)
+    // Encrypted backup, current or older format (the older one then gets
+    // crypto-core's readable "older version" refusal), or plaintext accounts.
     let decryptedImport;
-    if (importedVault && !importedVault.salt && Array.isArray(importedVault.accounts)) {
+    if (!isEncryptedVaultBlob(importedVault) && Array.isArray(importedVault?.accounts)) {
         decryptedImport = importedVault;
     } else {
         const secret = passphrase || password;

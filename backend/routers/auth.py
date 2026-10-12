@@ -48,7 +48,25 @@ def get_nonce(request: Request, address: str, db: Session = Depends(get_db)):
     db.add(models.Nonce(nonce=nonce_val, address=address.lower(), expires_at=expires))
     db.commit()
 
-    return {"nonce": nonce_val}
+    # The deployment id goes into the signed body (crypto-core 3.0.0, K-02).
+    # Public on purpose: it identifies this server, it does not authenticate it.
+    return {"nonce": nonce_val, "deployment": config.deployment_id()}
+
+
+def check_signed_for_this_server(origin: str, deployment: str) -> None:
+    """Refuse a signature made for another site or another deployment.
+
+    Shared by login and account deletion, the two bodies that name a server
+    (crypto-core 3.0.0, audit 2026-10-12 K-02). Checked BEFORE the signature:
+    a body naming a foreign origin is refused whether or not it verifies, and a
+    stubbed verifier in the test suite cannot hide a missing check here.
+    """
+    if not auth.is_canonical_origin(origin) or not config.login_origin_allowed(origin):
+        raise HTTPException(status_code=400, detail="This login was signed for another site.")
+    if deployment != config.deployment_id():
+        raise HTTPException(
+            status_code=400, detail="This login was signed for another Kryptolog server."
+        )
 
 
 def claim_nonce(db: Session, address: str, nonce: str) -> bool:
@@ -91,8 +109,15 @@ def _verify_login_payload(login_req: schemas.LoginRequest, address: str) -> None
     spent: handing back a replayable challenge on a failed attempt is exactly
     what consuming it first prevents.
     """
+    check_signed_for_this_server(login_req.origin, login_req.deployment)
+
     if not auth.verify_signature(
-        address, login_req.nonce, login_req.signature, login_req.encryption_public_key
+        address,
+        login_req.signature,
+        nonce=login_req.nonce,
+        origin=login_req.origin,
+        deployment=login_req.deployment,
+        encryption_public_key=login_req.encryption_public_key,
     ):
         raise HTTPException(status_code=401, detail="Invalid signature")
 
@@ -110,8 +135,19 @@ def _verify_login_payload(login_req: schemas.LoginRequest, address: str) -> None
 
     # Key attestation (audit M-1): a self-signature by `address` over its own
     # ML-KEM key. Peers verify it client-side; the server checks it here too so
-    # an invalid one is never stored. Optional (older clients don't send it).
+    # an invalid one is never stored.
+    #
+    # REQUIRED whenever a key is submitted (audit 2026-10-12 K-04). It was
+    # optional "for older clients", and a login with a new key and no
+    # attestation replaced the key AND erased the stored attestation — leaving
+    # every new contact to accept an unattested key on first sight, which is
+    # precisely the substitution the attestation exists to stop. Since the 3.0.0
+    # cutover there are no older clients to accommodate.
     attestation = login_req.encryption_key_attestation
+    if login_req.encryption_public_key and not attestation:
+        raise HTTPException(
+            status_code=400, detail="An encryption key must come with its attestation."
+        )
     if attestation:
         if not login_req.encryption_public_key:
             raise HTTPException(status_code=400, detail="Attestation without an encryption key")

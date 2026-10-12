@@ -148,7 +148,11 @@ export const PQCProvider = ({ children }) => {
         // 1. Get Nonce
         const nonceRes = await fetch(API_ENDPOINTS.AUTH.NONCE(accountId));
         if (!nonceRes.ok) throw new Error("Failed to fetch nonce");
-        const { nonce } = await nonceRes.json();
+        // The deployment id comes with the nonce: both go into the signed body,
+        // so the signature is a login HERE and nowhere else (crypto-core 3.0.0,
+        // audit 2026-10-12 K-02).
+        const { nonce, deployment } = await nonceRes.json();
+        const origin = window.location.origin;
 
         // 2. Sign Nonce — bind the encryption (ML-KEM) key into the challenge so
         //    the identity's signature authorizes it (M-2). The challenge is
@@ -156,22 +160,20 @@ export const PQCProvider = ({ children }) => {
         //    operation can never produce these bytes. Built by crypto-core, not
         //    spelled out here: this is the one string the server must agree with
         //    byte for byte, and a second copy of it cannot be kept honest.
-        const message = loginChallengeBody(nonce, encryptionKey);
+        const message = loginChallengeBody({ nonce, origin, deployment, encryptionKey });
         const signature = await signFn(message);
 
         // 2b. Key attestation (audit M-1): self-sign our own ML-KEM key so peers
-        //     can verify the directory's key binding against our address. Custody
-        //     paths that can't produce one (older extension) proceed without —
-        //     the account just shows as "unverified" to contacts.
+        //     can verify the directory's key binding against our address.
+        //     REQUIRED now (audit 2026-10-12 K-04): the server refuses a key
+        //     without one, and contacts refuse an unattested key. It used to be
+        //     skipped quietly when a custody path could not produce one, which
+        //     is the shape a key substitution takes.
         let attestation = null;
         if (encryptionKey) {
-            try {
-                attestation = attestFn
-                    ? await attestFn()
-                    : await signFn(encryptionKeyAttestationBody(encryptionKey));
-            } catch (e) {
-                console.warn("Key attestation unavailable, continuing without:", e);
-            }
+            attestation = attestFn
+                ? await attestFn()
+                : await signFn(encryptionKeyAttestationBody(encryptionKey));
         }
 
         // 3. Verify on Backend
@@ -182,6 +184,8 @@ export const PQCProvider = ({ children }) => {
                 address: accountId,
                 signature,
                 nonce,
+                origin,
+                deployment,
                 encryption_public_key: encryptionKey,
                 encryption_key_attestation: attestation || undefined,
                 username: username, // Send preferred username
@@ -616,6 +620,10 @@ export const PQCProvider = ({ children }) => {
                 conv: row.conv,
                 gid: row.gid,
                 sid: row.sid,
+                // The original's signed position (crypto-core 3.0.0): a
+                // redaction keeps it, so it is signed again with it.
+                ts: row.ts,
+                seq: row.seq,
                 keys: row.keys,
                 ct: null,
             })),
@@ -632,19 +640,22 @@ export const PQCProvider = ({ children }) => {
     const submitDeletion = async (mode, redactions) => {
         const nonceRes = await fetch(API_ENDPOINTS.AUTH.NONCE(pqcAccount));
         if (!nonceRes.ok) throw new Error("Failed to fetch nonce");
-        const { nonce } = await nonceRes.json();
+        const { nonce, deployment } = await nonceRes.json();
+        const origin = window.location.origin;
 
         // signDeletion(), not signMessage(): this deliberately carries its own
         // context, so the extension shows an approval window instead of
         // auto-signing it — and the vault asks for the password even when a
         // derived key is cached.
         const signature = await signDeletion(
-            await accountDeletionBody(nonce, mode, redactions.map((r) => r.key))
+            await accountDeletionBody({
+                nonce, mode, redactionKeys: redactions.map((r) => r.key), origin, deployment,
+            })
         );
 
         const res = await apiFetch(API_ENDPOINTS.ACCOUNT.DELETE, token, {
             method: 'POST',
-            body: { mode, nonce, signature, redactions },
+            body: { mode, nonce, origin, deployment, signature, redactions },
             raw: true,
         });
         const summary = await res.json().catch(() => null);

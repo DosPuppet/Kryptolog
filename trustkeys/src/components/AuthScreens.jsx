@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { vaultPasswordProblem } from '../utils/crypto.js'
 
 // First-run vault creation + unlock screens for the popup.
 
@@ -8,7 +9,10 @@ export const SetupScreen = ({ onSetup }) => {
   const [error, setError] = useState('');
 
   const handleSubmit = () => {
-    if (password.length < 4) return setError("Password too short");
+    // The rule both clients share (crypto-core 3.0.0, audit 2026-10-12 K-08):
+    // the floor here was four characters.
+    const problem = vaultPasswordProblem(password);
+    if (problem) return setError(problem);
     if (password !== confirm) return setError("Passwords do not match");
     onSetup(password);
   };

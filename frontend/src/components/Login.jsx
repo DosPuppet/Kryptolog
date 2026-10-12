@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { usePQC } from '../context/PQCContext';
+import { vaultPasswordProblem } from '../utils/crypto';
 import confirmDialog from '../utils/confirm';
 import { useTheme } from '../context/ThemeContext';
 import { Shield, ArrowRight, Loader2, Sun, Moon, Lock, UserPlus, X, Upload, FileJson, Smartphone } from 'lucide-react';
@@ -149,12 +150,14 @@ export default function Login() {
         try {
             if (vaultMode === 'create') {
                 if (!vaultName || !password) throw new Error("Name and Password required");
-                if (password.length < 6) throw new Error("Password must be at least 6 characters");
+                // The one rule both clients share (crypto-core, audit 2026-10-12 K-08).
+                { const problem = vaultPasswordProblem(password); if (problem) throw new Error(problem); }
                 await createLocalVault(vaultName, password, inviteCode.trim() || null);
             } else if (vaultMode === 'import') {
                 if (!importJson) throw new Error("Select a vault backup (.json) file first");
                 if (!password) throw new Error("Choose a password to protect the imported vault");
-                if (password.length < 6) throw new Error("Password must be at least 6 characters");
+                // The one rule both clients share (crypto-core, audit 2026-10-12 K-08).
+                { const problem = vaultPasswordProblem(password); if (problem) throw new Error(problem); }
                 await importLocalVault(importJson, password, inviteCode.trim() || null);
             } else {
                 if (!password) throw new Error("Password required");

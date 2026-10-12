@@ -73,7 +73,7 @@ beforeEach(() => {
     vault.recoverPasswordWithBiometrics.mockResolvedValue(PASSWORD);
     global.fetch = vi.fn(async (url) =>
         /nonce/i.test(String(url))
-            ? { ok: true, json: async () => ({ nonce: 'n' }) }
+            ? { ok: true, json: async () => ({ nonce: 'ab12', deployment: 'dev' }) }
             : { ok: true, json: async () => ({ user: { address: 'a'.repeat(64) }, access_token: 't' }) }
     );
 });

@@ -33,7 +33,7 @@ export const IDLE_ALARM = 'trustkeys-idle-lock';
 // a minute of granularity on an hour-long timeout is immaterial.
 export const IDLE_CHECK_MINUTES = 1;
 
-const SESSION_KEYS = ['vaultKeyHex', 'vaultSaltHex', 'lastActive'];
+const SESSION_KEYS = ['vaultKeyHex', 'vaultKdf', 'lastActive'];
 
 // chrome.storage.session is TRUSTED_CONTEXTS by default (content scripts cannot
 // read it). Stated explicitly because the vault key lives here now — a silent
@@ -48,13 +48,13 @@ export const hardenSessionStorage = () => {
 export const isExpired = (lastActive) =>
     typeof lastActive !== 'number' || (Date.now() - lastActive) >= IDLE_TIMEOUT_MS;
 
-/** Persist the unlocked session: derived key bytes + salt, never the password. */
+/** Persist the unlocked session: derived key bytes + KDF descriptor, never the password. */
 export const persistSession = async () => {
-    if (!state.vaultKeyBytes || !state.vaultSalt) return;
+    if (!state.vaultKeyBytes || !state.vaultKdf) return;
     try {
         await chrome.storage.session.set({
             vaultKeyHex: toHex(state.vaultKeyBytes),
-            vaultSaltHex: toHex(state.vaultSalt),
+            vaultKdf: state.vaultKdf,
             lastActive: Date.now(),
         });
     } catch (e) { console.warn("Failed to persist session", e); }
@@ -70,12 +70,12 @@ export const clearSession = async () => {
 export const readSession = async () => {
     try {
         const s = await chrome.storage.session.get(SESSION_KEYS);
-        if (!s.vaultKeyHex || !s.vaultSaltHex) return null;
+        if (!s.vaultKeyHex || !s.vaultKdf) return null;
         if (isExpired(s.lastActive)) {
             await clearSession();
             return null;
         }
-        return { keyBytes: fromHex(s.vaultKeyHex), salt: fromHex(s.vaultSaltHex) };
+        return { keyBytes: fromHex(s.vaultKeyHex), kdf: s.vaultKdf };
     } catch (e) {
         console.warn("Session restore failed", e);
         return null;

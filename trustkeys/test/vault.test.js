@@ -27,8 +27,14 @@ describe('setup and unlock', () => {
         // in the extension, so keep it pinning an encoding rather than "a
         // non-empty string".
         const blob = Object.fromEntries(h.localStore).vaultData;
+        // crypto-core 3.0.0: versioned, with the Argon2id parameters stored next
+        // to the data so the next unlock derives with exactly these.
         expect(blob).toMatchObject({
-            salt: expect.stringMatching(/^[A-Za-z0-9+/]+={0,2}$/),
+            v: 3,
+            kdf: {
+                alg: 'argon2id', m: 46 * 1024, t: 1, p: 1,
+                salt: expect.stringMatching(/^[A-Za-z0-9+/]+={0,2}$/),
+            },
             iv: expect.stringMatching(/^[A-Za-z0-9+/]+={0,2}$/),
             data: expect.stringMatching(/^[A-Za-z0-9+/]+={0,2}$/),
         });
@@ -100,9 +106,9 @@ describe('export / import round-trip', () => {
         expect(exported.success).toBe(true);
 
         const target = await boot();
-        await target.send({ type: 'SETUP_PASSWORD', password: 'target-pass' }, internalSender());
+        await target.send({ type: 'SETUP_PASSWORD', password: 'target-vault-passphrase' }, internalSender());
         const imported = await target.send(
-            { type: 'IMPORT_KEYS', data: exported.blob, password: 'target-pass', passphrase: 'transfer-pass' },
+            { type: 'IMPORT_KEYS', data: exported.blob, password: 'target-vault-passphrase', passphrase: 'transfer-pass' },
             internalSender()
         );
         expect(imported).toMatchObject({ success: true, count: 1 });
@@ -130,9 +136,9 @@ describe('export / import round-trip', () => {
         );
 
         const target = await boot();
-        await target.send({ type: 'SETUP_PASSWORD', password: 'target-pass' }, internalSender());
+        await target.send({ type: 'SETUP_PASSWORD', password: 'target-vault-passphrase' }, internalSender());
         const res = await target.send(
-            { type: 'IMPORT_KEYS', data: exported.blob, password: 'target-pass', passphrase: 'wrong' },
+            { type: 'IMPORT_KEYS', data: exported.blob, password: 'target-vault-passphrase', passphrase: 'wrong' },
             internalSender()
         );
         expect(res.success).toBe(false);
@@ -149,7 +155,7 @@ describe('export / import round-trip', () => {
         );
 
         const target = await boot();
-        await target.send({ type: 'SETUP_PASSWORD', password: 'target-pass' }, internalSender());
+        await target.send({ type: 'SETUP_PASSWORD', password: 'target-vault-passphrase' }, internalSender());
         const imported = await target.send(
             { type: 'IMPORT_KEYS', data: exported.blob, passphrase: 'transfer-pass' },
             internalSender()
@@ -157,7 +163,7 @@ describe('export / import round-trip', () => {
         expect(imported).toMatchObject({ success: true, count: 1 });
 
         await target.send({ type: 'LOCK' }, internalSender());
-        expect(await target.send({ type: 'UNLOCK', password: 'target-pass' }, internalSender()))
+        expect(await target.send({ type: 'UNLOCK', password: 'target-vault-passphrase' }, internalSender()))
             .toMatchObject({ success: true });
         expect(target.state.vault.accounts).toHaveLength(1);
     });
@@ -168,5 +174,25 @@ describe('export / import round-trip', () => {
         const res = await h.send({ type: 'IMPORT_KEYS', accounts: [] }, internalSender());
         expect(res.success).toBe(false);
         expect(res.error).toMatch(/locked/i);
+    });
+});
+
+describe('the vault password rule (crypto-core 3.0.0, audit 2026-10-12 K-08)', () => {
+    it('refuses a short vault password at setup, where the vault is sealed', async () => {
+        // The floor was four characters, and only the popup form checked it.
+        const h = await boot();
+        const res = await h.send({ type: 'SETUP_PASSWORD', password: 'four' }, internalSender());
+        expect(res.success).toBe(false);
+        expect(res.error).toMatch(/12 characters/);
+        expect(h.state.hasPassword).toBe(false);
+    });
+
+    it('refuses a weak .kvault passphrase: the file is attacked offline', async () => {
+        const h = await bootWithVault();
+        const res = await h.send(
+            { type: 'EXPORT_KEYS_ENCRYPTED', password: VAULT_PASSWORD, passphrase: 'short' },
+            internalSender()
+        );
+        expect(res.success).toBe(false);
     });
 });

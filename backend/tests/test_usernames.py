@@ -8,11 +8,13 @@ before this; every other way of writing "alice" was a separate registration.
 import pytest
 from conftest import (
     TEST_ENCRYPTION_KEY,
+    TEST_ORIGIN,
     TEST_USER_ADDRESS,
     auth_header,
     do_login,
     get_nonce,
     synthetic_address,
+    test_deployment,
 )
 
 from security.usernames import InvalidUsername, normalize_username
@@ -119,7 +121,10 @@ class TestNormalizeThroughTheApi:
                 "address": other,
                 "signature": "fake",
                 "nonce": get_nonce(client, other),
+                "origin": TEST_ORIGIN,
+                "deployment": test_deployment(),
                 "encryption_public_key": TEST_ENCRYPTION_KEY,
+                "encryption_key_attestation": "fake_attestation_for_testing",
                 "username": "ａlice",
             },
         )
@@ -133,7 +138,10 @@ class TestNormalizeThroughTheApi:
                 "address": other,
                 "signature": "fake",
                 "nonce": get_nonce(client, other),
+                "origin": TEST_ORIGIN,
+                "deployment": test_deployment(),
                 "encryption_public_key": TEST_ENCRYPTION_KEY,
+                "encryption_key_attestation": "fake_attestation_for_testing",
                 "username": "аlice",  # Cyrillic а
             },
         )

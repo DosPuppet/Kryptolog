@@ -48,6 +48,8 @@ for line in text.splitlines():
         line = f"REDIS_PASSWORD={rd}"
     elif line.startswith("KRYPTOLOG_JWT_SECRET="):
         line = f"KRYPTOLOG_JWT_SECRET={secrets.token_hex(32)}"
+    elif line.startswith("KRYPTOLOG_DEPLOYMENT_ID="):
+        line = f"KRYPTOLOG_DEPLOYMENT_ID={secrets.token_urlsafe(12)}"
     line = line.replace("__POSTGRES_PASSWORD__", pg).replace("__REDIS_PASSWORD__", rd)
     if "__GENERATE__" in line and not line.lstrip().startswith("#"):
         raise SystemExit(f"unfilled placeholder in {src}: {line}")

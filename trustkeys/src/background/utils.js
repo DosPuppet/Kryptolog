@@ -1,9 +1,9 @@
-import { encryptVaultWithKey, deriveVaultKeyBits, importVaultKey } from '../utils/crypto.js';
+import { encryptVaultWithKey, deriveVaultKeyBits, importVaultKey, newVaultKdf } from '../utils/crypto.js';
 import { state } from './state.js';
 import { persistSession } from './session.js';
 
-const writeVault = async (key, salt) => {
-    const encryptionResult = await encryptVaultWithKey(state.vault, key, salt);
+const writeVault = async (key, kdf) => {
+    const encryptionResult = await encryptVaultWithKey(state.vault, key, kdf);
     await chrome.storage.local.set({ vaultData: encryptionResult });
     state.hasPassword = true;
 };
@@ -18,15 +18,17 @@ const writeVault = async (key, salt) => {
  */
 export const saveVault = async (password) => {
     if (!state.vault) return;
-    const salt = crypto.getRandomValues(new Uint8Array(16));
-    const keyBytes = await deriveVaultKeyBits(password, salt);
+    // Fresh salt AND current parameters (crypto-core 3.0.0): a password save is
+    // the moment a vault picks up stronger KDF settings if they have moved.
+    const kdf = newVaultKdf();
+    const keyBytes = await deriveVaultKeyBits(password, kdf);
     const key = await importVaultKey(keyBytes);
 
-    await writeVault(key, salt);
+    await writeVault(key, kdf);
 
     state.vaultKey = key;
     state.vaultKeyBytes = keyBytes;
-    state.vaultSalt = salt;
+    state.vaultKdf = kdf;
     await persistSession();
 };
 
@@ -40,10 +42,10 @@ export const saveVault = async (password) => {
  */
 export const saveVaultWithSessionKey = async () => {
     if (!state.vault) return;
-    if (!state.vaultKey || !state.vaultSalt) {
+    if (!state.vaultKey || !state.vaultKdf) {
         throw new Error("Vault is locked");
     }
-    await writeVault(state.vaultKey, state.vaultSalt);
+    await writeVault(state.vaultKey, state.vaultKdf);
 };
 
 /**

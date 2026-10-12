@@ -136,6 +136,16 @@ def test_jwt_expired_rejected(monkeypatch):
     assert auth.decode_access_token(token) is None
 
 
+# What every 3.0.0 login names (crypto-core 3.0.0, audit 2026-10-12 K-02).
+SERVER = {"origin": "https://kryptolog.example", "deployment": "dep-1"}
+
+
+def _verify(pk_hex, sig_b64, nonce, enc_key=None, **server):
+    return auth.verify_pqc_signature(
+        pk_hex, sig_b64, nonce=nonce, encryption_public_key=enc_key, **{**SERVER, **server}
+    )
+
+
 def test_login_challenge_real_verification():
     """The PQC login-challenge verifier accepts a genuine ML-DSA-44 client
     signature over the exact login message, and rejects a bad nonce.
@@ -143,19 +153,30 @@ def test_login_challenge_real_verification():
     Calls verify_pqc_signature directly: the autouse conftest fixture stubs the
     higher-level verify_signature, but the PQC primitive underneath is real."""
     nonce = auth.generate_nonce()
-    # The client signs the canonical (domain-separated) login challenge — the
-    # exact bytes the server reconstructs in verify_pqc_signature (H1).
-    message = auth._login_message(nonce).encode("utf-8")
+    message = auth._login_message(nonce, **SERVER).encode("utf-8")
     with oqs.Signature(SIG_ALG) as client:
         pk = client.generate_keypair()
         sig = client.sign(message)
     pk_hex, sig_b64 = pk.hex(), _sig_b64(sig)
 
-    assert auth.verify_pqc_signature(pk_hex, nonce, sig_b64) is True
+    assert _verify(pk_hex, sig_b64, nonce) is True
     # signature over a different nonce must not verify
-    assert auth.verify_pqc_signature(pk_hex, "00" * 16, sig_b64) is False
+    assert _verify(pk_hex, sig_b64, "00" * 16) is False
     # garbage signature must not raise, just fail
-    assert auth.verify_pqc_signature(pk_hex, nonce, "not-base64!") is False
+    assert _verify(pk_hex, "not-base64!", nonce) is False
+
+
+def test_login_challenge_names_the_server():
+    """K-02: a signature made for another site, or for another Kryptolog
+    deployment, is not a login here — the body names both."""
+    nonce = auth.generate_nonce()
+    message = auth._login_message(nonce, **SERVER).encode("utf-8")
+    with oqs.Signature(SIG_ALG) as client:
+        pk = client.generate_keypair()
+        sig_b64 = _sig_b64(client.sign(message))
+    assert _verify(pk.hex(), sig_b64, nonce) is True
+    assert _verify(pk.hex(), sig_b64, nonce, origin="https://evil.example") is False
+    assert _verify(pk.hex(), sig_b64, nonce, deployment="other") is False
 
 
 def test_login_challenge_binds_encryption_key():
@@ -163,19 +184,19 @@ def test_login_challenge_binds_encryption_key():
     signed challenge, so a signature is valid only for the exact key it covers —
     a network attacker can't substitute a different KEM key at login."""
     nonce = auth.generate_nonce()
-    enc_key = "kem_pub_" + "ab" * 600  # stand-in ML-KEM public key (hex-ish)
-    message = auth._login_message(nonce, enc_key).encode("utf-8")
+    enc_key = "ab" * 1184
+    message = auth._login_message(nonce, encryption_public_key=enc_key, **SERVER).encode("utf-8")
     with oqs.Signature(SIG_ALG) as client:
         pk = client.generate_keypair()
         sig = client.sign(message)
     pk_hex, sig_b64 = pk.hex(), _sig_b64(sig)
 
     # Valid only with the exact bound key.
-    assert auth.verify_pqc_signature(pk_hex, nonce, sig_b64, enc_key) is True
+    assert _verify(pk_hex, sig_b64, nonce, enc_key) is True
     # Substituting a different encryption key fails (the binding holds).
-    assert auth.verify_pqc_signature(pk_hex, nonce, sig_b64, "different_kem_key") is False
+    assert _verify(pk_hex, sig_b64, nonce, "cd" * 1184) is False
     # Dropping the key (downgrade attempt) also fails — the signature covers it.
-    assert auth.verify_pqc_signature(pk_hex, nonce, sig_b64, None) is False
+    assert _verify(pk_hex, sig_b64, nonce, None) is False
 
 
 def test_login_challenge_is_domain_separated():
@@ -183,33 +204,24 @@ def test_login_challenge_is_domain_separated():
     signed bytes are disjoint from any content-signing operation (multisig /
     document approval). The wrapper is fixed by code, never by content."""
     nonce = "deadbeef" * 4
-    enc_key = "kem_pub_" + "cd" * 600
-    msg = auth._login_message(nonce, enc_key)
-    assert msg.startswith("Kryptolog Signed Message v1\ncontext=login\n")
-    # The human-readable body is still present, just namespaced.
-    assert f"Sign in to Kryptolog with nonce: {nonce}" in msg
-    assert f"Encryption key: {enc_key}" in msg
+    enc_key = "cd" * 1184
+    msg = auth._login_message(nonce, encryption_public_key=enc_key, **SERVER)
+    assert msg.startswith("Kryptolog Signed Message v1\ncontext=login\nSign in to Kryptolog\n")
+    assert f"\nnonce={nonce}\n" in msg
+    assert msg.endswith(f"\nencryption-key={enc_key}")
 
 
 def test_content_signature_cannot_be_replayed_as_login():
     """H1 regression / the actual attack: a signature a victim produced while
     approving attacker-chosen *content* must NOT verify as a login challenge,
-    even when the attacker set that content equal to the raw login body.
-
-    Pre-fix, the multisig path signed raw content, so a content signature over
-    `Sign in to Kryptolog with nonce: N\\nEncryption key: K` was a valid login
-    signature → account takeover. Domain separation breaks that."""
+    even when the attacker set that content equal to the raw login body."""
     nonce = auth.generate_nonce()
-    enc_key = "kem_pub_" + "ef" * 600
+    enc_key = "ef" * 1184
 
-    # The exact bytes the OLD (unwrapped) login path expected — what an attacker
-    # would coerce a victim into signing via raw multisig content.
-    raw_login_body = f"Sign in to Kryptolog with nonce: {nonce}\nEncryption key: {enc_key}"
-
-    # The victim's client never signs that directly anymore; content is wrapped
-    # under the `login`-disjoint `content` domain. Emulate both attacker attempts:
-    #   (a) victim signs the raw login body (old attack), and
-    #   (b) victim signs the content-domain-wrapped body (post-fix multisig path).
+    # The login body without its domain header — what an attacker would coerce
+    # a victim into signing as raw or content-wrapped multisig content.
+    full = auth._login_message(nonce, encryption_public_key=enc_key, **SERVER)
+    raw_login_body = full.split("\ncontext=login\n", 1)[1]
     content_wrapped = f"Kryptolog Signed Message v1\ncontext=content\n{raw_login_body}"
 
     with oqs.Signature(SIG_ALG) as client:
@@ -219,15 +231,15 @@ def test_content_signature_cannot_be_replayed_as_login():
     pk_hex = pk.hex()
 
     # Neither harvested signature is accepted as a login for this nonce+key.
-    assert auth.verify_pqc_signature(pk_hex, nonce, sig_raw, enc_key) is False
-    assert auth.verify_pqc_signature(pk_hex, nonce, sig_content, enc_key) is False
+    assert _verify(pk_hex, sig_raw, nonce, enc_key) is False
+    assert _verify(pk_hex, sig_content, nonce, enc_key) is False
 
-    # Sanity: a signature over the *properly domain-separated* login challenge
-    # (what the real client builds) still verifies — we didn't break login.
+    # Sanity: a signature over the properly domain-separated challenge (what
+    # the real client builds) still verifies — we didn't break login.
     with oqs.Signature(SIG_ALG) as client:
         pk2 = client.generate_keypair()
-        good_sig = _sig_b64(client.sign(auth._login_message(nonce, enc_key).encode("utf-8")))
-    assert auth.verify_pqc_signature(pk2.hex(), nonce, good_sig, enc_key) is True
+        good_sig = _sig_b64(client.sign(full.encode("utf-8")))
+    assert _verify(pk2.hex(), good_sig, nonce, enc_key) is True
 
 
 def test_multisig_approval_message_is_domain_separated():

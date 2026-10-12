@@ -2,6 +2,7 @@ import { useState, useEffect, useRef } from 'react';
 import { decryptWithSessionKey } from '../../utils/crypto';
 import { verifyMessageAuthenticity } from './verifyMessage';
 import { sessionKeyId, groupConversationId, conversationIdForMessage, mayAdoptSession } from './sessionScope';
+import { assessFreshness } from './freshness';
 
 // Session-key state + the DM/group message decryption pipelines. Owns the
 // (conversation, sid) → AES-key map and the per-conversation active-session
@@ -22,6 +23,10 @@ export const useMessageSessions = ({
     useEffect(() => { sessionKeysRef.current = sessionKeys; }, [sessionKeys]);
 
     const [activeSessionIds, setActiveSessionIds] = useState({});
+
+    // What each (conversation, session, sender) has delivered so far, so a
+    // live message is judged against loaded history (messenger/freshness.js).
+    const freshnessSeenRef = useRef({});
 
     // Group key rotation & forward secrecy (audit S2).
     //
@@ -86,6 +91,14 @@ export const useMessageSessions = ({
             return { ...msg, verified, redacted, plainText: null, _sessionPayload: payload };
         }));
 
+        // Replay / reorder / gap (crypto-core 3.0.0, audit 2026-10-12 K-06).
+        // Judged on verified messages only: the signature is what makes ts and
+        // seq the author's statement rather than the server's.
+        const freshness = assessFreshness(prepared, freshnessSeenRef.current, convOf);
+        for (const m of prepared) {
+            if (freshness.has(m.id)) m.freshness = freshness.get(m.id);
+        }
+
         // 2. Decrypt whatever the cache already covers.
         const processed = await Promise.all(prepared.map(async m => {
             const p = m._sessionPayload;
@@ -116,22 +129,6 @@ export const useMessageSessions = ({
         const keyIds = Object.keys(keysToUnwrap);
 
         if (keyIds.length === 0) {
-            // Nothing new to adopt. For DMs, point the active sid at the NEWEST
-            // message that decrypted under an already-trusted key, so the next
-            // send reuses the partner's current session instead of minting one.
-            // (This path was previously dead: cache hits dropped
-            // `_sessionPayload`, so the lookup below never matched anything.)
-            if (mode === 'dm') {
-                const cached = processed.findLast(m =>
-                    m.plainText !== null && m._sessionPayload &&
-                    mayAdoptSession(m, m.verified, mode, myAddr)
-                );
-                if (cached) {
-                    setActiveSessionIds(prev => ({
-                        ...prev, [convOf(cached)]: cached._sessionPayload.sid,
-                    }));
-                }
-            }
             return processed;
         }
 
@@ -139,49 +136,30 @@ export const useMessageSessions = ({
         try {
             const unwrappedList = await unwrapManySessionKeys(keyIds.map(id => keysToUnwrap[id]));
             const newKeys = { ...sessionKeysRef.current };
-            const adopted = new Set();
             keyIds.forEach((id, idx) => {
                 const k = unwrappedList[idx];
-                if (k) { newKeys[id] = k; adopted.add(id); }
+                if (k) newKeys[id] = k;
             });
             setSessionKeys(newKeys);
 
-            // For DMs, track the active session. Groups deliberately do NOT
-            // adopt a send key from inbound history (audit O-1): they mint a
-            // fresh session per client per page load, and that is what kept H-1
-            // off the group path — an adopted group key can decrypt but can
-            // never become the key we encrypt UNDER.
+            // Neither DMs nor groups adopt a SEND key from inbound history: an
+            // adopted key DECRYPTS and never ENCRYPTS. Do not "fix" this.
             //
-            // Do not "fix" this. It looks like waste and it is not:
-            //   • mayAdoptSession cannot check membership — the hook has no
-            //     member list, and the list it could be handed comes from the
-            //     server, which is the adversary. Verification proves the sender
-            //     holds the private key for the address they claim; it does NOT
-            //     prove that address belongs in this channel. A server can mint
-            //     an identity, sign correctly for conv=<channelId>, and wrap
-            //     keys[me] to a key it owns — H-1, reproduced in groups.
-            //   • Long-lived group sessions cost the forward secrecy the S2
-            //     rotation above exists to provide.
-            // The saving would be a few ML-KEM wraps on the first send after a
-            // page load: sub-millisecond, even for a large channel. Neither the
-            // adoption gate nor WP6's key-envelope binding changes any of this
-            // (an earlier note here claimed they would — they do not).
-            if (mode === 'dm') {
-                // findLast, not find (audit L-1): history is chronologically
-                // ASCENDING, so `find` returned the OLDEST match — in a variable
-                // named `recentMsg`. Together with H-1 that handed an injected
-                // early message priority over every legitimate later one. The
-                // newest adopted session is the one the partner is actually on.
-                const recent = processed.findLast(m =>
-                    m._sessionPayload && adopted.has(sessionKeyId(convOf(m), m._sessionPayload.sid))
-                );
-                if (recent) {
-                    setActiveSessionIds(prev => ({
-                        ...prev, [convOf(recent)]: recent._sessionPayload.sid,
-                    }));
-                }
-            }
-
+            // Groups never did (audit O-1). mayAdoptSession cannot check
+            // membership — the hook has no member list, and the one it could
+            // be handed comes from the server, which is the adversary. A
+            // verified message proves the sender holds the key for the address
+            // it claims, NOT that the address belongs in the channel, so a
+            // server could mint an identity, sign correctly, and wrap keys[me]
+            // to a key it owns. As a send key, that is H-1 in a group.
+            //
+            // DMs did until crypto-core 3.0.0: the next send reused the
+            // partner's newest session. A session now has exactly one sender —
+            // whoever minted it, on this page load — because that is what makes
+            // its `seq` a sequence the receiver can hold the server to (audit
+            // 2026-10-12 K-06), and minting per page load plus rotation bounds
+            // what one leaked session key exposes (K-07). The cost is two
+            // ML-KEM wraps on the first DM after a page load.
             return await Promise.all(processed.map(async m => {
                 const p = m._sessionPayload;
                 if (!p || m.plainText !== null) return m;

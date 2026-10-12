@@ -13,7 +13,10 @@ export const state = {
     // unlock and every subsequent save reuses the cached key.
     vaultKey: null,       // non-extractable CryptoKey, for encrypt/decrypt
     vaultKeyBytes: null,  // the same key raw, so it survives a worker restart
-    vaultSalt: null,      // Uint8Array salt vaultData was written with
+    // The KDF descriptor { alg, m, t, p, salt } vaultData was written with
+    // (crypto-core 3.0.0): the key in vaultKey came from it, and every save
+    // writes it back so the next unlock derives the same key.
+    vaultKdf: null,
 
     pendingRequests: new Map(), // ID -> { type, origin, data, resolve, reject }
 

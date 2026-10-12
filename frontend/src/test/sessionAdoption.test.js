@@ -40,9 +40,11 @@ beforeAll(async () => {
 const dmMessage = async ({ id, from, to, sid, sKey, text = 'hello', blob = null, sign = true, signWith }) => {
     const ct = await encryptWithSessionKey(text, sKey);
     const keys = blob ? { recip: blob, sender: null } : null;
-    const payload = { v: 1, sid, keys, ct };
+    const ts = 1760264400000 + id;
+    const seq = 0;
+    const payload = { v: 1, sid, ts, seq, keys, ct };
     if (sign) {
-        const body = await messageSigningBody({ from: from.address, conv: to.address, sid, keys, ct });
+        const body = await messageSigningBody({ from: from.address, conv: to.address, sid, ts, seq, keys, ct });
         payload.sig = await signMessagePQC(body, (signWith || from).privateKey);
     }
     return { id, sender_address: from.address, recipient_address: to.address, content: JSON.stringify(payload) };
@@ -52,10 +54,12 @@ const groupMessage = async ({ id, from, sid, sKey, text = 'hi group', wrapFor = 
     const ct = await encryptWithSessionKey(text, sKey);
     const keys = {};
     for (const [addr, blob] of wrapFor) keys[addr] = blob;
-    const payload = { v: 2, sid, gid: CHANNEL, keys, ct };
+    const ts = 1760264400000 + id;
+    const seq = 0;
+    const payload = { v: 2, sid, gid: CHANNEL, ts, seq, keys, ct };
     if (sign) {
         const body = await messageSigningBody({
-            from: from.address, conv: CHANNEL, gid: CHANNEL, sid, keys, ct,
+            from: from.address, conv: CHANNEL, gid: CHANNEL, sid, ts, seq, keys, ct,
         });
         payload.sig = await signMessagePQC(body, (signWith || from).privateKey);
     }
@@ -65,9 +69,11 @@ const groupMessage = async ({ id, from, sid, sKey, text = 'hi group', wrapFor = 
 /** An author-redacted DM: the key envelope and signature survive, `ct` does not. */
 const dmRedacted = async ({ id, from, to, sid, blob }) => {
     const keys = { recip: blob, sender: null };
-    const payload = { v: 1, sid, keys, ct: null };
+    const payload = { v: 1, sid, ts: 1760264400000 + id, seq: 0, keys, ct: null };
     payload.sig = await signMessagePQC(
-        await messageSigningBody({ from: from.address, conv: to.address, sid, keys, ct: null }),
+        await messageSigningBody({
+            from: from.address, conv: to.address, sid, ts: payload.ts, seq: 0, keys, ct: null,
+        }),
         from.privateKey
     );
     return { id, sender_address: from.address, recipient_address: to.address, content: JSON.stringify(payload) };
@@ -107,8 +113,10 @@ describe('session adoption requires a valid signature (H-1)', () => {
         expect(out.verified).toBe(true);
         expect(out.plainText).toBe('hello');
         expect(unwrapManySessionKeys).toHaveBeenCalledTimes(1);
-        expect(result.current.activeSessionIds[alice.address]).toBe(sid);
         expect(result.current.sessionKeys[sessionKeyId(alice.address, sid)]).toBe(sKey);
+        // Readable, and never the key WE send under (crypto-core 3.0.0): a
+        // session has one sender, the client that minted it.
+        expect(result.current.activeSessionIds[alice.address]).toBeUndefined();
     });
 
     it('refuses a forged message: the key is never unwrapped, let alone adopted', async () => {
@@ -146,10 +154,9 @@ describe('session adoption requires a valid signature (H-1)', () => {
         expect(result.current.sessionKeys).toEqual({});
     });
 
-    it('a forged message cannot displace an already-adopted session', async () => {
+    it('a forged message is not adopted next to a genuine one', async () => {
         // Even with a genuine session in place, an injected later message must
-        // not take over `activeSessionIds` — that is what would redirect the
-        // next outbound message.
+        // not enter the key cache — and neither becomes the send session.
         const goodKey = await generateSessionKey();
         const evilKey = await generateSessionKey();
         const { result } = setup({ 'blob-good': goodKey, 'blob-evil': evilKey });
@@ -161,8 +168,9 @@ describe('session adoption requires a valid signature (H-1)', () => {
 
         await process(result, [good, evil]);
 
-        expect(result.current.activeSessionIds[alice.address]).toBe('sid-good');
+        expect(result.current.sessionKeys[sessionKeyId(alice.address, 'sid-good')]).toBe(goodKey);
         expect(result.current.sessionKeys[sessionKeyId(alice.address, 'sid-evil')]).toBeUndefined();
+        expect(result.current.activeSessionIds[alice.address]).toBeUndefined();
     });
 
     it('manual decrypt applies the same gate — it is not a way around it', async () => {
@@ -180,12 +188,13 @@ describe('session adoption requires a valid signature (H-1)', () => {
     });
 });
 
-describe('the newest session wins (L-1)', () => {
-    it('picks the last message in the batch, not the first', async () => {
-        // History arrives chronologically ASCENDING and the old code used
-        // `.find`, so the OLDEST session in the batch became active — in a
-        // variable named `recentMsg`. Combined with H-1 that gave an injected
-        // early message priority over every legitimate later one.
+describe('an inbound session never becomes the send session (crypto-core 3.0.0)', () => {
+    it('keeps every verified session readable, and adopts none of them for sending', async () => {
+        // Until 3.0.0 the newest inbound DM session became the one we sent
+        // under (audit L-1 made that the NEWEST rather than the oldest). Now a
+        // session has exactly one sender — whoever minted it — so its `seq` is a
+        // sequence a receiver can check (audit 2026-10-12 K-06), and minting per
+        // page load bounds a leaked session key (K-07).
         const oldKey = await generateSessionKey();
         const newKey = await generateSessionKey();
         const { result } = setup({ 'blob-old': oldKey, 'blob-new': newKey });
@@ -195,8 +204,7 @@ describe('the newest session wins (L-1)', () => {
 
         await process(result, [older, newer]);
 
-        expect(result.current.activeSessionIds[alice.address]).toBe('sid-new');
-        // Both keys stay readable — only the SEND session is the newest one.
+        expect(result.current.activeSessionIds[alice.address]).toBeUndefined();
         expect(result.current.sessionKeys[sessionKeyId(alice.address, 'sid-old')]).toBe(oldKey);
         expect(result.current.sessionKeys[sessionKeyId(alice.address, 'sid-new')]).toBe(newKey);
     });

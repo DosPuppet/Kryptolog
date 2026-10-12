@@ -66,7 +66,9 @@ export const trustContactKey = (address, encryptionPublicKey) => {
 // forge this signature.
 
 // 'verified'   — attestation present and cryptographically valid
-// 'unattested' — no attestation (account predates the feature / old client)
+// 'unattested' — no attestation. Refused by every gate since crypto-core 3.0.0
+//                (audit 2026-10-12 K-04); kept as a distinct verdict so the UI
+//                can say WHY a contact cannot be written to.
 // 'invalid'    — attestation present but WRONG: treat as an active key-swap
 //                attack and refuse to encrypt to this key.
 export const attestationStatus = async (user) => {
@@ -135,11 +137,24 @@ export const attestationVerdict = async (user) => {
 
 const label = (user) => user?.username || `${user?.address?.slice(0, 12)}…`;
 
-// Fail-closed guard for every place we wrap a key to a contact. Throws on an
-// invalid attestation or a downgraded one; passes 'verified' and (for genuinely
-// legacy contacts only) 'unattested'.
+// Fail-closed guard for every place we wrap a key to a contact. Passes only
+// 'verified'.
+//
+// 'unattested' used to pass, for accounts that predated attestations — which
+// left the server free to substitute the key of any contact a user had never
+// seen attested, by simply omitting the attestation (audit 2026-10-12 K-04).
+// The crypto-core 3.0.0 cutover wiped every such account, and the server now
+// refuses a key without one, so a missing attestation can only mean the
+// directory is not serving what the contact signed.
 export const assertSafeRecipient = async (user) => {
     const verdict = await attestationVerdict(user);
+    if (verdict === 'unattested') {
+        throw new Error(
+            `No key attestation for ${label(user)}: their encryption key is not ` +
+            'signed by their identity, so it cannot be told apart from a ' +
+            'substituted one — do not send.'
+        );
+    }
     if (verdict === 'invalid') {
         throw new Error(
             `Key verification failed for ${label(user)}: ` +

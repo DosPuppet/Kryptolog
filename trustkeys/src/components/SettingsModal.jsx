@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import { isAllowedTrustedOrigin, isDevOrigin } from '../background/utils.js';
+import { isEncryptedVaultBlob, vaultPasswordProblem } from '../utils/crypto.js';
 
 const SettingsModal = ({ onClose, onExport, onImport }) => {
   const [password, setPassword] = useState('');
@@ -96,7 +97,8 @@ const SettingsModal = ({ onClose, onExport, onImport }) => {
   const handleExport = () => {
     if (!password) return setError("Vault password required");
     if (exportFormat === 'encrypted') {
-      if (passphrase.length < 8) return setError("Backup passphrase must be at least 8 characters");
+      const problem = vaultPasswordProblem(passphrase);
+      if (problem) return setError(problem);
       if (passphrase !== passphrase2) return setError("Passphrases don't match");
     }
     onExport(password, { format: exportFormat, passphrase }, (success, err) => {
@@ -106,7 +108,7 @@ const SettingsModal = ({ onClose, onExport, onImport }) => {
   };
 
   // Read a chosen backup file. Accepts plaintext JSON ({accounts:[...]}) or an
-  // encrypted .kvault backup ({salt, iv, data}); the latter needs a passphrase,
+  // encrypted .kvault backup ({v, kdf, iv, data}); the latter needs a passphrase,
   // collected in the import view before the actual import runs.
   const handleImportFile = (e) => {
     const file = e.target.files[0];
@@ -118,7 +120,7 @@ const SettingsModal = ({ onClose, onExport, onImport }) => {
     reader.onload = (ev) => {
       try {
         const data = JSON.parse(ev.target.result);
-        const encrypted = !!(data && data.salt && data.iv && data.data);
+        const encrypted = isEncryptedVaultBlob(data);
         if (!encrypted && !Array.isArray(data.accounts)) throw new Error("Invalid format");
         setImportData(data);
         setImportIsEncrypted(encrypted);

@@ -34,6 +34,10 @@ export const verifyMessageAuthenticity = async (msg, payload, mode) => {
             conv,
             gid: payload.gid || '',
             sid: payload.sid,
+            // The sender's clock and session position (crypto-core 3.0.0,
+            // K-06). Signed, so a relay cannot rewrite them to hide a replay.
+            ts: payload.ts,
+            seq: payload.seq,
             keys: payload.keys ?? null,
             ct: payload.ct,
         });

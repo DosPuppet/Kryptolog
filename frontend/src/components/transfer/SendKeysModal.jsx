@@ -3,7 +3,7 @@ import QRCode from 'qrcode';
 import { X, Download, Smartphone, Loader2, Copy, ShieldAlert, ArrowLeft } from 'lucide-react';
 import { usePQC } from '../../context/PQCContext';
 import { useAuth } from '../../context/AuthContext';
-import { generateTransferCode } from '../../utils/crypto';
+import { generateTransferCode, vaultPasswordProblem } from '../../utils/crypto';
 import { uploadTransfer, packHandoff } from '../../services/transfer';
 import { toast } from '../../utils/toast';
 
@@ -30,7 +30,9 @@ export default function SendKeysModal({ onClose }) {
     const handleExportFile = async (e) => {
         e.preventDefault();
         setError(null);
-        if (filePass.length < 8) return setError("Use a passphrase of at least 8 characters.");
+        // A .kvault file is attacked offline once it leaves the device (K-08).
+        const problem = vaultPasswordProblem(filePass);
+        if (problem) return setError(problem);
         if (filePass !== filePass2) return setError("Passphrases don't match.");
         setLoading(true);
         try {

@@ -7,10 +7,12 @@ security/crypto_validation.py and are covered by test_crypto_validation.py.
 
 from conftest import (
     TEST_ENCRYPTION_KEY,
+    TEST_ORIGIN,
     TEST_USER_ADDRESS,
     auth_header,
     do_login,
     synthetic_address,
+    test_deployment,
 )
 
 import schemas
@@ -77,6 +79,8 @@ class TestOversizedInputRejected:
                 "address": "a" * (schemas.MAX_ADDRESS_LEN + 1),
                 "signature": "sig",
                 "nonce": "n",
+                "origin": TEST_ORIGIN,
+                "deployment": test_deployment(),
             },
         )
         assert r.status_code == 422

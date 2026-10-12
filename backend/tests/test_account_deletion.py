@@ -24,10 +24,12 @@ from unittest.mock import patch
 import pytest
 from conftest import (
     TEST_ENCRYPTION_KEY,
+    TEST_ORIGIN,
     auth_header,
     do_login,
     get_nonce,
     synthetic_address,
+    test_deployment,
 )
 from fastapi import HTTPException
 
@@ -45,13 +47,24 @@ DUMMY_SIG = base64.b64encode(b"\x00" * 2420).decode()
 
 
 def _wrapped(tag):
-    return {"kem": f"kem-{tag}", "iv": f"iv-{tag}", "encKey": f"key-{tag}"}
+    # The 3.0.0 shape: every wrapped key says what it is (`v`, `alg`).
+    return {
+        "v": 3,
+        "alg": "MLKEM768-HKDF-A256GCM",
+        "kem": f"kem-{tag}",
+        "iv": f"iv-{tag}",
+        "encKey": f"key-{tag}",
+    }
+
+
+# A 3.0.0 payload's signed position (K-06). Any values do for these tests.
+TS = 1760264400000
 
 
 def _dm_content(sid, *, with_keys=True, ct="cipher"):
     """A DM payload. `with_keys` marks it as the epoch opener — the one that
     carries the session key both sides need."""
-    payload = {"v": 1, "sid": sid, "ct": ct, "sig": DUMMY_SIG}
+    payload = {"v": 1, "sid": sid, "ts": TS, "seq": 0, "ct": ct, "sig": DUMMY_SIG}
     payload["keys"] = (
         {"recip": _wrapped("recip"), "sender": _wrapped("sender")} if with_keys else None
     )
@@ -59,7 +72,15 @@ def _dm_content(sid, *, with_keys=True, ct="cipher"):
 
 
 def _group_content(sid, channel_id, addresses, *, with_keys=True, ct="cipher"):
-    payload = {"v": 2, "sid": sid, "gid": channel_id, "ct": ct, "sig": DUMMY_SIG}
+    payload = {
+        "v": 2,
+        "sid": sid,
+        "gid": channel_id,
+        "ts": TS,
+        "seq": 0,
+        "ct": ct,
+        "sig": DUMMY_SIG,
+    }
     payload["keys"] = {a: _wrapped(a[:8]) for a in addresses} if with_keys else None
     return json.dumps(payload)
 
@@ -108,6 +129,8 @@ def _delete(client, token, address, mode, redactions=None, signature=DUMMY_SIG):
         json={
             "mode": mode,
             "nonce": nonce,
+            "origin": TEST_ORIGIN,
+            "deployment": test_deployment(),
             "signature": signature,
             "redactions": redactions or [],
         },
@@ -351,7 +374,10 @@ class TestComingBack:
                 "address": u1["address"],
                 "signature": "fake_signature_for_testing",
                 "nonce": nonce,
+                "origin": TEST_ORIGIN,
+                "deployment": test_deployment(),
                 "encryption_public_key": TEST_ENCRYPTION_KEY,
+                "encryption_key_attestation": "fake_attestation_for_testing",
                 "username": "Rebirth",
             },
         )
@@ -678,9 +704,22 @@ class TestAuthorizingTheDeletion:
             "/auth/login",
             json={
                 "address": address,
-                "signature": cls._sign(auth._login_message(nonce, TEST_ENCRYPTION_KEY), signer),
+                "signature": cls._sign(
+                    auth._login_message(
+                        nonce,
+                        encryption_public_key=TEST_ENCRYPTION_KEY,
+                        origin=TEST_ORIGIN,
+                        deployment=test_deployment(),
+                    ),
+                    signer,
+                ),
                 "nonce": nonce,
+                "origin": TEST_ORIGIN,
+                "deployment": test_deployment(),
                 "encryption_public_key": TEST_ENCRYPTION_KEY,
+                "encryption_key_attestation": cls._sign(
+                    auth.encryption_key_attestation_message(TEST_ENCRYPTION_KEY), signer
+                ),
                 "username": username,
             },
         )
@@ -701,6 +740,8 @@ class TestAuthorizingTheDeletion:
                 json={
                     "mode": "leave",
                     "nonce": nonce,
+                    "origin": TEST_ORIGIN,
+                    "deployment": test_deployment(),
                     "signature": DUMMY_SIG,
                     "redactions": [],
                 },
@@ -709,10 +750,22 @@ class TestAuthorizingTheDeletion:
             assert forged.status_code == 401, forged.text
 
             nonce = get_nonce(client, address)
-            good = self._sign(auth.account_deletion_message(nonce, "leave", []), signer)
+            good = self._sign(
+                auth.account_deletion_message(
+                    nonce, "leave", [], origin=TEST_ORIGIN, deployment=test_deployment()
+                ),
+                signer,
+            )
             resp = client.post(
                 "/account/delete",
-                json={"mode": "leave", "nonce": nonce, "signature": good, "redactions": []},
+                json={
+                    "mode": "leave",
+                    "nonce": nonce,
+                    "origin": TEST_ORIGIN,
+                    "deployment": test_deployment(),
+                    "signature": good,
+                    "redactions": [],
+                },
                 headers=auth_header(token),
             )
             assert resp.status_code == 200, resp.text
@@ -728,11 +781,23 @@ class TestAuthorizingTheDeletion:
             address = signer.generate_keypair().hex()
             token = self._real_login(client, signer, address, "ModeBound")
             nonce = get_nonce(client, address)
-            leave_sig = self._sign(auth.account_deletion_message(nonce, "leave", []), signer)
+            leave_sig = self._sign(
+                auth.account_deletion_message(
+                    nonce, "leave", [], origin=TEST_ORIGIN, deployment=test_deployment()
+                ),
+                signer,
+            )
 
             resp = client.post(
                 "/account/delete",
-                json={"mode": "erase", "nonce": nonce, "signature": leave_sig, "redactions": []},
+                json={
+                    "mode": "erase",
+                    "nonce": nonce,
+                    "origin": TEST_ORIGIN,
+                    "deployment": test_deployment(),
+                    "signature": leave_sig,
+                    "redactions": [],
+                },
                 headers=auth_header(token),
             )
             assert resp.status_code == 401, resp.text
@@ -749,11 +814,26 @@ class TestAuthorizingTheDeletion:
             address = signer.generate_keypair().hex()
             token = self._real_login(client, signer, address, "ContextBound")
             nonce = get_nonce(client, address)
-            login_sig = self._sign(auth._login_message(nonce, TEST_ENCRYPTION_KEY), signer)
+            login_sig = self._sign(
+                auth._login_message(
+                    nonce,
+                    encryption_public_key=TEST_ENCRYPTION_KEY,
+                    origin=TEST_ORIGIN,
+                    deployment=test_deployment(),
+                ),
+                signer,
+            )
 
             resp = client.post(
                 "/account/delete",
-                json={"mode": "leave", "nonce": nonce, "signature": login_sig, "redactions": []},
+                json={
+                    "mode": "leave",
+                    "nonce": nonce,
+                    "origin": TEST_ORIGIN,
+                    "deployment": test_deployment(),
+                    "signature": login_sig,
+                    "redactions": [],
+                },
                 headers=auth_header(token),
             )
             assert resp.status_code == 401, resp.text
@@ -781,13 +861,18 @@ class TestAuthorizingTheDeletion:
 
             nonce = get_nonce(client, address)
             deletion_sig = self._sign(
-                auth.account_deletion_message(nonce, "erase", [row["key"]]), signer
+                auth.account_deletion_message(
+                    nonce, "erase", [row["key"]], origin=TEST_ORIGIN, deployment=test_deployment()
+                ),
+                signer,
             )
             bad = client.post(
                 "/account/delete",
                 json={
                     "mode": "erase",
                     "nonce": nonce,
+                    "origin": TEST_ORIGIN,
+                    "deployment": test_deployment(),
                     "signature": deletion_sig,
                     "redactions": [{"key": row["key"], "signature": DUMMY_SIG}],
                 },
@@ -803,6 +888,8 @@ class TestAuthorizingTheDeletion:
                 conv=row["conv"],
                 gid="",
                 sid=row["sid"],
+                ts=row["ts"],
+                seq=row["seq"],
                 ct=None,
                 keys=row["keys"],
             )
@@ -811,8 +898,17 @@ class TestAuthorizingTheDeletion:
                 json={
                     "mode": "erase",
                     "nonce": nonce,
+                    "origin": TEST_ORIGIN,
+                    "deployment": test_deployment(),
                     "signature": self._sign(
-                        auth.account_deletion_message(nonce, "erase", [row["key"]]), signer
+                        auth.account_deletion_message(
+                            nonce,
+                            "erase",
+                            [row["key"]],
+                            origin=TEST_ORIGIN,
+                            deployment=test_deployment(),
+                        ),
+                        signer,
                     ),
                     "redactions": [{"key": row["key"], "signature": self._sign(body, signer)}],
                 },
@@ -823,7 +919,14 @@ class TestAuthorizingTheDeletion:
     def test_a_replayed_nonce_is_refused(self, client, user1):
         token, u1 = user1
         nonce = get_nonce(client, u1["address"])
-        body = {"mode": "leave", "nonce": nonce, "signature": DUMMY_SIG, "redactions": []}
+        body = {
+            "mode": "leave",
+            "nonce": nonce,
+            "origin": TEST_ORIGIN,
+            "deployment": test_deployment(),
+            "signature": DUMMY_SIG,
+            "redactions": [],
+        }
         assert (
             client.post("/account/delete", json=body, headers=auth_header(token)).status_code == 200
         )
@@ -1153,7 +1256,10 @@ class TestALeaveReservesTheName:
             "address": address,
             "signature": "fake_signature_for_testing",
             "nonce": get_nonce(client, address),
+            "origin": TEST_ORIGIN,
+            "deployment": test_deployment(),
             "encryption_public_key": TEST_ENCRYPTION_KEY,
+            "encryption_key_attestation": "fake_attestation_for_testing",
         }
         if username:
             body["username"] = username
@@ -1318,6 +1424,8 @@ class TestARedactedGroupMessageStillVerifies:
         payload = {
             "v": 2,
             "sid": "g-sid",
+            "ts": TS,
+            "seq": 0,
             "keys": {a: _wrapped(a[:8]) for a in (u1["address"], u2["address"])},
             "ct": "cipher",
             "sig": DUMMY_SIG,
@@ -1345,6 +1453,8 @@ class TestARedactedGroupMessageStillVerifies:
             conv=channel,
             gid=stored["gid"] or "",
             sid=stored["sid"],
+            ts=stored["ts"],
+            seq=stored["seq"],
             keys=stored["keys"],
             ct=None,
         ) == auth.message_signing_body(
@@ -1352,6 +1462,8 @@ class TestARedactedGroupMessageStillVerifies:
             conv=channel,
             gid=channel,
             sid="g-sid",
+            ts=TS,
+            seq=0,
             keys=payload["keys"],
             ct=None,
         )
@@ -1437,6 +1549,8 @@ class TestTwoDeletionsOfOneAccount:
         req = schemas.AccountDeleteRequest(
             mode="erase",
             nonce=get_nonce(client, u1["address"]),
+            origin=TEST_ORIGIN,
+            deployment=test_deployment(),
             signature=DUMMY_SIG,
             redactions=[],
         )

@@ -17,8 +17,26 @@ import { Shield, ShieldAlert, ShieldCheck } from 'lucide-react';
 //     this conversation HAS produced valid signatures, so a missing one is a
 //     likely signature-stripping / tampering attempt rather than an old client.
 //
+// `freshness` (crypto-core 3.0.0, audit 2026-10-12 K-06) qualifies a VERIFIED
+// message: the author really wrote it, but the server may be re-delivering it,
+// holding one back, or swapping the order. See messenger/freshness.js.
+const FRESHNESS = {
+    replayed: ['possible replay', 'This exact message was already delivered once. A server re-delivering an old message would look like this.'],
+    skew: ['time mismatch', "The time the author signed is far from when the server delivered it — an old message delivered as new would look like this."],
+    reordered: ['out of order', 'The author sent this BEFORE a message already shown after it.'],
+    gap: ['message missing', "The author sent a message between this one and their previous that was never delivered."],
+};
+
 // Callers gate on `!isMe` (own messages aren't verified against the peer).
-export default function MessageAuthBadge({ verified, suspicious = false }) {
+export default function MessageAuthBadge({ verified, suspicious = false, freshness = null }) {
+    if (verified === true && FRESHNESS[freshness]) {
+        const [label, title] = FRESHNESS[freshness];
+        return (
+            <span className="flex items-center gap-0.5 text-amber-500 font-semibold" title={title}>
+                <ShieldAlert className="w-3 h-3" /> {label}
+            </span>
+        );
+    }
     if (verified === true) {
         return <ShieldCheck className="w-3 h-3 text-emerald-500" title="Signature verified" />;
     }

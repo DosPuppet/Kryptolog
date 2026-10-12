@@ -8,6 +8,49 @@ import { ml_dsa44 } from '@noble/post-quantum/ml-dsa.js';
 
 import { toHex, fromHex, toB64, fromB64, ENC, DEC } from './encoding.js';
 
+// --- Format markers (crypto-core 3.0.0, audit 2026-10-12 K-10) ---
+//
+// Every envelope this package writes now says what it is: a format version and
+// an algorithm id, stored WITH the data. Before 3.0.0 nothing did, so data from
+// an older client failed as an opaque OperationError — or as an invalid-signature
+// badge indistinguishable from a forgery — because there was no version to tell
+// "old" from "tampered" (CLAUDE.md, "Nothing can detect old data"). Decoders now
+// refuse anything else by name, before touching a key.
+//
+// The ids are short on purpose: one rides in every member's wrapped key, and the
+// group-size bounds in backend/schemas.py are derived from what a wrap costs.
+// They are also the hook the hybrid cutover (4.0.0, X25519 + ML-KEM) will use.
+export const FORMAT_VERSION = 3;
+export const KEM_ENVELOPE_ALG = 'MLKEM768-HKDF-A256GCM';
+
+export class FormatError extends Error {
+    constructor(message) {
+        super(message);
+        this.name = 'FormatError';
+    }
+}
+
+/**
+ * Refuse an envelope that is not the current format, naming why. Called by every
+ * decoder before it does any cryptography, so old or foreign data is reported
+ * as such rather than as a failed tag.
+ */
+export const assertFormat = (envelope, alg, what) => {
+    if (!envelope || typeof envelope !== 'object') {
+        throw new FormatError(`${what}: not an envelope`);
+    }
+    if (envelope.v !== FORMAT_VERSION) {
+        throw new FormatError(
+            `${what}: format ${envelope.v ?? 'unversioned'} is not supported ` +
+            `(this client reads format ${FORMAT_VERSION}). It was written by an ` +
+            'older Kryptolog version and cannot be opened.'
+        );
+    }
+    if (envelope.alg !== alg) {
+        throw new FormatError(`${what}: unsupported algorithm ${envelope.alg ?? '(none)'}`);
+    }
+};
+
 // Derive the AES-GCM key from an ML-KEM shared secret via HKDF-SHA-256 with a
 // fixed context label (audit S5), instead of importing the raw shared secret as
 // the AES key. The ML-KEM secret is already uniform, so this is best-practice
@@ -105,6 +148,8 @@ export const encryptMessage = async (message, publicKeyHex) => {
     );
 
     return {
+        v: FORMAT_VERSION,
+        alg: KEM_ENVELOPE_ALG,
         kem: toB64(ct),
         iv: toB64(iv),
         content: toB64(new Uint8Array(encryptedContent))
@@ -112,7 +157,8 @@ export const encryptMessage = async (message, publicKeyHex) => {
 };
 
 export const decryptMessage = async (encryptedData, privateKeyHex) => {
-    // encryptedData: { kem, iv, content } — all base64
+    // encryptedData: { v, alg, kem, iv, content } — the three blobs base64
+    assertFormat(encryptedData, KEM_ENVELOPE_ALG, 'KEM envelope');
     const privateKey = fromHex(privateKeyHex);
 
     // Parse KEM ciphertext

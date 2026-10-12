@@ -98,7 +98,7 @@ const ChatArea = ({ activeConversation, onBack, onSend, loadingMessages, sending
                                         {new Date(msg.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
                                         {/* Authenticity (audit S1/F-2): verified / invalid / unsigned. */}
                                         {!isMe && (
-                                            <MessageAuthBadge verified={msg.verified} suspicious={hasPeerSignedHistory} />
+                                            <MessageAuthBadge verified={msg.verified} suspicious={hasPeerSignedHistory} freshness={msg.freshness} />
                                         )}
                                     </div>
                                 </div>

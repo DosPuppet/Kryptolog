@@ -28,13 +28,13 @@ import {
 // Must match backend/schemas.py. Raising one means raising the other.
 const SERVER = {
     MAX_GROUP_MEMBERS: 50,
-    KEY_WRAP_CHARS_PER_MEMBER: 4_224,
+    KEY_WRAP_CHARS_PER_MEMBER: 4_324,
     SIGNATURE_CHARS: 3_228,
-    WRAPPED_KEY_CHARS: 1_600,
+    WRAPPED_KEY_CHARS: 1_700,
     MAX_MESSAGE_TEXT_CHARS: 10_000,
-    MAX_GROUP_NAME_LEN: 211_200,
-    MAX_DM_CONTENT_LEN: 47_452,
-    MAX_GROUP_MESSAGE_CONTENT_LEN: 255_452,
+    MAX_GROUP_NAME_LEN: 216_200,
+    MAX_DM_CONTENT_LEN: 47_652,
+    MAX_GROUP_MESSAGE_CONTENT_LEN: 260_452,
 };
 
 // One identity's worth of real key material, generated once — keygen is the
@@ -103,6 +103,12 @@ describe('encrypted group name size', () => {
     }, 30_000);
 });
 
+// The largest values 3.0.0 payloads carry for the replay fields (K-06): a
+// millisecond clock for centuries to come, and a session longer than any
+// rotation allows.
+const TS = 9_999_999_999_999;
+const SEQ = 999_999;
+
 describe('signed message envelope size', () => {
     // Mirrors MessengerContext's DM send: the FIRST message of a conversation
     // mints a session and carries two wraps; later ones carry keys: null.
@@ -120,10 +126,10 @@ describe('signed message envelope size', () => {
             : null;
         const ct = await encryptWithSessionKey(text, sKey);
         const sig = await signMessage(
-            await messageSigningBody({ from, conv, sid, keys, ct }),
+            await messageSigningBody({ from, conv, sid, keys, ct, ts: TS, seq: SEQ }),
             dsa.privateKey
         );
-        return JSON.stringify({ v: 1, sid, keys, ct, sig });
+        return JSON.stringify({ v: 1, sid, ts: TS, seq: SEQ, keys, ct, sig });
     };
 
     it('fits a full-length first message, which carries two wrapped keys', async () => {
@@ -169,10 +175,10 @@ describe('signed message envelope size', () => {
 
         const ct = await encryptWithSessionKey('x'.repeat(SERVER.MAX_MESSAGE_TEXT_CHARS), sKey);
         const sig = await signMessage(
-            await messageSigningBody({ from: members[0].address, conv: gid, gid, sid, keys, ct }),
+            await messageSigningBody({ from: members[0].address, conv: gid, gid, sid, keys, ct, ts: TS, seq: SEQ }),
             dsa.privateKey
         );
-        const wire = JSON.stringify({ v: 2, sid, gid, keys, ct, sig });
+        const wire = JSON.stringify({ v: 2, sid, gid, ts: TS, seq: SEQ, keys, ct, sig });
 
         expect(wire.length).toBeLessThanOrEqual(SERVER.MAX_GROUP_MESSAGE_CONTENT_LEN);
     }, 60_000);
