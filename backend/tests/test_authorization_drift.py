@@ -22,8 +22,8 @@ from conftest import (
     TEST_ENCRYPTION_KEY,
     TEST_ORIGIN,
     auth_header,
+    server_deployment,
     synthetic_address,
-    test_deployment,
 )
 
 import models
@@ -168,6 +168,10 @@ class TestGroupRoleLadder:
         # else" stays a different question from "leave" for all three actors.
         target = synthetic_address("drift-target")
         db_session.add(models.User(address=target, encryption_public_key=TEST_ENCRYPTION_KEY))
+        # And a second admin, so "remove a peer admin" is asked of every actor
+        # without anyone removing themselves (audit 2026-10-12 K-12).
+        target_admin = synthetic_address("drift-target-admin")
+        db_session.add(models.User(address=target_admin, encryption_public_key=TEST_ENCRYPTION_KEY))
 
         channel = models.GroupChannel(
             id=str(uuid.uuid4()), name="g", owner_address=owner["address"]
@@ -178,12 +182,14 @@ class TestGroupRoleLadder:
             (admin["address"], "admin"),
             (member["address"], "member"),
             (target, "member"),
+            (target_admin, "admin"),
         ):
             db_session.add(models.GroupMember(channel_id=channel.id, user_address=addr, role=role))
         db_session.commit()
         return {
             "id": channel.id,
             "target": target,
+            "target_admin": target_admin,
             "owner": (owner_token, owner["address"]),
             "admin": (admin_token, admin["address"]),
             "member": (member_token, member["address"]),
@@ -206,6 +212,14 @@ class TestGroupRoleLadder:
             "remove_other": lambda: client.delete(
                 f"/groups/{cid}/members/{target}", headers=auth_header(token)
             ),
+            "remove_admin": lambda: client.delete(
+                f"/groups/{cid}/members/{group['target_admin']}", headers=auth_header(token)
+            ),
+            # For the owner this IS leaving, which is allowed; for anyone else
+            # it is the eviction K-12 closed.
+            "remove_owner": lambda: client.delete(
+                f"/groups/{cid}/members/{group['owner'][1]}", headers=auth_header(token)
+            ),
             "leave": lambda: client.delete(
                 f"/groups/{cid}/members/{actor_address}", headers=auth_header(token)
             ),
@@ -223,6 +237,8 @@ class TestGroupRoleLadder:
         "history": {"owner", "admin", "member"},
         "rename": {"owner", "admin"},
         "remove_other": {"owner", "admin"},
+        "remove_admin": {"owner"},
+        "remove_owner": {"owner"},
         "leave": {"owner", "admin", "member"},
         "set_role": {"owner"},
     }
@@ -403,7 +419,7 @@ class TestLeavingHasOneSpelling:
                 "mode": "leave",
                 "nonce": nonce,
                 "origin": TEST_ORIGIN,
-                "deployment": test_deployment(),
+                "deployment": server_deployment(),
                 "signature": base64.b64encode(b"\x00" * 2420).decode(),
                 "redactions": [],
             },
@@ -443,7 +459,7 @@ class TestLeavingHasOneSpelling:
                     "mode": "leave",
                     "nonce": nonce,
                     "origin": TEST_ORIGIN,
-                    "deployment": test_deployment(),
+                    "deployment": server_deployment(),
                     "signature": base64.b64encode(b"\x00" * 2420).decode(),
                     "redactions": [],
                 },

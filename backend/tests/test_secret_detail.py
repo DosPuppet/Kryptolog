@@ -162,6 +162,45 @@ class TestSecretDetail:
         secret = _make_secret(client, owner_token)
 
         resp = client.get(f"/secrets/{secret['id']}", headers=auth_header(stranger_token))
+        assert resp.status_code == 404
+
+    def test_a_stranger_cannot_tell_a_secret_from_a_missing_id(self, client, user1, user2, user3):
+        """Audit 2026-09-11 F-4: 403 for someone else's secret, 404 for none,
+        over sequential ids, measured how many secrets exist and how fast they
+        are made. Status AND body must match, or the body is the oracle."""
+        owner_token, _ = user1
+        reader_token, reader = user2
+        stranger_token, _ = user3
+        secret = _make_secret(client, owner_token)
+        missing = secret["id"] + 10_000
+
+        for path in ("/secrets/{}", "/secrets/{}/access", "/secrets/{}/chunks/0"):
+            theirs = client.get(path.format(secret["id"]), headers=auth_header(stranger_token))
+            none = client.get(path.format(missing), headers=auth_header(stranger_token))
+            assert (theirs.status_code, theirs.json()) == (none.status_code, none.json()), path
+
+        # Grant ids are sequential too.
+        grant_id = client.get(
+            f"/secrets/{secret['id']}/access", headers=auth_header(owner_token)
+        ).json()[0]["id"]
+        theirs = client.delete(f"/secrets/share/{grant_id}", headers=auth_header(stranger_token))
+        none = client.delete(
+            f"/secrets/share/{grant_id + 10_000}", headers=auth_header(stranger_token)
+        )
+        assert (theirs.status_code, theirs.json()) == (none.status_code, none.json())
+
+        # Someone who CAN read it already knows it exists: they are told which
+        # right they lack instead.
+        client.post(
+            "/secrets/share",
+            json={
+                "secret_id": secret["id"],
+                "grantee_address": reader["address"],
+                "encrypted_key": "11ee",
+            },
+            headers=auth_header(owner_token),
+        )
+        resp = client.get(f"/secrets/{secret['id']}/access", headers=auth_header(reader_token))
         assert resp.status_code == 403
 
     def test_expired_grant_no_longer_opens_the_secret(self, client, user1, user2, db_session):
@@ -191,7 +230,7 @@ class TestSecretDetail:
 
         assert (
             client.get(f"/secrets/{secret['id']}", headers=auth_header(grantee_token)).status_code
-            == 403
+            == 404
         )
 
     def test_multisig_signer_may_read_a_pending_secret_but_a_recipient_may_not(
@@ -235,7 +274,7 @@ class TestSecretDetail:
 
         assert (
             client.get(f"/secrets/{secret_id}", headers=auth_header(recipient_token)).status_code
-            == 403
+            == 404
         )
 
         # Completing the workflow releases it to the recipient.

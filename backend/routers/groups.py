@@ -433,8 +433,11 @@ async def remove_member(
         raise HTTPException(status_code=404, detail="Member not found in group")
 
     is_self = target_addr == current_user.address
-    if not authorization.can_remove_group_member(caller_member, target_addr):
-        raise HTTPException(status_code=403, detail="Only owners/admins can remove members")
+    if not authorization.can_remove_group_member(caller_member, target_member):
+        raise HTTPException(
+            status_code=403,
+            detail="Only the owner removes admins or the owner; admins remove members",
+        )
 
     # Capture everything needed BEFORE any delete or commit — reading attributes
     # off a deleted/expired instance afterwards is the Q-2 bug.
@@ -444,9 +447,7 @@ async def remove_member(
 
     new_owner_info, group_deleted = None, False
     if target_was_owner:
-        new_owner_info, group_deleted = authorization.succeed_group_owner(
-            db, channel, caller_member, remaining, is_self
-        )
+        new_owner_info, group_deleted = authorization.succeed_group_owner(db, channel, remaining)
 
     if not group_deleted:
         # Delete by predicate, not by instance: `target_member` is only the FIRST

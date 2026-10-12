@@ -143,13 +143,19 @@ const SecretDetailsModal = ({ isOpen, onClose, secret }) => {
                                                 <span>{calculateTimeRemaining(grant.expires_at)}</span>
                                             </div>
                                         </div>
-                                        <button
-                                            onClick={() => handleRevoke(grant.id)}
-                                            className="p-1.5 hover:bg-red-100 dark:hover:bg-red-900/30 text-slate-400 hover:text-red-500 rounded transition-colors"
-                                            title="Revoke Access"
-                                        >
-                                            <Trash2 className="w-4 h-4" />
-                                        </button>
+                                        {/* The owner's grant is their only copy of the key, and the
+                                            server refuses to revoke it (audit 2026-09-11 F-2). */}
+                                        {grant.grantee_address === secret.owner_address ? (
+                                            <span className="px-1.5 text-xs font-semibold text-slate-400">Owner</span>
+                                        ) : (
+                                            <button
+                                                onClick={() => handleRevoke(grant.id)}
+                                                className="p-1.5 hover:bg-red-100 dark:hover:bg-red-900/30 text-slate-400 hover:text-red-500 rounded transition-colors"
+                                                title="Revoke Access"
+                                            >
+                                                <Trash2 className="w-4 h-4" />
+                                            </button>
+                                        )}
                                     </div>
                                 </div>
                             ))}

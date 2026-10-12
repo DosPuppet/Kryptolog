@@ -3,6 +3,8 @@
 import pytest
 from conftest import TEST_ENCRYPTION_KEY, auth_header, do_login, synthetic_address
 
+import models
+
 
 def _create_workflow(client, token, signer_addresses, recipient_addresses=None, threshold=None):
     if recipient_addresses is None:
@@ -30,6 +32,84 @@ def _create_workflow(client, token, signer_addresses, recipient_addresses=None, 
         },
         headers=auth_header(token),
     )
+
+
+class TestCreationIsOneTransaction:
+    """Audit 2026-09-23 F-2 and 2026-09-11 F-3."""
+
+    def _count(self, db_session, owner):
+        return (
+            db_session.query(models.MultisigWorkflow).filter_by(owner_address=owner).count(),
+            db_session.query(models.Secret).filter_by(owner_address=owner).count(),
+        )
+
+    def test_a_signer_listed_twice_in_two_cases_is_one_signer(
+        self, client, user1, user2, db_session
+    ):
+        token1, _ = user1
+        _, u2 = user2
+        resp = _create_workflow(client, token1, [u2["address"], u2["address"].upper()], threshold=1)
+        assert resp.status_code == 200, resp.text
+        assert [s["user_address"] for s in resp.json()["signers"]] == [u2["address"]]
+
+    def test_the_threshold_is_checked_after_deduplication(self, client, user1, user2, db_session):
+        token1, u1 = user1
+        _, u2 = user2
+        before = self._count(db_session, u1["address"])
+        resp = _create_workflow(client, token1, [u2["address"], u2["address"].upper()], threshold=2)
+        assert resp.status_code == 400
+        db_session.expire_all()
+        assert self._count(db_session, u1["address"]) == before
+
+    def test_a_signer_without_a_key_is_refused_and_nothing_is_written(
+        self, client, user1, user2, user3, db_session
+    ):
+        """It could only approve blind: approval checks a signature over the
+        ciphertext's hash, not that the signer could ever read it."""
+        token1, u1 = user1
+        _, u2 = user2
+        _, u3 = user3
+        before = self._count(db_session, u1["address"])
+        resp = client.post(
+            "/multisig/workflow",
+            json={
+                "name": "Blind",
+                "secret_data": {
+                    "name": "S",
+                    "type": "standard",
+                    "encrypted_data": "d",
+                    "encrypted_key": "k",
+                },
+                "signers": [u2["address"], u3["address"]],
+                "recipients": [],
+                "signer_keys": {u2["address"]: "only_one"},
+                "recipient_keys": {},
+                "threshold": 1,
+            },
+            headers=auth_header(token1),
+        )
+        assert resp.status_code == 400
+        db_session.expire_all()
+        assert self._count(db_session, u1["address"]) == before
+
+    def test_a_failure_after_the_secret_leaves_no_orphan(
+        self, client, user1, user2, db_session, monkeypatch
+    ):
+        """The secret, its grant, the workflow and its rows commit together:
+        a failure while adding the signers rolls the secret back too."""
+        token1, u1 = user1
+        _, u2 = user2
+        before = self._count(db_session, u1["address"])
+
+        def explode(*args, **kwargs):
+            raise RuntimeError("signer insert failed")
+
+        monkeypatch.setattr(models, "MultisigWorkflowSigner", explode)
+        with pytest.raises(RuntimeError):
+            _create_workflow(client, token1, [u2["address"]])
+        monkeypatch.undo()
+        db_session.expire_all()
+        assert self._count(db_session, u1["address"]) == before
 
 
 class TestCreateWorkflow:

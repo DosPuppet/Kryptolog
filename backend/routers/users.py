@@ -1,5 +1,5 @@
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
-from sqlalchemy import func
+from sqlalchemy import func, or_
 from sqlalchemy.orm import Session
 
 import models
@@ -52,9 +52,23 @@ def update_user(
     return user
 
 
-# Minimum length for a directory substring search — avoids dumping the whole
-# user directory via a 1-char `LIKE %x%` (anti-enumeration).
-MIN_SEARCH_LEN = 2
+# The directory answers searches, it does not list (audit 2026-10-12 K-13).
+# `GET /users` with no term paged out every account — name, address, keys,
+# dates — 100 at a time. Now:
+#   • a username matches by substring from MIN_SEARCH_LEN characters, or
+#     exactly at any length, so a two-letter name is still findable by the
+#     person who knows it;
+#   • an address matches only by PREFIX, and only from ADDRESS_PREFIX_MIN hex
+#     characters. A short substring of an address enumerates the whole table:
+#     256 two-character queries cover every row. A pasted address is what this
+#     path is for, and that is thousands of characters long.
+# A page is capped at MAX_SEARCH_PAGE. None of this makes enumeration
+# impossible for a patient member — it makes it a long, rate-limited crawl
+# that has to guess names, instead of one loop over `offset`.
+MIN_SEARCH_LEN = 3
+ADDRESS_PREFIX_MIN = 16
+MAX_SEARCH_PAGE = 20
+_HEX = frozenset("0123456789abcdef")
 
 
 @router.get("/{address}", response_model=schemas.UserResponse)
@@ -82,33 +96,38 @@ def get_user(
 @limiter.limit("30/minute")
 def list_users(
     request: Request,
-    search: str = None,
+    search: str = Query(..., max_length=200),
     only_pqc: bool = False,
     # Bounded at BOTH ends by FastAPI. The ceiling used to be clamped in the
     # body while the floor was unchecked, so `?limit=-1` reached PostgreSQL as
     # `LIMIT -1` — which is a hard error, i.e. a 500 on a trivial query string.
-    limit: int = Query(5, ge=1, le=100),
+    limit: int = Query(5, ge=1, le=MAX_SEARCH_PAGE),
     offset: int = Query(0, ge=0),
     current_user: models.User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
+    """Search the directory by username, or by the start of an address.
+
+    Answers nothing for a term too short to search with; see the note on
+    MIN_SEARCH_LEN for what matches and why there is no unsearched listing.
+    """
     # Deleted identities are excluded here, unlike the two by-address lookups:
     # this list exists to PICK someone — to share a secret, add a member, start
     # a conversation — and a stripped row has no encryption key to wrap to.
     query = authorization.active_users(db)
 
-    if search is not None:
-        term = search.strip()
-        # Reject too-short substring searches to limit directory enumeration.
-        if len(term) < MIN_SEARCH_LEN:
-            return []
-        # ilike: LIKE is case-insensitive on SQLite but case-sensitive on
-        # Postgres — the directory search must match regardless of case.
-        search_pattern = f"%{term.lower()}%"
-        query = query.filter(
-            (models.User.address.ilike(search_pattern))
-            | (models.User.username.ilike(search_pattern))
-        )
+    term = search.strip().lower()
+    if not term:
+        return []
+    # lower(): LIKE is case-insensitive on SQLite but case-sensitive on
+    # Postgres — the directory search must match regardless of case.
+    username = func.lower(models.User.username)
+    matches = [username == term]
+    if len(term) >= MIN_SEARCH_LEN:
+        matches.append(username.contains(term, autoescape=True))
+    if len(term) >= ADDRESS_PREFIX_MIN and set(term) <= _HEX:
+        matches.append(models.User.address.startswith(term, autoescape=True))
+    query = query.filter(or_(*matches))
 
     if only_pqc:
         # Messenger requires an ML-KEM encryption key. Filtered in SQL so paging
@@ -118,7 +137,10 @@ def list_users(
         # that actually gate on capability.
         query = query.filter(func.length(models.User.encryption_public_key) >= LEGACY_MIN_KEY_LEN)
 
-    return query.limit(limit).offset(offset).all()
+    # A total order, so paging neither repeats nor skips a row.
+    return (
+        query.order_by(models.User.username, models.User.address).limit(limit).offset(offset).all()
+    )
 
 
 class UserResolveRequest(schemas.BaseModel):

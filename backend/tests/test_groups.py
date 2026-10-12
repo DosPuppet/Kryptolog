@@ -454,11 +454,12 @@ class TestGroupAdmin:
         u2_role = next(m["role"] for m in members if m["user_address"] == u2["address"])
         assert u2_role == "admin"
 
-    def test_admin_can_remove_owner_and_take_ownership(self, client, user1, user2):
+    def test_an_admin_cannot_evict_the_owner(self, client, user1, user2):
+        """Audit 2026-10-12 K-12: evicting the owner used to hand the admin the
+        group, and with it the power to mint admins their role withholds."""
         token1, u1 = user1
         token2, u2 = user2
 
-        # Create group
         create_resp = client.post(
             "/groups",
             json={
@@ -468,30 +469,21 @@ class TestGroupAdmin:
             headers=auth_header(token1),
         )
         channel_id = create_resp.json()["id"]
-
-        # Promote user2 to admin
         client.put(
             f"/groups/{channel_id}/members/{u2['address']}/role",
             json={"role": "admin"},
             headers=auth_header(token1),
         )
 
-        # Admin (u2) removes Owner (u1)
         resp = client.delete(
             f"/groups/{channel_id}/members/{u1['address']}", headers=auth_header(token2)
         )
-        assert resp.status_code == 200
+        assert resp.status_code == 403
 
-        # Verify u2 is now owner
-        resp = client.get(f"/groups/{channel_id}", headers=auth_header(token2))
-        data = resp.json()
-        assert data["owner_address"] == u2["address"]
-        members = data["members"]
-        # u1 should be gone
-        assert not any(m["user_address"] == u1["address"] for m in members)
-        # u2 should be owner
-        u2_role = next(m["role"] for m in members if m["user_address"] == u2["address"])
-        assert u2_role == "owner"
+        data = client.get(f"/groups/{channel_id}", headers=auth_header(token1)).json()
+        assert data["owner_address"] == u1["address"]
+        roles = {m["user_address"]: m["role"] for m in data["members"]}
+        assert roles == {u1["address"]: "owner", u2["address"]: "admin"}
 
     def test_rename_group(self, client, user1, user2):
         token1, u1 = user1

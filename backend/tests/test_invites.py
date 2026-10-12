@@ -13,8 +13,8 @@ from conftest import (
     TEST_USER_ADDRESS_2,
     do_login,
     get_nonce,
+    server_deployment,
     synthetic_address,
-    test_deployment,
 )
 
 import invites
@@ -51,7 +51,7 @@ def _login_with(client, address, code=None, encryption_key=TEST_ENCRYPTION_KEY):
         "signature": "fake_signature_for_testing",
         "nonce": nonce,
         "origin": TEST_ORIGIN,
-        "deployment": test_deployment(),
+        "deployment": server_deployment(),
         "encryption_public_key": encryption_key,
         "encryption_key_attestation": "fake_attestation_for_testing",
         # Distinct username per address: the test addresses share the first 7
@@ -125,7 +125,7 @@ class TestInvitesRequired:
                     "signature": "fake",
                     "nonce": nonce,
                     "origin": TEST_ORIGIN,
-                    "deployment": test_deployment(),
+                    "deployment": server_deployment(),
                     "encryption_public_key": TEST_ENCRYPTION_KEY,
                     "encryption_key_attestation": "fake_attestation_for_testing",
                     "username": "Taken",
@@ -145,7 +145,7 @@ class TestInvitesRequired:
                 "signature": "fake",
                 "nonce": get_nonce(client, clash),
                 "origin": TEST_ORIGIN,
-                "deployment": test_deployment(),
+                "deployment": server_deployment(),
                 "encryption_public_key": TEST_ENCRYPTION_KEY,
                 "encryption_key_attestation": "fake_attestation_for_testing",
                 "username": "Taken",

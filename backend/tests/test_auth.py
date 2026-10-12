@@ -7,8 +7,8 @@ from conftest import (
     auth_header,
     do_login,
     get_nonce,
+    server_deployment,
     synthetic_address,
-    test_deployment,
 )
 
 
@@ -48,7 +48,7 @@ class TestNonce:
                 "signature": "fake_signature_for_testing",
                 "nonce": victims_nonce,
                 "origin": TEST_ORIGIN,
-                "deployment": test_deployment(),
+                "deployment": server_deployment(),
             },
         )
         assert resp.status_code == 200, (
@@ -69,7 +69,7 @@ class TestNonce:
                     "signature": "fake_signature_for_testing",
                     "nonce": nonce,
                     "origin": TEST_ORIGIN,
-                    "deployment": test_deployment(),
+                    "deployment": server_deployment(),
                 },
             )
 
@@ -88,7 +88,7 @@ class TestNonce:
                 "signature": "fake_signature_for_testing",
                 "nonce": victims_nonce,
                 "origin": TEST_ORIGIN,
-                "deployment": test_deployment(),
+                "deployment": server_deployment(),
             },
         )
         assert resp.status_code == 400, resp.text
@@ -125,7 +125,7 @@ class TestLogin:
                 "signature": "fake",
                 "nonce": nonce,
                 "origin": TEST_ORIGIN,
-                "deployment": test_deployment(),
+                "deployment": server_deployment(),
                 "encryption_public_key": TEST_ENCRYPTION_KEY,
                 "encryption_key_attestation": "fake_attestation_for_testing",
             },
@@ -142,7 +142,7 @@ class TestLogin:
                 "signature": "fake",
                 "nonce": "wrong_nonce_value",
                 "origin": TEST_ORIGIN,
-                "deployment": test_deployment(),
+                "deployment": server_deployment(),
             },
         )
         assert resp.status_code == 400
@@ -155,7 +155,7 @@ class TestLogin:
                 "signature": "fake",
                 "nonce": "whatever",
                 "origin": TEST_ORIGIN,
-                "deployment": test_deployment(),
+                "deployment": server_deployment(),
             },
         )
         assert resp.status_code == 400
@@ -168,7 +168,7 @@ class TestLogin:
             "signature": "fake",
             "nonce": nonce,
             "origin": TEST_ORIGIN,
-            "deployment": test_deployment(),
+            "deployment": server_deployment(),
             "encryption_public_key": TEST_ENCRYPTION_KEY,
             "encryption_key_attestation": "fake_attestation_for_testing",
         }
@@ -231,7 +231,7 @@ class TestRegistrationUsernameCollision:
                 "signature": "fake",
                 "nonce": nonce,
                 "origin": TEST_ORIGIN,
-                "deployment": test_deployment(),
+                "deployment": server_deployment(),
                 "encryption_public_key": TEST_ENCRYPTION_KEY,
                 "encryption_key_attestation": "fake_attestation_for_testing",
                 "username": "ALICE",

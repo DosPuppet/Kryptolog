@@ -28,8 +28,8 @@ from conftest import (
     auth_header,
     do_login,
     get_nonce,
+    server_deployment,
     synthetic_address,
-    test_deployment,
 )
 from fastapi import HTTPException
 
@@ -130,7 +130,7 @@ def _delete(client, token, address, mode, redactions=None, signature=DUMMY_SIG):
             "mode": mode,
             "nonce": nonce,
             "origin": TEST_ORIGIN,
-            "deployment": test_deployment(),
+            "deployment": server_deployment(),
             "signature": signature,
             "redactions": redactions or [],
         },
@@ -246,7 +246,7 @@ class TestTheIdentityDisappears:
     def test_the_session_dies_immediately(self, client, user1):
         token, u1 = user1
         assert _delete(client, token, u1["address"], "leave").status_code == 200
-        assert client.get("/users", headers=auth_header(token)).status_code == 401
+        assert client.get("/users?search=TestUser", headers=auth_header(token)).status_code == 401
 
     def test_the_directory_stops_listing_but_still_resolves(self, client, user1, user2):
         """Both halves of the rule at once. The listing is for PICKING someone,
@@ -257,7 +257,7 @@ class TestTheIdentityDisappears:
         token2, _ = user2
         assert _delete(client, token1, u1["address"], "leave").status_code == 200
 
-        listed = client.get("/users", headers=auth_header(token2)).json()
+        listed = client.get("/users?search=TestUser&limit=20", headers=auth_header(token2)).json()
         assert u1["address"] not in [u["address"] for u in listed]
 
         resolved = client.get(f"/users/{u1['address']}", headers=auth_header(token2))
@@ -375,7 +375,7 @@ class TestComingBack:
                 "signature": "fake_signature_for_testing",
                 "nonce": nonce,
                 "origin": TEST_ORIGIN,
-                "deployment": test_deployment(),
+                "deployment": server_deployment(),
                 "encryption_public_key": TEST_ENCRYPTION_KEY,
                 "encryption_key_attestation": "fake_attestation_for_testing",
                 "username": "Rebirth",
@@ -709,13 +709,13 @@ class TestAuthorizingTheDeletion:
                         nonce,
                         encryption_public_key=TEST_ENCRYPTION_KEY,
                         origin=TEST_ORIGIN,
-                        deployment=test_deployment(),
+                        deployment=server_deployment(),
                     ),
                     signer,
                 ),
                 "nonce": nonce,
                 "origin": TEST_ORIGIN,
-                "deployment": test_deployment(),
+                "deployment": server_deployment(),
                 "encryption_public_key": TEST_ENCRYPTION_KEY,
                 "encryption_key_attestation": cls._sign(
                     auth.encryption_key_attestation_message(TEST_ENCRYPTION_KEY), signer
@@ -741,7 +741,7 @@ class TestAuthorizingTheDeletion:
                     "mode": "leave",
                     "nonce": nonce,
                     "origin": TEST_ORIGIN,
-                    "deployment": test_deployment(),
+                    "deployment": server_deployment(),
                     "signature": DUMMY_SIG,
                     "redactions": [],
                 },
@@ -752,7 +752,7 @@ class TestAuthorizingTheDeletion:
             nonce = get_nonce(client, address)
             good = self._sign(
                 auth.account_deletion_message(
-                    nonce, "leave", [], origin=TEST_ORIGIN, deployment=test_deployment()
+                    nonce, "leave", [], origin=TEST_ORIGIN, deployment=server_deployment()
                 ),
                 signer,
             )
@@ -762,7 +762,7 @@ class TestAuthorizingTheDeletion:
                     "mode": "leave",
                     "nonce": nonce,
                     "origin": TEST_ORIGIN,
-                    "deployment": test_deployment(),
+                    "deployment": server_deployment(),
                     "signature": good,
                     "redactions": [],
                 },
@@ -783,7 +783,7 @@ class TestAuthorizingTheDeletion:
             nonce = get_nonce(client, address)
             leave_sig = self._sign(
                 auth.account_deletion_message(
-                    nonce, "leave", [], origin=TEST_ORIGIN, deployment=test_deployment()
+                    nonce, "leave", [], origin=TEST_ORIGIN, deployment=server_deployment()
                 ),
                 signer,
             )
@@ -794,7 +794,7 @@ class TestAuthorizingTheDeletion:
                     "mode": "erase",
                     "nonce": nonce,
                     "origin": TEST_ORIGIN,
-                    "deployment": test_deployment(),
+                    "deployment": server_deployment(),
                     "signature": leave_sig,
                     "redactions": [],
                 },
@@ -819,7 +819,7 @@ class TestAuthorizingTheDeletion:
                     nonce,
                     encryption_public_key=TEST_ENCRYPTION_KEY,
                     origin=TEST_ORIGIN,
-                    deployment=test_deployment(),
+                    deployment=server_deployment(),
                 ),
                 signer,
             )
@@ -830,7 +830,7 @@ class TestAuthorizingTheDeletion:
                     "mode": "leave",
                     "nonce": nonce,
                     "origin": TEST_ORIGIN,
-                    "deployment": test_deployment(),
+                    "deployment": server_deployment(),
                     "signature": login_sig,
                     "redactions": [],
                 },
@@ -862,7 +862,7 @@ class TestAuthorizingTheDeletion:
             nonce = get_nonce(client, address)
             deletion_sig = self._sign(
                 auth.account_deletion_message(
-                    nonce, "erase", [row["key"]], origin=TEST_ORIGIN, deployment=test_deployment()
+                    nonce, "erase", [row["key"]], origin=TEST_ORIGIN, deployment=server_deployment()
                 ),
                 signer,
             )
@@ -872,7 +872,7 @@ class TestAuthorizingTheDeletion:
                     "mode": "erase",
                     "nonce": nonce,
                     "origin": TEST_ORIGIN,
-                    "deployment": test_deployment(),
+                    "deployment": server_deployment(),
                     "signature": deletion_sig,
                     "redactions": [{"key": row["key"], "signature": DUMMY_SIG}],
                 },
@@ -899,14 +899,14 @@ class TestAuthorizingTheDeletion:
                     "mode": "erase",
                     "nonce": nonce,
                     "origin": TEST_ORIGIN,
-                    "deployment": test_deployment(),
+                    "deployment": server_deployment(),
                     "signature": self._sign(
                         auth.account_deletion_message(
                             nonce,
                             "erase",
                             [row["key"]],
                             origin=TEST_ORIGIN,
-                            deployment=test_deployment(),
+                            deployment=server_deployment(),
                         ),
                         signer,
                     ),
@@ -923,7 +923,7 @@ class TestAuthorizingTheDeletion:
             "mode": "leave",
             "nonce": nonce,
             "origin": TEST_ORIGIN,
-            "deployment": test_deployment(),
+            "deployment": server_deployment(),
             "signature": DUMMY_SIG,
             "redactions": [],
         }
@@ -1257,7 +1257,7 @@ class TestALeaveReservesTheName:
             "signature": "fake_signature_for_testing",
             "nonce": get_nonce(client, address),
             "origin": TEST_ORIGIN,
-            "deployment": test_deployment(),
+            "deployment": server_deployment(),
             "encryption_public_key": TEST_ENCRYPTION_KEY,
             "encryption_key_attestation": "fake_attestation_for_testing",
         }
@@ -1550,7 +1550,7 @@ class TestTwoDeletionsOfOneAccount:
             mode="erase",
             nonce=get_nonce(client, u1["address"]),
             origin=TEST_ORIGIN,
-            deployment=test_deployment(),
+            deployment=server_deployment(),
             signature=DUMMY_SIG,
             redactions=[],
         )

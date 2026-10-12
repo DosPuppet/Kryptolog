@@ -53,19 +53,37 @@ def create_multisig_workflow(
     current_user: models.User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    if not workflow.signers:
+    # Everything is normalized, deduplicated and validated BEFORE anything is
+    # written, and the whole workflow is one transaction (audit 2026-09-23
+    # F-2). It used to be three commits: a signer listed twice in different
+    # case broke the third with a 500, and left a workflow with no signers,
+    # pending forever — while the threshold had been checked against the list
+    # with the duplicate still in it. Addresses are lowercase everywhere, so
+    # the key maps are lowered here too (audit L-2).
+    signers = list(dict.fromkeys(a.lower() for a in workflow.signers))
+    recipients = list(dict.fromkeys(a.lower() for a in workflow.recipients))
+    signer_keys = {k.lower(): v for k, v in (workflow.signer_keys or {}).items()}
+    recipient_keys = {k.lower(): v for k, v in (workflow.recipient_keys or {}).items()}
+
+    if not signers:
         raise HTTPException(status_code=400, detail="At least one signer is required")
-    if workflow.threshold < 1 or workflow.threshold > len(workflow.signers):
+    if workflow.threshold < 1 or workflow.threshold > len(signers):
         raise HTTPException(
             status_code=400,
             detail="threshold must be between 1 and the number of signers",
         )
+    # A key for every signer (audit 2026-09-11 F-3). A signer without one
+    # cannot read what they approve, and approval only checks a signature over
+    # the ciphertext's hash — so the server was accepting blind signatures. The
+    # SPA always sends one; only a modified client could leave it out.
+    # Recipients are different on purpose: the completing signer may supply
+    # their keys at release, and completion refuses to leave one keyless.
+    if any(a not in signer_keys for a in signers):
+        raise HTTPException(status_code=400, detail="Every signer needs a wrapped key")
 
-    # 0.1 Signer/recipient rows carry an FK to users (enforced on Postgres) —
+    # Signer/recipient rows carry an FK to users (enforced on Postgres) —
     # reject unknown addresses up front instead of failing the insert.
-    participant_addrs = {a.lower() for a in workflow.signers} | {
-        a.lower() for a in workflow.recipients
-    }
+    participant_addrs = set(signers) | set(recipients)
     known = {
         addr
         for (addr,) in authorization.active_users(db)
@@ -79,7 +97,9 @@ def create_multisig_workflow(
         )
 
     # Schema validation guarantees secret_data carries the owner's wrapped key.
-    new_secret = create_secret_with_owner_grant(db, current_user, workflow.secret_data)
+    new_secret = create_secret_with_owner_grant(
+        db, current_user, workflow.secret_data, commit=False
+    )
 
     new_workflow = models.MultisigWorkflow(
         name=workflow.name,
@@ -89,40 +109,32 @@ def create_multisig_workflow(
         threshold=workflow.threshold,
     )
     db.add(new_workflow)
-    db.commit()
-    db.refresh(new_workflow)
+    db.flush()  # assigns new_workflow.id, which the rows below need
 
-    # Addresses are lowercase everywhere, so the key maps are lowered ONCE here
-    # rather than per iteration — and the recipient map below is lowered the
-    # same way, which it previously was not (audit L-2).
-    signer_keys = {k.lower(): v for k, v in (workflow.signer_keys or {}).items()}
-    recipient_keys = {k.lower(): v for k, v in (workflow.recipient_keys or {}).items()}
-
-    for signer_addr in workflow.signers:
-        s_addr = signer_addr.lower()
-        key = signer_keys.get(s_addr)
-
-        signer_entry = models.MultisigWorkflowSigner(
-            workflow_id=new_workflow.id, user_address=s_addr, has_signed=False, encrypted_key=key
+    for s_addr in signers:
+        db.add(
+            models.MultisigWorkflowSigner(
+                workflow_id=new_workflow.id,
+                user_address=s_addr,
+                has_signed=False,
+                encrypted_key=signer_keys[s_addr],
+            )
         )
-        db.add(signer_entry)
-
     # A recipient's key is withheld until the workflow completes.
-    for recipient_addr in workflow.recipients:
-        r_addr = recipient_addr.lower()
-        key = recipient_keys.get(r_addr)
-
-        recipient_entry = models.MultisigWorkflowRecipient(
-            workflow_id=new_workflow.id, user_address=r_addr, encrypted_key=key
+    for r_addr in recipients:
+        db.add(
+            models.MultisigWorkflowRecipient(
+                workflow_id=new_workflow.id,
+                user_address=r_addr,
+                encrypted_key=recipient_keys.get(r_addr),
+            )
         )
-        db.add(recipient_entry)
 
     db.commit()
     db.refresh(new_workflow)
 
     sender_name = display_name(current_user)
-    for signer_addr in workflow.signers:
-        s_addr = signer_addr.lower()
+    for s_addr in signers:
         if s_addr != current_user.address:
             notify_user_push(
                 db,

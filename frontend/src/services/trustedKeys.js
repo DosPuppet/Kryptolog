@@ -57,6 +57,16 @@ export const trustContactKey = (address, encryptionPublicKey) => {
     save(STORE_KEY, map);
 };
 
+// The contacts this device has pinned, most recently confirmed first. The
+// share dialog's default list (audit 2026-10-12 K-13): the directory no longer
+// answers an empty search, and the people a user shares with are the ones this
+// store already knows — without asking the server who exists.
+export const recentContacts = (limit = 10) =>
+    Object.entries(load(STORE_KEY))
+        .sort(([, a], [, b]) => (b.updatedAt || 0) - (a.updatedAt || 0))
+        .slice(0, limit)
+        .map(([address]) => address);
+
 // The TOFU verdict, acted on: a first sighting is pinned, a change refuses.
 //
 // The store used to be consulted only by the share dialog, so a contact whose

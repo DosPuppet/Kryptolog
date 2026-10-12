@@ -54,9 +54,7 @@ class Nonce(Base):
 class User(Base):
     __tablename__ = "users"
 
-    address = Column(
-        String, primary_key=True, index=True
-    )  # Identity public key (ML-DSA-44, lowercase hex)
+    address = Column(String, primary_key=True)  # Identity public key (ML-DSA-44, lowercase hex)
     username = Column(String, nullable=True)
     encryption_public_key = Column(String, nullable=True)  # ML-KEM-768 public key (hex)
     # Stamped whenever encryption_public_key changes for an existing identity
@@ -136,9 +134,12 @@ class Secret(Base):
         CheckConstraint("type IN ('standard', 'file', 'signed_document')", name="ck_secrets_type"),
     )
 
-    id = Column(Integer, primary_key=True, index=True)
-    owner_address = Column(String, ForeignKey("users.address"))
-    name = Column(String, index=True)
+    id = Column(Integer, primary_key=True)
+    # Indexed: the quota counts by owner on every creation (audit 2026-10-12 K-09).
+    owner_address = Column(String, ForeignKey("users.address"), index=True)
+    # Not indexed: the name is an encrypted blob (M-3), so nothing can query
+    # it, and a B-tree entry over ~8 KB is refused — a long name was a 500.
+    name = Column(String)
     type = Column(String, default="standard")  # 'standard' | 'file' | 'signed_document'
     encrypted_data = Column(Text)  # AES-encrypted content or file metadata JSON
     created_at = Column(DateTime, default=utcnow_naive)
@@ -150,10 +151,19 @@ class Secret(Base):
 
 class AccessGrant(Base):
     __tablename__ = "access_grants"
+    # One grant per (secret, grantee), the invariant group members and signers
+    # already had (audit 2026-09-23 F-1). Twelve concurrent shares used to leave
+    # two rows; revoking one left the other serving the key, because
+    # find_live_grant takes `.first()`. share_secret upserts against this.
+    # It is also the index every access check walks (Q-3).
+    __table_args__ = (
+        UniqueConstraint("secret_id", "grantee_address", name="uq_access_grant_secret_grantee"),
+    )
 
-    id = Column(Integer, primary_key=True, index=True)
+    id = Column(Integer, primary_key=True)
     secret_id = Column(Integer, ForeignKey("secrets.id"))
-    grantee_address = Column(String, ForeignKey("users.address"))
+    # Indexed for "shared with me", which asks by grantee alone.
+    grantee_address = Column(String, ForeignKey("users.address"), index=True)
     encrypted_key = Column(Text)  # The secret's key, encrypted for the grantee's public key
     created_at = Column(DateTime, default=utcnow_naive)
     expires_at = Column(DateTime, nullable=True)
@@ -165,10 +175,11 @@ class AccessGrant(Base):
 class MultisigWorkflow(Base):
     __tablename__ = "multisig_workflows"
 
-    id = Column(Integer, primary_key=True, index=True)
-    name = Column(String, index=True)
-    owner_address = Column(String, ForeignKey("users.address"))
-    secret_id = Column(Integer, ForeignKey("secrets.id"))
+    id = Column(Integer, primary_key=True)
+    name = Column(String)  # encrypted, like Secret.name: never indexed
+    owner_address = Column(String, ForeignKey("users.address"), index=True)
+    # Indexed: is_workflow_managed asks it on every secret mutation (2026-09-23 Q-3).
+    secret_id = Column(Integer, ForeignKey("secrets.id"), index=True)
     status = Column(String, default="pending")  # 'pending', 'completed', 'rejected'
     threshold = Column(Integer, nullable=True)  # N in N-of-M; NULL ⇒ N-of-N (= len(signers))
     rejected_by = Column(String, nullable=True)  # address of the signer who rejected
@@ -189,9 +200,11 @@ class MultisigWorkflowSigner(Base):
         UniqueConstraint("workflow_id", "user_address", name="uq_multisig_signer_workflow_user"),
     )
 
-    id = Column(Integer, primary_key=True, index=True)
+    id = Column(Integer, primary_key=True)
     workflow_id = Column(Integer, ForeignKey("multisig_workflows.id"))
-    user_address = Column(String, ForeignKey("users.address"))
+    # Indexed by itself: the unique constraint leads with the parent id, so
+    # "everything this user is part of" could not use it (2026-09-23 Q-3).
+    user_address = Column(String, ForeignKey("users.address"), index=True)
     has_signed = Column(Boolean, default=False)
     signature = Column(Text, nullable=True)
     signed_at = Column(DateTime, nullable=True)
@@ -207,9 +220,11 @@ class MultisigWorkflowRecipient(Base):
         UniqueConstraint("workflow_id", "user_address", name="uq_multisig_recipient_workflow_user"),
     )
 
-    id = Column(Integer, primary_key=True, index=True)
+    id = Column(Integer, primary_key=True)
     workflow_id = Column(Integer, ForeignKey("multisig_workflows.id"))
-    user_address = Column(String, ForeignKey("users.address"))
+    # Indexed by itself: the unique constraint leads with the parent id, so
+    # "everything this user is part of" could not use it (2026-09-23 Q-3).
+    user_address = Column(String, ForeignKey("users.address"), index=True)
     encrypted_key = Column(Text)  # Key encrypted for THIS recipient, held until release
 
     workflow = relationship("MultisigWorkflow", back_populates="recipients")
@@ -219,7 +234,7 @@ class MultisigWorkflowRecipient(Base):
 class Message(Base):
     __tablename__ = "messages"
 
-    id = Column(Integer, primary_key=True, index=True)
+    id = Column(Integer, primary_key=True)
     sender_address = Column(String, ForeignKey("users.address"), index=True)
     recipient_address = Column(String, ForeignKey("users.address"), index=True)
     content = Column(Text)  # Encrypted Blob
@@ -252,7 +267,7 @@ class FileChunk(Base):
         UniqueConstraint("secret_id", "chunk_index", name="uq_file_chunk_secret_index"),
     )
 
-    id = Column(Integer, primary_key=True, index=True)
+    id = Column(Integer, primary_key=True)
     secret_id = Column(Integer, ForeignKey("secrets.id"), index=True)
     chunk_index = Column(Integer)  # 0-based ordering
     encrypted_data = Column(Text)  # AES-GCM encrypted chunk (base64)
@@ -290,9 +305,11 @@ class GroupMember(Base):
         UniqueConstraint("channel_id", "user_address", name="uq_group_member_channel_user"),
     )
 
-    id = Column(Integer, primary_key=True, index=True)
+    id = Column(Integer, primary_key=True)
     channel_id = Column(String, ForeignKey("group_channels.id"), index=True)
-    user_address = Column(String, ForeignKey("users.address"))
+    # Indexed by itself: the unique constraint leads with the parent id, so
+    # "everything this user is part of" could not use it (2026-09-23 Q-3).
+    user_address = Column(String, ForeignKey("users.address"), index=True)
     role = Column(String, default="member")  # "owner" | "admin" | "member"
     joined_at = Column(DateTime, default=utcnow_naive)
 
@@ -303,7 +320,7 @@ class GroupMember(Base):
 class GroupMessage(Base):
     __tablename__ = "group_messages"
 
-    id = Column(Integer, primary_key=True, index=True)
+    id = Column(Integer, primary_key=True)
     channel_id = Column(String, ForeignKey("group_channels.id"), index=True)
     sender_address = Column(String, ForeignKey("users.address"), index=True)
     content = Column(Text)  # Encrypted blob (v2 payload)
@@ -322,7 +339,7 @@ class InviteCode(Base):
 
     __tablename__ = "invite_codes"
 
-    code = Column(String, primary_key=True, index=True)
+    code = Column(String, primary_key=True)
     # NULL when admin-seeded (e.g. via generate_invites.py); otherwise the address
     # of the existing user who minted it (enrollment / referral).
     created_by = Column(String, ForeignKey("users.address"), nullable=True)
@@ -348,7 +365,7 @@ class KeyTransfer(Base):
 
     __tablename__ = "key_transfers"
 
-    id = Column(String, primary_key=True, index=True)  # random pickup id
+    id = Column(String, primary_key=True)  # random pickup id
     ciphertext = Column(Text, nullable=False)  # encrypted vault blob (JSON)
     created_at = Column(DateTime, default=utcnow_naive)
     expires_at = Column(DateTime, nullable=False)
@@ -357,7 +374,7 @@ class KeyTransfer(Base):
 class PushSubscription(Base):
     __tablename__ = "push_subscriptions"
 
-    id = Column(Integer, primary_key=True, index=True)
+    id = Column(Integer, primary_key=True)
     user_address = Column(String, ForeignKey("users.address"), index=True)
     endpoint = Column(Text, nullable=False)
     p256dh = Column(String, nullable=False)

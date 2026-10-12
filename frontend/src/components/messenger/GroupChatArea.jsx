@@ -70,22 +70,7 @@ const GroupChatArea = ({ activeGroupConversation, onBack, onSend, loadingMessage
     };
 
     const handleRemoveMember = async (targetMember) => {
-        const isTargetOwner = targetMember.role === 'owner';
-        const ok = await confirmDialog(
-            isTargetOwner
-                ? {
-                    title: 'Remove the Group Owner?',
-                    message: 'You are removing the Group Owner. YOU will become the new Owner. Continue?',
-                    confirmText: 'Remove & take ownership',
-                    danger: true,
-                }
-                : {
-                    title: 'Remove this member?',
-                    confirmText: 'Remove',
-                    danger: true,
-                }
-        );
-        if (ok) {
+        if (await confirmDialog({ title: 'Remove this member?', confirmText: 'Remove', danger: true })) {
             await removeGroupMember(channel.id, targetMember.user_address);
         }
     };
@@ -302,15 +287,15 @@ const GroupChatArea = ({ activeGroupConversation, onBack, onSend, loadingMessage
                                             </>
                                         )}
 
-                                        {/* Remove - Owner can remove anyone; Admin can remove Member or Owner (taking ownership) */}
+                                        {/* Remove: the owner removes anyone, an admin plain members
+                                            only — the server enforces the same rule (audit 2026-10-12 K-12) */}
                                         {m.user_address !== user.address && (
-                                            (isOwner) ||
-                                            (isAdmin && (m.role === 'member' || m.role === 'owner'))
+                                            isOwner || (isAdmin && m.role === 'member')
                                         ) && (
                                                 <button
                                                     onClick={() => handleRemoveMember(m)}
                                                     className="p-1.5 text-slate-400 hover:text-red-500 hover:bg-red-50 dark:hover:bg-red-900/20 rounded"
-                                                    title={m.role === 'owner' ? "Remove Owner & Take Ownership" : "Remove Member"}
+                                                    title="Remove Member"
                                                 >
                                                     <UserMinus className="w-4 h-4" />
                                                 </button>

@@ -13,8 +13,8 @@ from conftest import (
     auth_header,
     do_login,
     get_nonce,
+    server_deployment,
     synthetic_address,
-    test_deployment,
 )
 
 from security.usernames import InvalidUsername, normalize_username
@@ -122,7 +122,7 @@ class TestNormalizeThroughTheApi:
                 "signature": "fake",
                 "nonce": get_nonce(client, other),
                 "origin": TEST_ORIGIN,
-                "deployment": test_deployment(),
+                "deployment": server_deployment(),
                 "encryption_public_key": TEST_ENCRYPTION_KEY,
                 "encryption_key_attestation": "fake_attestation_for_testing",
                 "username": "ａlice",
@@ -139,7 +139,7 @@ class TestNormalizeThroughTheApi:
                 "signature": "fake",
                 "nonce": get_nonce(client, other),
                 "origin": TEST_ORIGIN,
-                "deployment": test_deployment(),
+                "deployment": server_deployment(),
                 "encryption_public_key": TEST_ENCRYPTION_KEY,
                 "encryption_key_attestation": "fake_attestation_for_testing",
                 "username": "аlice",  # Cyrillic а

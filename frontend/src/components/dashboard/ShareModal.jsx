@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback } from 'react';
 import { Search, Loader2, X, Check, ShieldAlert, Fingerprint } from 'lucide-react';
 import API_ENDPOINTS from '../../config';
 import { useAuth } from '../../context/AuthContext';
-import { checkContactKey, trustContactKey, attestationVerdict } from '../../services/trustedKeys';
+import { checkContactKey, trustContactKey, attestationVerdict, recentContacts } from '../../services/trustedKeys';
 import { safetyNumber } from '../../utils/fingerprint';
 import { confirmDialog } from '../../utils/confirm';
 import { apiFetch } from '../../services/api';
@@ -30,11 +30,18 @@ const ShareModal = ({ isOpen, onClose, secret, onShare }) => {
     const searchUsers = useCallback(async (query) => {
         setLoading(true);
         try {
-            const limit = 10;
-            const url = query
-                ? `${API_ENDPOINTS.USERS.LIST}?search=${encodeURIComponent(query)}&limit=${limit}`
-                : `${API_ENDPOINTS.USERS.LIST}?limit=${limit}`;
-            const data = await apiFetch(url, token);
+            let data;
+            if (query.trim()) {
+                data = await apiFetch(`${API_ENDPOINTS.USERS.LIST}?search=${encodeURIComponent(query)}&limit=10`, token);
+            } else {
+                // No term, no directory listing (audit 2026-10-12 K-13): offer
+                // the contacts this device already knows, each looked up by
+                // exact address. One that fails to resolve is just left out.
+                const found = await Promise.allSettled(
+                    recentContacts(10).map((addr) => apiFetch(API_ENDPOINTS.USERS.GET(addr), token))
+                );
+                data = found.filter((r) => r.status === 'fulfilled' && r.value && !r.value.deleted).map((r) => r.value);
+            }
             setSearchResults(data.filter(u => u.address !== user.address));
         } catch (error) {
             console.error("Search failed", error);
@@ -161,7 +168,7 @@ const ShareModal = ({ isOpen, onClose, secret, onShare }) => {
                         </div>
                     ) : searchResults.length === 0 ? (
                         <div className="text-center py-8 text-slate-500 text-sm">
-                            {searchQuery ? "No users found" : "Type to search users"}
+                            {searchQuery ? "No users found" : "Search by username, or paste an address"}
                         </div>
                     ) : (
                         <div className="space-y-1">

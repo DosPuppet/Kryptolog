@@ -206,6 +206,17 @@ def can_manage_secret(db: Session, secret: models.Secret, user_address: str) -> 
     return can_write_secret(db, secret, user_address)
 
 
+def is_owner_grant(secret: models.Secret, grantee_address: str) -> bool:
+    """Is this the owner's own grant — the owner's only copy of the key?
+
+    Neither sharing nor revoking may touch it (audit 2026-09-11 F-2). Sharing a
+    secret with yourself used to REPLACE your grant, so `expires_in: 1` left the
+    owner unable to read their own secret two seconds later, and revoking it did
+    the same at once. Nothing can restore it: the server never holds the key.
+    """
+    return normalize_address(secret.owner_address) == normalize_address(grantee_address)
+
+
 def can_manage_grant(db: Session, grant: models.AccessGrant, user_address: str) -> bool:
     """Revoke a grant: the secret's owner, or the grantee giving up their access."""
     if grant is None:
@@ -284,13 +295,25 @@ def can_manage_group_roles(member: models.GroupMember | None) -> bool:
     return member is not None and member.role == "owner"
 
 
-def can_remove_group_member(member: models.GroupMember | None, target_address: str) -> bool:
-    """Remove a member: anyone may remove themselves, others need owner/admin."""
-    if member is None:
+def can_remove_group_member(
+    member: models.GroupMember | None, target: models.GroupMember | None
+) -> bool:
+    """Remove a member: anyone may leave; the owner removes anyone; an admin
+    removes plain members only.
+
+    An admin could evict the owner and inherit the group, which then let them
+    mint admins — the very power `can_manage_group_roles` withholds from them
+    (audit 2026-10-12 K-12). Peer admins are out of reach for the same reason:
+    a role that can remove its equals is the owner's role under another name.
+    The SPA never offered either; the server now agrees with it.
+    """
+    if member is None or target is None:
         return False
-    if normalize_address(member.user_address) == normalize_address(target_address):
+    if normalize_address(member.user_address) == normalize_address(target.user_address):
         return True  # leaving is always allowed
-    return can_administer_group(member)
+    if member.role == "owner":
+        return True
+    return member.role == "admin" and target.role == "member"
 
 
 # ── Multisig workflows ──────────────────────────────────────────────────────
@@ -400,13 +423,14 @@ def workflow_is_deletable(workflow: models.MultisigWorkflow | None) -> bool:
     return workflow is not None and workflow.status != "completed"
 
 
-def succeed_group_owner(db, channel, caller_member, remaining, is_self):
+def succeed_group_owner(db, channel, remaining):
     """Hand the group over when its owner leaves, or tear it down.
 
     A channel with no owner is unadministrable (the Q-1 bug), so the departure
     of an owner must always end with either a new owner or no channel.
-    Successor order: the admin doing the removing, else any existing admin,
-    else the earliest-joined remaining member.
+    Successor order: any existing admin, else the earliest-joined remaining
+    member. An owner only ever departs by leaving now (K-12), so "the admin
+    doing the removing" is no longer a case.
 
     Returns (new_owner_info, group_deleted). The dict is built here, while the
     rows are still live, because reading attributes off a deleted or expired
@@ -423,12 +447,9 @@ def succeed_group_owner(db, channel, caller_member, remaining, is_self):
         db.delete(channel)
         return None, True
 
-    if not is_self and caller_member.role == "admin":
-        successor = caller_member
-    else:
-        successor = next((m for m in remaining if m.role == "admin"), None) or min(
-            remaining, key=lambda m: m.joined_at
-        )
+    successor = next((m for m in remaining if m.role == "admin"), None) or min(
+        remaining, key=lambda m: m.joined_at
+    )
 
     successor.role = "owner"
     channel.owner_address = successor.user_address

@@ -2,6 +2,8 @@ from datetime import timedelta
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from sqlalchemy import func
+from sqlalchemy.dialects.postgresql import insert as pg_insert
+from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, defer, joinedload
 
@@ -50,9 +52,23 @@ def _load_secret(
         raise HTTPException(status_code=404, detail="Secret not found")
 
     if not requires(db, secret, user_address):
-        raise HTTPException(status_code=403, detail="Not authorized")
+        _refuse(db, secret, user_address)
 
     return secret
+
+
+def _refuse(db: Session, secret: models.Secret, user_address: str):
+    """Refuse an action on a secret: 403 if the caller may read it, else 404.
+
+    A stranger got 403 for somebody else's secret and 404 for a missing one,
+    and ids are sequential, so walking them measured how many secrets exist and
+    how fast they are made (audit 2026-09-11 F-4). Someone who cannot read a
+    secret now learns nothing about it, not even that it exists. Someone who can
+    read it already knows, so a 403 tells them only which right they lack.
+    """
+    if authorization.can_read_secret(db, secret, user_address):
+        raise HTTPException(status_code=403, detail="Not authorized")
+    raise HTTPException(status_code=404, detail="Secret not found")
 
 
 def _enforce_quota(check, *args) -> None:
@@ -73,9 +89,13 @@ def _refuse_if_workflow_managed(db: Session, secret_id: int, verb: str) -> None:
 
 
 def create_secret_with_owner_grant(
-    db: Session, owner: models.User, secret_data: schemas.SecretBase
+    db: Session, owner: models.User, secret_data: schemas.SecretBase, *, commit: bool = True
 ) -> models.Secret:
     """Create a secret and the owner's own access grant, and commit both.
+
+    `commit=False` only flushes, for a caller that creates more in the same
+    transaction (multisig workflow creation, audit 2026-09-23 F-2) and commits
+    once at the end.
 
     A secret is useless without a grant: the content is encrypted under a key
     only AccessGrant carries, so creating one without the other leaves a row
@@ -109,8 +129,11 @@ def create_secret_with_owner_grant(
             encrypted_key=secret_data.encrypted_key,
         )
     )
-    db.commit()
-    db.refresh(secret)
+    if commit:
+        db.commit()
+        db.refresh(secret)
+    else:
+        db.flush()
 
     # Not a column: the response carries the caller's wrap, which lives on
     # AccessGrant. Set on the instance so Pydantic can read it.
@@ -228,36 +251,24 @@ async def share_secret(
     )
     _refuse_if_workflow_managed(db, grant.secret_id, "manually share")
 
+    if authorization.is_owner_grant(secret, grantee_address):
+        raise HTTPException(status_code=400, detail="You already own this secret")
+
     grantee = authorization.find_active_user(db, grantee_address)
     if not grantee:
         raise HTTPException(status_code=404, detail="Grantee not found")
-
-    existing_grant = (
-        db.query(models.AccessGrant)
-        .filter(
-            models.AccessGrant.secret_id == grant.secret_id,
-            models.AccessGrant.grantee_address == grantee_address,
-        )
-        .first()
-    )
-
-    if existing_grant:
-        db.delete(existing_grant)
-        db.commit()
 
     expires_at = None
     if grant.expires_in:
         expires_at = utcnow_naive() + timedelta(seconds=grant.expires_in)
 
-    new_grant = models.AccessGrant(
+    new_grant = _upsert_grant(
+        db,
         secret_id=grant.secret_id,
         grantee_address=grantee_address,
         encrypted_key=grant.encrypted_key,
         expires_at=expires_at,
     )
-    db.add(new_grant)
-    db.commit()
-    db.refresh(new_grant)
 
     await manager.send_personal_message(
         {
@@ -284,6 +295,30 @@ async def share_secret(
     return new_grant
 
 
+def _upsert_grant(db: Session, **values) -> models.AccessGrant:
+    """Create the grant, or replace the wrap and expiry of the existing one.
+
+    One statement against `uq_access_grant_secret_grantee` (audit 2026-09-23
+    F-1). Sharing used to delete and re-insert in two commits, so concurrent
+    shares each saw no row and each inserted one; revoking one left the other
+    serving the key. A re-share keeps the grant's id and resets created_at.
+    """
+    dialect = db.get_bind().dialect.name
+    insert = sqlite_insert if dialect == "sqlite" else pg_insert
+    stmt = insert(models.AccessGrant).values(created_at=utcnow_naive(), **values)
+    stmt = stmt.on_conflict_do_update(
+        index_elements=["secret_id", "grantee_address"],
+        set_={
+            "encrypted_key": stmt.excluded.encrypted_key,
+            "expires_at": stmt.excluded.expires_at,
+            "created_at": stmt.excluded.created_at,
+        },
+    ).returning(models.AccessGrant.id)
+    grant_id = db.execute(stmt).scalar_one()
+    db.commit()
+    return db.get(models.AccessGrant, grant_id)
+
+
 @router.delete("/secrets/share/{grant_id}")
 @limiter.limit("30/minute")
 def revoke_grant(
@@ -297,7 +332,15 @@ def revoke_grant(
         raise HTTPException(status_code=404, detail="Grant not found")
 
     if not authorization.can_manage_grant(db, grant, current_user.address):
-        raise HTTPException(status_code=403, detail="Not authorized")
+        # Same rule as _refuse, for grant ids: they are sequential too (F-4).
+        if authorization.can_read_secret(db, grant.secret, current_user.address):
+            raise HTTPException(status_code=403, detail="Not authorized")
+        raise HTTPException(status_code=404, detail="Grant not found")
+
+    if authorization.is_owner_grant(grant.secret, grant.grantee_address):
+        raise HTTPException(
+            status_code=400, detail="The owner's own access cannot be revoked; delete the secret"
+        )
 
     _refuse_if_workflow_managed(db, grant.secret_id, "manually revoke access to")
 
@@ -418,11 +461,7 @@ def upload_chunk(
     db: Session = Depends(get_db),
 ):
     """Upload a single encrypted file chunk. Only the secret owner can upload."""
-    secret = db.query(models.Secret).filter(models.Secret.id == chunk.secret_id).first()
-    if not secret:
-        raise HTTPException(status_code=404, detail="Secret not found")
-    if not authorization.can_write_secret(db, secret, current_user.address):
-        raise HTTPException(status_code=403, detail="Only the owner can upload chunks")
+    _load_secret(chunk.secret_id, current_user.address, db, authorization.can_write_secret)
 
     # Lock the owner BEFORE counting anything. Both ceilings below are
     # read-then-insert, and concurrent uploads used to each see room under the

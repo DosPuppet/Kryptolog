@@ -11,8 +11,8 @@ from conftest import (
     TEST_USER_ADDRESS,
     auth_header,
     do_login,
+    server_deployment,
     synthetic_address,
-    test_deployment,
 )
 
 import schemas
@@ -80,7 +80,7 @@ class TestOversizedInputRejected:
                 "signature": "sig",
                 "nonce": "n",
                 "origin": TEST_ORIGIN,
-                "deployment": test_deployment(),
+                "deployment": server_deployment(),
             },
         )
         assert r.status_code == 422

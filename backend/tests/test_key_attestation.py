@@ -19,7 +19,7 @@ from conftest import (
     TEST_USER_ADDRESS,
     auth_header,
     get_nonce,
-    test_deployment,
+    server_deployment,
 )
 
 import auth as auth_module
@@ -34,7 +34,7 @@ def login_with_attestation(client, address, enc_key, attestation, username=None)
         "signature": "fake_signature_for_testing",
         "nonce": nonce,
         "origin": TEST_ORIGIN,
-        "deployment": test_deployment(),
+        "deployment": server_deployment(),
         "encryption_public_key": enc_key,
         "encryption_key_attestation": attestation,
     }
@@ -70,7 +70,7 @@ class TestAttestationStorage:
             "signature": "fake_signature_for_testing",
             "nonce": nonce,
             "origin": TEST_ORIGIN,
-            "deployment": test_deployment(),
+            "deployment": server_deployment(),
             "encryption_public_key": TEST_ENCRYPTION_KEY,
         }
         resp = client.post("/auth/login", json=body)
@@ -89,7 +89,7 @@ class TestAttestationStorage:
                 "signature": "fake_signature_for_testing",
                 "nonce": nonce,
                 "origin": TEST_ORIGIN,
-                "deployment": test_deployment(),
+                "deployment": server_deployment(),
             },
         )
         assert resp.status_code == 200
@@ -142,7 +142,7 @@ class TestAttestationStorage:
                 "signature": "fake_signature_for_testing",
                 "nonce": nonce,
                 "origin": TEST_ORIGIN,
-                "deployment": test_deployment(),
+                "deployment": server_deployment(),
                 "encryption_public_key": "2b" * 1184,
             },
         )
@@ -171,7 +171,7 @@ class TestAttestationRejection:
                 "signature": "fake_signature_for_testing",
                 "nonce": nonce,
                 "origin": TEST_ORIGIN,
-                "deployment": test_deployment(),
+                "deployment": server_deployment(),
                 "encryption_key_attestation": FAKE_ATTESTATION,
             },
         )

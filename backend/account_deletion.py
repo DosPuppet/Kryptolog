@@ -453,7 +453,7 @@ def _leave_all_groups(db: Session, address: str) -> list[dict]:
         new_owner_info, group_deleted = None, False
         if membership.role == "owner":
             new_owner_info, group_deleted = authorization.succeed_group_owner(
-                db, channel, membership, remaining, True
+                db, channel, remaining
             )
 
         if not group_deleted:
@@ -492,7 +492,7 @@ def _leave_all_groups(db: Session, address: str) -> list[dict]:
         if not remaining:
             db.delete(channel)
             continue
-        authorization.succeed_group_owner(db, channel, None, remaining, True)
+        authorization.succeed_group_owner(db, channel, remaining)
 
     return departures
 

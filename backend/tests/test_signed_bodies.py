@@ -24,7 +24,7 @@ import pathlib
 
 import oqs
 import pytest
-from conftest import TEST_ORIGIN, get_nonce, test_deployment
+from conftest import TEST_ORIGIN, get_nonce, server_deployment
 
 import auth
 
@@ -301,7 +301,7 @@ class TestARealLoginSignatureThroughTheEndpoint:
                     nonce,
                     encryption_public_key=enc_key,
                     origin=TEST_ORIGIN,
-                    deployment=test_deployment(),
+                    deployment=server_deployment(),
                 ),
                 signer,
             )
@@ -314,7 +314,7 @@ class TestARealLoginSignatureThroughTheEndpoint:
                 "signature": signature,
                 "nonce": nonce,
                 "origin": TEST_ORIGIN,
-                "deployment": test_deployment(),
+                "deployment": server_deployment(),
                 "encryption_public_key": enc_key,
                 "encryption_key_attestation": attestation,
                 "username": "RealLogin",
@@ -336,7 +336,7 @@ class TestARealLoginSignatureThroughTheEndpoint:
             address = signer.generate_keypair().hex()
             nonce = get_nonce(client, address)
             signature = self._sign(
-                auth._login_message("a" * 32, origin=TEST_ORIGIN, deployment=test_deployment()),
+                auth._login_message("a" * 32, origin=TEST_ORIGIN, deployment=server_deployment()),
                 signer,
             )
 
@@ -347,7 +347,7 @@ class TestARealLoginSignatureThroughTheEndpoint:
                 "signature": signature,
                 "nonce": nonce,
                 "origin": TEST_ORIGIN,
-                "deployment": test_deployment(),
+                "deployment": server_deployment(),
             },
         )
         assert resp.status_code == 401, resp.text
@@ -361,7 +361,8 @@ class TestARealLoginSignatureThroughTheEndpoint:
             address = signer.generate_keypair().hex()
             nonce = get_nonce(client, address)
             signature = self._sign(
-                auth._login_message(nonce, origin=TEST_ORIGIN, deployment=test_deployment()), signer
+                auth._login_message(nonce, origin=TEST_ORIGIN, deployment=server_deployment()),
+                signer,
             )
 
         resp = client.post(
@@ -371,7 +372,7 @@ class TestARealLoginSignatureThroughTheEndpoint:
                 "signature": signature,
                 "nonce": nonce,
                 "origin": TEST_ORIGIN,
-                "deployment": test_deployment(),
+                "deployment": server_deployment(),
                 "encryption_public_key": v["mlkem_public_key"],
                 "encryption_key_attestation": "fake_attestation_for_testing",
             },
@@ -395,7 +396,7 @@ class TestARealLoginSignatureThroughTheEndpoint:
         With the allowlist production requires: in development an empty one
         accepts any origin, which is why this sets it."""
         monkeypatch.setenv("ALLOWED_ORIGINS", TEST_ORIGIN)
-        server = {"origin": TEST_ORIGIN, "deployment": test_deployment(), **signed_for}
+        server = {"origin": TEST_ORIGIN, "deployment": server_deployment(), **signed_for}
         with oqs.Signature(auth.SIG_ALG) as signer:
             address = signer.generate_keypair().hex()
             nonce = get_nonce(client, address)

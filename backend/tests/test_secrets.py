@@ -95,7 +95,7 @@ class TestUpdateSecret:
             },
             headers=auth_header(token2),
         )
-        assert resp.status_code == 403
+        assert resp.status_code == 404
 
 
 class TestDeleteSecret:
@@ -115,12 +115,90 @@ class TestDeleteSecret:
         create_resp = _create_secret(client, token1)
         secret_id = create_resp.json()["id"]
         resp = client.delete(f"/secrets/{secret_id}", headers=auth_header(token2))
-        assert resp.status_code == 403
+        assert resp.status_code == 404
 
     def test_delete_nonexistent_secret(self, client, user1):
         token, _ = user1
         resp = client.delete("/secrets/99999", headers=auth_header(token))
         assert resp.status_code == 404
+
+
+class TestTheOwnersGrantIsUntouchable:
+    """Audit 2026-09-11 F-2: the owner's grant is their only copy of the key.
+    A share to themselves replaced it (`expires_in: 1` locked them out two
+    seconds later) and a revoke deleted it outright. Neither is undoable."""
+
+    def _owner_grant(self, client, token, secret_id):
+        return client.get(f"/secrets/{secret_id}/access", headers=auth_header(token)).json()[0]
+
+    def test_sharing_with_yourself_is_refused(self, client, user1):
+        token, me = user1
+        secret_id = _create_secret(client, token).json()["id"]
+        resp = client.post(
+            "/secrets/share",
+            json={
+                "secret_id": secret_id,
+                "grantee_address": me["address"].upper(),
+                "encrypted_key": "short_lived",
+                "expires_in": 1,
+            },
+            headers=auth_header(token),
+        )
+        assert resp.status_code == 400
+        got = client.get(f"/secrets/{secret_id}", headers=auth_header(token)).json()
+        assert got["encrypted_key"] == "enc_key_123"
+
+    def test_revoking_your_own_grant_is_refused(self, client, user1):
+        token, _ = user1
+        secret_id = _create_secret(client, token).json()["id"]
+        grant = self._owner_grant(client, token, secret_id)
+        resp = client.delete(f"/secrets/share/{grant['id']}", headers=auth_header(token))
+        assert resp.status_code == 400
+        assert client.get(f"/secrets/{secret_id}", headers=auth_header(token)).status_code == 200
+
+    def test_a_grantee_may_still_give_up_their_own_access(self, client, user1, user2):
+        owner_token, _ = user1
+        token2, u2 = user2
+        secret_id = _create_secret(client, owner_token).json()["id"]
+        grant = client.post(
+            "/secrets/share",
+            json={
+                "secret_id": secret_id,
+                "grantee_address": u2["address"],
+                "encrypted_key": "for_u2",
+            },
+            headers=auth_header(owner_token),
+        ).json()
+        assert (
+            client.delete(f"/secrets/share/{grant['id']}", headers=auth_header(token2)).status_code
+            == 200
+        )
+
+    def test_a_reshare_replaces_the_wrap_in_place(self, client, user1, user2):
+        token, _ = user1
+        token2, u2 = user2
+        secret_id = _create_secret(client, token).json()["id"]
+
+        def share(key, **extra):
+            return client.post(
+                "/secrets/share",
+                json={
+                    "secret_id": secret_id,
+                    "grantee_address": u2["address"],
+                    "encrypted_key": key,
+                    **extra,
+                },
+                headers=auth_header(token),
+            ).json()
+
+        first = share("old_wrap", expires_in=60)
+        second = share("new_wrap")
+        assert second["id"] == first["id"]
+        assert second["expires_at"] is None
+        assert (
+            client.get(f"/secrets/{secret_id}", headers=auth_header(token2)).json()["encrypted_key"]
+            == "new_wrap"
+        )
 
 
 class TestShareSecret:
@@ -174,7 +252,7 @@ class TestShareSecret:
             },
             headers=auth_header(token2),
         )
-        assert resp.status_code == 403
+        assert resp.status_code == 404
 
     def test_share_to_nonexistent_user_fails(self, client, user1):
         token, _ = user1
@@ -255,7 +333,7 @@ class TestGetSecretAccess:
         create_resp = _create_secret(client, token1)
         secret_id = create_resp.json()["id"]
         resp = client.get(f"/secrets/{secret_id}/access", headers=auth_header(token2))
-        assert resp.status_code == 403
+        assert resp.status_code == 404
 
 
 class TestDocumentsAreGone:

@@ -92,7 +92,7 @@ class TestExpiredGrantBlocksFileAccess:
         # Expired grant: Bob must be refused.
         assert (
             client.get(f"/secrets/{secret_id}/chunks/0", headers=auth_header(bob)).status_code
-            == 403
+            == 404
         )
 
     def test_expired_grant_cannot_download_single_chunk(self, client, db_session):
@@ -106,7 +106,7 @@ class TestExpiredGrantBlocksFileAccess:
         # The audit's scenario: skip the UI, hit the chunk endpoint directly.
         assert (
             client.get(f"/secrets/{secret_id}/chunks/0", headers=auth_header(bob)).status_code
-            == 403
+            == 404
         )
 
     def test_revoked_grant_cannot_download_chunk(self, client):
@@ -119,7 +119,7 @@ class TestExpiredGrantBlocksFileAccess:
         )
         assert (
             client.get(f"/secrets/{secret_id}/chunks/0", headers=auth_header(bob)).status_code
-            == 403
+            == 404
         )
 
     def test_grant_without_expiry_still_works(self, client):
@@ -157,7 +157,7 @@ class TestExpiredGrantBlocksFileAccess:
             client.get(
                 f"/secrets/{secret['id']}/chunks/0", headers=auth_header(stranger)
             ).status_code
-            == 403
+            == 404
         )
 
 

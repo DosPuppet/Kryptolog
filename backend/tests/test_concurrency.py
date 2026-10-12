@@ -20,7 +20,7 @@ from conftest import (
     TestingSessionLocal,
     auth_header,
     do_login,
-    test_deployment,
+    server_deployment,
 )
 from fastapi.testclient import TestClient
 
@@ -116,7 +116,7 @@ class TestNonceIsSingleUse:
             "signature": "fake_signature_for_testing",
             "nonce": nonce,
             "origin": TEST_ORIGIN,
-            "deployment": test_deployment(),
+            "deployment": server_deployment(),
         }
 
         results = _run_concurrently(lambda c, i: c.post("/auth/login", json=body))
@@ -143,7 +143,7 @@ class TestNonceIsSingleUse:
                     "signature": "wrong",
                     "nonce": nonce,
                     "origin": TEST_ORIGIN,
-                    "deployment": test_deployment(),
+                    "deployment": server_deployment(),
                 },
             )
         assert bad.status_code == 401
@@ -156,7 +156,7 @@ class TestNonceIsSingleUse:
                 "signature": "fake_signature_for_testing",
                 "nonce": nonce,
                 "origin": TEST_ORIGIN,
-                "deployment": test_deployment(),
+                "deployment": server_deployment(),
             },
         )
         assert retry.status_code == 400, retry.text
@@ -182,7 +182,57 @@ class TestNonceIsSingleUse:
                 "signature": "fake_signature_for_testing",
                 "nonce": nonce,
                 "origin": TEST_ORIGIN,
-                "deployment": test_deployment(),
+                "deployment": server_deployment(),
             },
         )
         assert resp.status_code == 400
+
+
+class TestOneGrantPerGrantee:
+    """Audit 2026-09-23 F-1: twelve concurrent shares of one secret to one
+    person left two grants, and revoking one left the other serving the key."""
+
+    def test_concurrent_shares_leave_one_grant_and_one_revoke_ends_access(
+        self, client, user1, user2, db_session
+    ):
+        owner_token, _ = user1
+        bob_token, bob = user2
+        secret_id = client.post(
+            "/secrets",
+            json={
+                "name": "s",
+                "type": "standard",
+                "encrypted_data": "YWI=",
+                "encrypted_key": "YWI=",
+            },
+            headers=auth_header(owner_token),
+        ).json()["id"]
+
+        def share(c, i):
+            return c.post(
+                "/secrets/share",
+                json={
+                    "secret_id": secret_id,
+                    "grantee_address": bob["address"],
+                    "encrypted_key": f"k{i:02d}",
+                },
+                headers=auth_header(owner_token),
+            ).status_code
+
+        assert set(_run_concurrently(share, 12)) == {200}
+        grants = (
+            db_session.query(models.AccessGrant)
+            .filter_by(secret_id=secret_id, grantee_address=bob["address"])
+            .all()
+        )
+        assert len(grants) == 1
+
+        assert (
+            client.delete(
+                f"/secrets/share/{grants[0].id}", headers=auth_header(owner_token)
+            ).status_code
+            == 200
+        )
+        assert (
+            client.get(f"/secrets/{secret_id}", headers=auth_header(bob_token)).status_code == 404
+        )

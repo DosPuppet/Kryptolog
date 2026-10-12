@@ -1214,8 +1214,8 @@ single crypto-core **3.0.0** cutover (lots 4–6); hybridization is a later **4.
 | 3 | Quotas and input bounds | P0 | done — `c159a8a` |
 | 4 | Protocol cutover, crypto-core 3.0.0 | P1 | done — `687a196` |
 | 5 | TrustKeys custody (ships with 4) | P1 | done — `6a483ab` |
-| 6 | Web client trust UX | P1 | done |
-| 7 | Authorization, directory, data integrity | P1 | |
+| 6 | Web client trust UX | P1 | done — `34aeb32` |
+| 7 | Authorization, directory, data integrity | P1 | done |
 | 8 | Realtime and push availability | P1 | |
 | 9 | Operations: audit log, retention, backup, health | P2 | |
 | 10 | Assurance and documentation | P2 | |
@@ -1472,3 +1472,63 @@ test — including `startsWith` → `includes` on the blob origin, which survive
 until a case with a local blob URL *inside* an external link was added.
 **Not seen in a browser**: the banner and the per-member panel want a look in
 the E2E pass.
+
+### Lot 7 — authorization, directory, data integrity
+
+Closes K-12, K-13, 2026-09-23 F-1, F-2 and Q-3, 2026-09-11 F-2, F-3 and F-4.
+**Runs a migration** (`e1f2a3b4c5d6`), which both start paths apply before
+serving. No `CRYPTO_CORE_VERSION` bump.
+
+- **An admin removes plain members only** (K-12). Evicting the owner handed
+  the admin the group and with it the power to mint admins, which
+  `can_manage_group_roles` withholds; a peer admin is out of reach for the same
+  reason. The SPA never offered either — `can_remove_group_member` now takes
+  the target's row and agrees with it. `succeed_group_owner` lost its
+  "the evicting admin inherits" branch, which nothing can reach any more. The
+  role ladder in `test_authorization_drift.py` gained `remove_admin` and
+  `remove_owner` rows.
+- **The directory answers searches, it does not list** (K-13). `search` is
+  required. A username matches by substring from 3 characters, or exactly at
+  any length; an address matches by **prefix only, from 16 hex characters** —
+  a short substring of an address enumerates the table (256 two-character
+  queries reach every row), which a username-length minimum alone would not
+  have stopped. LIKE wildcards are literal; a page is at most 20. `ShareModal`
+  with nothing typed shows the contacts **this device has pinned**
+  (`trustedKeys.recentContacts`), each resolved by exact address.
+- **One grant per (secret, grantee)** (F-1): `uq_access_grant_secret_grantee`
+  and an `INSERT … ON CONFLICT DO UPDATE` in `share_secret`. A re-share keeps
+  the grant's id and replaces the wrap and expiry. The migration collapses
+  existing duplicates to the newest row first.
+- **The owner's grant is untouchable** (11/F-2): sharing to yourself and
+  revoking your own grant are 400s — either destroyed the owner's only copy of
+  the key. `authorization.is_owner_grant`; the details modal labels that row
+  "Owner" instead of offering a revoke that would fail.
+- **No existence oracle on sequential ids** (11/F-4): whoever cannot read a
+  secret gets the same 404, status and body, as for an id that does not exist
+  — on `/secrets/{id}`, `/access`, the chunk routes, and on grant ids in
+  `DELETE /secrets/share/{id}`. Someone who CAN read it still gets a 403,
+  since they already know it exists. Fourteen tests asserted the old 403 for
+  strangers and were flipped.
+- **Multisig creation is one transaction** (F-2): participants are lowered and
+  deduplicated, the threshold checked against the deduplicated list, and the
+  secret, its grant, the workflow and its rows commit together
+  (`create_secret_with_owner_grant(commit=False)`). **Every signer needs a
+  wrapped key** (11/F-3) — approval only checks a signature over the
+  ciphertext's hash, so a keyless signer could only approve blind. Recipients
+  deliberately may still arrive keyless: the completing signer supplies their
+  keys at release, and completion refuses to leave one without.
+- **Indexes** (Q-3): grants by grantee, workflows by secret and owner, secrets
+  by owner, memberships/signers/recipients by user. The twelve `ix_*_id`
+  indexes on primary keys are gone. **So are the indexes on `secrets.name` and
+  `multisig_workflows.name`, which were a live bug:** both hold encrypted
+  blobs nobody can query, and PostgreSQL refuses a B-tree entry over 8 KB, so a
+  secret whose name the schema accepts (10 000 characters) was a **500**.
+  The downgrade does not restore them, and the upgrade drops them `IF EXISTS`.
+- Housekeeping: the `test_deployment` helper from lot 4 was collected by pytest
+  as a test in every module that imported it; it is `server_deployment` now.
+
+Backend 592 → **605**, SPA 261 → **263**. Sixteen gates mutation-tested, each
+killed: among them the old delete-then-insert share (caught both by the
+concurrent-share test and by the re-share-keeps-its-id test) and a two-commit
+workflow creation (caught only by forcing a failure after the secret is
+written, since nothing else can tell one transaction from three).

@@ -113,7 +113,7 @@ def get_nonce(client, address):
 TEST_ORIGIN = "http://localhost:5173"
 
 
-def test_deployment() -> str:
+def server_deployment() -> str:
     import config
 
     return config.deployment_id()
@@ -130,7 +130,7 @@ def login_body(address, nonce, encryption_key=None, username=None, **extra):
         "signature": "fake_signature_for_testing",
         "nonce": nonce,
         "origin": TEST_ORIGIN,
-        "deployment": test_deployment(),
+        "deployment": server_deployment(),
     }
     if encryption_key:
         body["encryption_public_key"] = encryption_key

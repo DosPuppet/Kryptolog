@@ -229,7 +229,7 @@ class TestFileChunks:
                 "encrypted_data": _b64("c0"),
             },
         )
-        assert res.status_code == 403
+        assert res.status_code == 404
 
     def test_get_chunk_access_control(self, client, user1, user2):
         token1, _ = user1
@@ -254,7 +254,7 @@ class TestFileChunks:
 
         # User 2 tries to read
         res = client.get(f"/secrets/{secret_id}/chunks/0", headers=user2_headers)
-        assert res.status_code == 403
+        assert res.status_code == 404
 
         # User 1 shares with User 2
         share_res = client.post(
@@ -426,7 +426,7 @@ class TestMultisigChunkAccess:
         res = client.get(
             f"/secrets/{secret_id}/chunks/0", headers={"Authorization": f"Bearer {token3}"}
         )
-        assert res.status_code == 403
+        assert res.status_code == 404
 
     def test_recipient_can_access_after_completion(self, client, user1, user2):
         """After all signers sign, the recipient should be able to access chunks."""

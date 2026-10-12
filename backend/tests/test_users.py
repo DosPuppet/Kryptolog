@@ -1,7 +1,9 @@
 """Tests for /users endpoints — user CRUD, authorization, and directory auth."""
 
 import pytest
-from conftest import auth_header
+from conftest import TEST_ENCRYPTION_KEY, auth_header, synthetic_address
+
+import models
 
 
 class TestGetUser:
@@ -94,25 +96,18 @@ class TestUsernameUniquenessIsCaseInsensitive:
 
 
 class TestListUsers:
-    def test_list_users_returns_created_users(self, client, user1, user2):
-        token, _ = user1
-        resp = client.get("/users", headers=auth_header(token))
+    def test_search_finds_users_by_username(self, client, user1, user2):
+        token, u1 = user1
+        _, u2 = user2
+        resp = client.get("/users?search=testuser&limit=20", headers=auth_header(token))
         assert resp.status_code == 200
         addresses = [u["address"] for u in resp.json()]
-        _, u1 = user1
-        _, u2 = user2
         assert u1["address"] in addresses
         assert u2["address"] in addresses
 
-    def test_list_users_search(self, client, user1):
-        token, _ = user1
-        resp = client.get("/users?search=TestUser", headers=auth_header(token))
-        assert resp.status_code == 200
-        assert len(resp.json()) >= 1
-
     def test_list_users_limit(self, client, user1, user2):
         token, _ = user1
-        resp = client.get("/users?limit=1", headers=auth_header(token))
+        resp = client.get("/users?search=TestUser&limit=1", headers=auth_header(token))
         assert resp.status_code == 200
         assert len(resp.json()) == 1
 
@@ -120,14 +115,52 @@ class TestListUsers:
         resp = client.get("/users?search=TestUser")
         assert resp.status_code == 401
 
-    def test_short_search_returns_empty(self, client, user1):
+    def test_there_is_no_unsearched_listing(self, client, user1, user2):
+        """Audit 2026-10-12 K-13: `GET /users` paged out the whole directory."""
         token, _ = user1
-        # A 1-char substring search must not dump the directory.
-        resp = client.get("/users?search=T", headers=auth_header(token))
+        assert client.get("/users", headers=auth_header(token)).status_code == 422
+        assert client.get("/users?search=", headers=auth_header(token)).json() == []
+        assert client.get("/users?search=%20%20", headers=auth_header(token)).json() == []
+
+    @pytest.mark.parametrize("term", ["T", "Te"])
+    def test_a_short_term_is_not_a_substring_search(self, client, user1, term):
+        token, _ = user1
+        resp = client.get(f"/users?search={term}", headers=auth_header(token))
         assert resp.status_code == 200
         assert resp.json() == []
 
-    @pytest.mark.parametrize("query", ["limit=-1", "limit=0", "offset=-1", "limit=101"])
+    def test_a_short_name_is_still_found_exactly(self, client, user1, db_session):
+        token, _ = user1
+        address = synthetic_address("short-name")
+        db_session.add(
+            models.User(address=address, username="Jo", encryption_public_key=TEST_ENCRYPTION_KEY)
+        )
+        db_session.commit()
+        found = client.get("/users?search=jo", headers=auth_header(token)).json()
+        assert [u["address"] for u in found] == [address]
+
+    def test_an_address_is_matched_by_a_long_prefix_only(self, client, user1, user2):
+        """A short piece of an address enumerates the table — 256 two-character
+        queries reach every row — so only a pasted prefix matches."""
+        token, _ = user1
+        _, u2 = user2
+        target = u2["address"]
+
+        def found(term):
+            resp = client.get(f"/users?search={term}&limit=20", headers=auth_header(token))
+            return target in [u["address"] for u in resp.json()]
+
+        assert found(target[:16])
+        assert found(target[:16].upper())
+        assert not found(target[:15])
+        assert not found(target[1:17])  # a substring that is not a prefix
+
+    def test_like_wildcards_are_literal(self, client, user1, user2):
+        token, _ = user1
+        assert client.get("/users?search=%25%25%25", headers=auth_header(token)).json() == []
+        assert client.get("/users?search=___", headers=auth_header(token)).json() == []
+
+    @pytest.mark.parametrize("query", ["limit=-1", "limit=0", "offset=-1", "limit=21"])
     def test_out_of_range_pagination_is_rejected(self, client, user1, query):
         """Bounded at both ends, in the signature.
 
@@ -137,7 +170,7 @@ class TestListUsers:
         SQL is built.
         """
         token, _ = user1
-        resp = client.get(f"/users?{query}", headers=auth_header(token))
+        resp = client.get(f"/users?search=TestUser&{query}", headers=auth_header(token))
         assert resp.status_code == 422
 
 
