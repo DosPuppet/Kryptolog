@@ -1,5 +1,6 @@
 from sqlalchemy import (
     Boolean,
+    CheckConstraint,
     Column,
     DateTime,
     ForeignKey,
@@ -128,6 +129,12 @@ class User(Base):
 
 class Secret(Base):
     __tablename__ = "secrets"
+    # Mirrors schemas.SecretType (audit 2026-09-23 M-3; migration d0e1f2a3b4c5).
+    # The NULL case is allowed by SQL CHECK semantics; the column default and the
+    # request model never produce one.
+    __table_args__ = (
+        CheckConstraint("type IN ('standard', 'file', 'signed_document')", name="ck_secrets_type"),
+    )
 
     id = Column(Integer, primary_key=True, index=True)
     owner_address = Column(String, ForeignKey("users.address"))

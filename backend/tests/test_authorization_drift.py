@@ -37,7 +37,7 @@ def _user(db_session, tag):
 
 
 def _workflow(db_session, owner, *, status, signer=None, recipient=None):
-    secret = models.Secret(owner_address=owner, name="s", type="note", encrypted_data="ab")
+    secret = models.Secret(owner_address=owner, name="s", type="standard", encrypted_data="ab")
     db_session.add(secret)
     db_session.flush()
     wf = models.MultisigWorkflow(
@@ -271,7 +271,7 @@ class TestGrantExpiryHasOneSpelling:
         owner = _user(db_session, f"purge-owner-{offset_seconds}")
         grantee = _user(db_session, f"purge-grantee-{offset_seconds}")
 
-        secret = models.Secret(owner_address=owner, name="s", type="note", encrypted_data="ab")
+        secret = models.Secret(owner_address=owner, name="s", type="standard", encrypted_data="ab")
         db_session.add(secret)
         db_session.flush()
 
@@ -303,7 +303,7 @@ class TestGrantExpiryHasOneSpelling:
         mine = _user(db_session, "purge-scope-mine")
         theirs = _user(db_session, "purge-scope-theirs")
 
-        secret = models.Secret(owner_address=owner, name="s", type="note", encrypted_data="ab")
+        secret = models.Secret(owner_address=owner, name="s", type="standard", encrypted_data="ab")
         db_session.add(secret)
         db_session.flush()
         stale = utcnow_naive() - timedelta(hours=1)

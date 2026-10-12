@@ -1210,8 +1210,8 @@ single crypto-core **3.0.0** cutover (lots 4–6); hybridization is a later **4.
 | Lot | Scope | Prio | Status |
 |---|---|---|---|
 | 1 | Supply chain: hashed lock Dependabot can regenerate, pinned liboqs, npm advisories | P0 | done — `bd12c2b` |
-| 2 | Default deployment posture (exposed services, proxy headers, docs, body limit) | P0 | done |
-| 3 | Quotas and input bounds | P0 | |
+| 2 | Default deployment posture (exposed services, proxy headers, docs, body limit) | P0 | done — `915615d` |
+| 3 | Quotas and input bounds | P0 | done |
 | 4 | Protocol cutover, crypto-core 3.0.0 | P1 | |
 | 5 | TrustKeys custody (ships with 4) | P1 | |
 | 6 | Web client trust UX | P1 | |
@@ -1296,3 +1296,36 @@ F-7, F-9. **`DEPLOYMENT.md` is new** and is what to read before exposing anythin
   ML-KEM wraps per *session* and that the *server* withholds multisig releases.
 - **Deliberately not done:** a per-IP WebSocket connection cap (2026-09-23 Q-5).
   Behind a corporate NAT an office shares one address. Recorded in DEPLOYMENT.md.
+
+### Lot 3 — quotas and input bounds
+
+Closes K-09 (with lot 2's invite-only default), 2026-09-23 M-3, Q-4, F-6, and
+2026-09-11 Q-3.
+
+- **Per-account quota** (`security/quota.py`): secrets owned
+  (`KRYPTOLOG_QUOTA_SECRETS`, 1 000) and characters stored, inline plus chunks
+  (`KRYPTOLOG_QUOTA_BYTES`, 1 GiB); 413 with the reason. Checked in
+  `create_secret_with_owner_grant` (so multisig creation cannot skip it),
+  `upload_chunk` and `update_secret` (growth only). **Every check runs under
+  `SELECT … FOR UPDATE` on the owner's `users` row**, taken before anything is
+  counted: count-then-insert is no ceiling under concurrency, and the existing
+  50 MB per-file cap had that exact race. `test_concurrent_uploads_cannot_overrun_the_quota`
+  fails if the lock is removed.
+- **`SecretBase.type` is `Literal["standard","file","signed_document"]`**, with
+  a CHECK constraint behind it (migration `d0e1f2a3b4c5`, which first resets any
+  other stored value to "standard"). Four megabytes of `type` used to be
+  accepted and returned in every list, other users' included.
+- **`test_input_bounds.py` walks every request body the app routes to** and
+  fails on any `str`/`list`/`dict` without `max_length`, inside containers too.
+  Two things it needed: FastAPI 0.143 keeps included routers as
+  `_IncludedRouter` entries (walk `original_router.routes`; the top level held
+  NO APIRoute, which its own sanity test caught), and
+  `Annotated[str, Field(max_length=…)]` keeps the bound inside the FieldInfo's
+  `metadata`. `schemas.Address` / `schemas.WrappedKey` are the reusable bounded
+  types; multisig lists and key maps are capped at `MAX_WORKFLOW_PARTICIPANTS` (50).
+- Group creation counts members after deduplication and after adding the
+  creator: 50 others used to make a group of 51.
+- `expires_in` is `ge=1`: 0 made a permanent grant, a negative one a grant born
+  expired.
+- Test fixtures used `"type": "note"`, which no client sends; they say
+  "standard" now.

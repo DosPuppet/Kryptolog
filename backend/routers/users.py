@@ -122,7 +122,7 @@ def list_users(
 
 
 class UserResolveRequest(schemas.BaseModel):
-    address: str
+    address: schemas.Address
 
 
 @router.post("/resolve", response_model=schemas.UserResponse)

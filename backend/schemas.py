@@ -118,6 +118,28 @@ MAX_GROUP_MESSAGE_CONTENT_LEN = (
 # Encrypted secret payload stored inline (large files go through FileChunks).
 MAX_SECRET_BLOB_LEN = 500_000
 
+# A wrapped content key, as every client produces it. The grant and multisig
+# fields always carried this bound; the multisig key MAPS did not.
+MAX_WRAPPED_KEY_LEN = 50_000
+
+# Signers, and separately recipients, on one workflow. Each one costs a wrapped
+# key, a row and a push at creation, so the lists need a ceiling like any other
+# input (audit 2026-09-23 Q-4); the group cap is the precedent for the number.
+MAX_WORKFLOW_PARTICIPANTS = 50
+
+# Reusable bounded types. A list or dict bound limits how many entries arrive;
+# these bound each entry, which is the half a bare `list[str]` leaves open.
+Address = Annotated[str, Field(max_length=MAX_ADDRESS_LEN)]
+WrappedKey = Annotated[str, Field(max_length=MAX_WRAPPED_KEY_LEN)]
+
+# What a secret can be. Free text before, and the only unbounded field on the
+# model: four megabytes of `type` were accepted, stored, and returned in every
+# LIST response — the payloads audit O-3 had taken out of those lists came back
+# through it, and through the shared and multisig lists they reached OTHER
+# users (audit 2026-09-23 M-3). Mirrored by a CHECK constraint (migration
+# d0e1f2a3b4c5) so the column cannot hold anything else either.
+SecretType = Literal["standard", "file", "signed_document"]
+
 
 class UserBase(BaseModel):
     address: str = Field(..., max_length=MAX_ADDRESS_LEN)
@@ -169,11 +191,11 @@ class SecretBase(BaseModel):
     # Encrypted title blob (audit M-3): marker + AES-GCM envelope JSON. Legacy
     # plaintext names remain valid (they're just short strings).
     name: str = Field(..., max_length=10_000)
-    type: str = Field("standard")  # 'standard' | 'file' | 'signed_document'
+    type: SecretType = "standard"
     # 500KB limit for SecretBase.encrypted_data. Large files use FileChunks.
     encrypted_data: str = Field(..., max_length=MAX_SECRET_BLOB_LEN)
     # Key is small, keeping strict limit
-    encrypted_key: str = Field(..., max_length=50_000)
+    encrypted_key: str = Field(..., max_length=MAX_WRAPPED_KEY_LEN)
 
 
 class SecretCreate(SecretBase):
@@ -258,8 +280,12 @@ class FileChunkResponse(BaseModel):
 class AccessGrantCreate(BaseModel):
     secret_id: int
     grantee_address: str = Field(..., max_length=MAX_ADDRESS_LEN)
-    encrypted_key: str = Field(..., max_length=50_000)  # Key encrypted for grantee
-    expires_in: int | None = None  # Seconds
+    encrypted_key: str = Field(..., max_length=MAX_WRAPPED_KEY_LEN)  # Key encrypted for grantee
+    # Seconds. `ge=1` because 0 is falsy: it produced a PERMANENT grant, and a
+    # negative value a grant that was born expired (audit 2026-09-11 Q-3).
+    # Omit it (None) for a grant without expiry. The ceiling only keeps the
+    # timedelta arithmetic in range; ten years is no product limit.
+    expires_in: int | None = Field(None, ge=1, le=10 * 365 * 24 * 3600)
 
 
 class AccessGrantResponse(BaseModel):
@@ -313,10 +339,11 @@ class MultisigWorkflowBase(BaseModel):
 
 class MultisigWorkflowCreate(MultisigWorkflowBase):
     secret_data: SecretCreate  # Embedded secret creation
-    signers: list[str]  # List of addresses
-    recipients: list[str]  # List of addresses
-    signer_keys: dict[str, str]  # map address -> encrypted_key
-    recipient_keys: dict[str, str]  # map address -> encrypted_key
+    signers: list[Address] = Field(..., max_length=MAX_WORKFLOW_PARTICIPANTS)
+    recipients: list[Address] = Field(..., max_length=MAX_WORKFLOW_PARTICIPANTS)
+    # address -> wrapped key
+    signer_keys: dict[Address, WrappedKey] = Field(..., max_length=MAX_WORKFLOW_PARTICIPANTS)
+    recipient_keys: dict[Address, WrappedKey] = Field(..., max_length=MAX_WORKFLOW_PARTICIPANTS)
     threshold: int = Field(..., ge=1)  # N in N-of-M; must be <= len(signers)
 
 
@@ -374,7 +401,10 @@ class MultisigWorkflowResponse(MultisigWorkflowSummaryResponse):
 class MultisigSignatureRequest(BaseModel):
     # 64KB limit for PQC signatures
     signature: str = Field(..., max_length=64_000)
-    recipient_keys: dict[str, str] | None = None  # Only provided by the completing signer
+    # Only provided by the completing signer.
+    recipient_keys: dict[Address, WrappedKey] | None = Field(
+        None, max_length=MAX_WORKFLOW_PARTICIPANTS
+    )
 
 
 class MessageBase(BaseModel):
@@ -423,7 +453,7 @@ class ConversationResponse(BaseModel):
 
 
 class HistoryRequest(BaseModel):
-    partner_address: str
+    partner_address: Address
     limit: int = Field(50, ge=1, le=100)  # Default 50, Max 100
     offset: int = Field(0, ge=0)
 
@@ -435,7 +465,9 @@ class GroupChannelCreate(BaseModel):
     # An E2EE key-wrap map, not a title — see MAX_GROUP_NAME_LEN for why the
     # cap scales with group size rather than with name length.
     name: str = Field(..., min_length=1, max_length=MAX_GROUP_NAME_LEN)
-    member_addresses: list[str] = Field(..., min_length=1)
+    # The creator is added server-side and counted against MAX_GROUP_MEMBERS
+    # there; this only stops an oversized list being parsed at all.
+    member_addresses: list[Address] = Field(..., min_length=1, max_length=MAX_GROUP_MEMBERS)
 
 
 class GroupMemberResponse(BaseModel):
@@ -488,11 +520,13 @@ class GroupHistoryRequest(BaseModel):
 
 
 class GroupMemberAdd(BaseModel):
-    user_address: str
+    user_address: Address
 
 
 class GroupMemberRoleUpdate(BaseModel):
-    role: str
+    # Validated against the role ladder in the router (case-insensitively, so
+    # not a Literal here); the bound is only so nothing large is parsed.
+    role: str = Field(..., max_length=16)
 
 
 class GroupUpdate(BaseModel):

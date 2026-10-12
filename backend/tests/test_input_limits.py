@@ -5,7 +5,13 @@ push through a field. The cryptographic format checks live in
 security/crypto_validation.py and are covered by test_crypto_validation.py.
 """
 
-from conftest import TEST_ENCRYPTION_KEY, TEST_USER_ADDRESS, auth_header, do_login
+from conftest import (
+    TEST_ENCRYPTION_KEY,
+    TEST_USER_ADDRESS,
+    auth_header,
+    do_login,
+    synthetic_address,
+)
 
 import schemas
 
@@ -120,3 +126,54 @@ class TestValidInputStillAccepted:
         addr = "ab" * 1312
         token, user = do_login(client, addr, TEST_ENCRYPTION_KEY, "RealLen")
         assert user["address"] == addr.lower()
+
+
+class TestGroupMemberCap:
+    """The cap counts the group's real members (audit 2026-09-23 F-6).
+
+    Checked on the submitted list, before the creator was added, 50 other
+    addresses made a group of 51 — past MAX_GROUP_MEMBERS, which add_member then
+    refused to grow and which MAX_GROUP_NAME_LEN is sized for.
+    """
+
+    def _others(self, db_session, n):
+        import models
+
+        addrs = []
+        for i in range(n):
+            addr = synthetic_address(f"cap-member-{i}")
+            db_session.add(
+                models.User(
+                    address=addr, username=f"cap{i}", encryption_public_key=TEST_ENCRYPTION_KEY
+                )
+            )
+            addrs.append(addr)
+        db_session.commit()
+        return addrs
+
+    def _create(self, client, token, addrs):
+        return client.post(
+            "/groups",
+            json={"name": "encg1:x", "member_addresses": addrs},
+            headers=auth_header(token),
+        )
+
+    def test_the_creator_counts_toward_the_cap(self, client, db_session):
+        token, _ = do_login(client, TEST_USER_ADDRESS, encryption_key=TEST_ENCRYPTION_KEY)
+        others = self._others(db_session, schemas.MAX_GROUP_MEMBERS)
+        r = self._create(client, token, others)
+        assert r.status_code == 400, r.text
+
+    def test_a_full_group_including_the_creator_is_allowed(self, client, db_session):
+        token, _ = do_login(client, TEST_USER_ADDRESS, encryption_key=TEST_ENCRYPTION_KEY)
+        others = self._others(db_session, schemas.MAX_GROUP_MEMBERS - 1)
+        r = self._create(client, token, others)
+        assert r.status_code == 200, r.text
+        assert len(r.json()["members"]) == schemas.MAX_GROUP_MEMBERS
+
+    def test_a_creator_who_lists_themselves_is_counted_once(self, client, db_session):
+        token, _ = do_login(client, TEST_USER_ADDRESS, encryption_key=TEST_ENCRYPTION_KEY)
+        others = self._others(db_session, schemas.MAX_GROUP_MEMBERS - 1)
+        r = self._create(client, token, others + [TEST_USER_ADDRESS.upper()])
+        assert r.status_code == 200, r.text
+        assert len(r.json()["members"]) == schemas.MAX_GROUP_MEMBERS

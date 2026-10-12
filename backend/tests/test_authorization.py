@@ -29,7 +29,7 @@ def _make_shared_secret_with_chunk(client, owner_token, grantee_address, expires
         "/secrets",
         json={
             "name": "shared",
-            "type": "note",
+            "type": "standard",
             "encrypted_data": "deadbeef",
             "encrypted_key": "aabbcc",
         },
@@ -150,7 +150,7 @@ class TestExpiredGrantBlocksFileAccess:
         stranger, _ = do_login(client, TEST_USER_ADDRESS_2, TEST_ENCRYPTION_KEY, "Stranger")
         secret = client.post(
             "/secrets",
-            json={"name": "s", "type": "note", "encrypted_data": "de", "encrypted_key": "ad"},
+            json={"name": "s", "type": "standard", "encrypted_data": "de", "encrypted_key": "ad"},
             headers=auth_header(owner),
         ).json()
         assert (

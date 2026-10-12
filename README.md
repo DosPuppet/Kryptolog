@@ -272,6 +272,8 @@ other people, read [DEPLOYMENT.md](DEPLOYMENT.md) first.
 | `KRYPTOLOG_ENV` | No | `development` (`production` in the example) | `production` fails closed: the backend refuses to start unless the JWT secret, `KRYPTOLOG_REQUIRE_INVITE` and `ALLOWED_ORIGINS` are all set, and serves no `/docs`. |
 | `KRYPTOLOG_JWT_SECRET` | Prod: **yes** | – | HS256 JWT signing secret (hex). From `generate_server_keys.py`. Forges JWTs if leaked — treat as a production secret. Unset in dev ⇒ ephemeral secret, JWTs reset on restart. |
 | `KRYPTOLOG_REQUIRE_INVITE` | Prod: **yes** | `false` (`true` in the example) | Access filter. When `true`, registering a **new** identity at first login requires a valid invite code (existing users unaffected). Seed codes with `python generate_invites.py`. |
+| `KRYPTOLOG_QUOTA_SECRETS` | No | `1000` | Secrets one account may own. Over it, creation answers 413. |
+| `KRYPTOLOG_QUOTA_BYTES` | No | `1073741824` (1 GiB) | Characters one account may store, inline content and file chunks together. Over it, uploads answer 413. |
 | `ALLOWED_ORIGINS` | No | `http://localhost:5173` | Comma-separated CORS origins |
 | `TRUSTED_PROXY_IPS` | No | `127.0.0.1` | Comma-separated trusted reverse-proxy IPs, passed by `serve.sh` to uvicorn's `--forwarded-allow-ips`. The rate limiter keys on the right-most `X-Forwarded-For` hop not vouched for by one of these; `X-Real-IP` is ignored. |
 | `VAPID_PUBLIC_KEY` | No | – | Web Push VAPID public key (required for push notifications) |

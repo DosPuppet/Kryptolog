@@ -10,7 +10,7 @@ import models
 import schemas
 from database import get_db
 from dependencies import get_current_user, limiter
-from security import authorization
+from security import authorization, quota
 from utils.clock import utcnow_naive
 from utils.push import display_name, notify_user_push_async
 from websocket_manager import manager
@@ -55,6 +55,14 @@ def _load_secret(
     return secret
 
 
+def _enforce_quota(check, *args) -> None:
+    """Run a quota check, answering 413 with its reason (audit 2026-10-12 K-09)."""
+    try:
+        check(*args)
+    except quota.QuotaExceeded as exc:
+        raise HTTPException(status_code=413, detail=str(exc)) from exc
+
+
 def _refuse_if_workflow_managed(db: Session, secret_id: int, verb: str) -> None:
     """Block direct mutation of a secret a multisig workflow owns."""
     if authorization.is_workflow_managed(db, secret_id):
@@ -72,8 +80,19 @@ def create_secret_with_owner_grant(
     A secret is useless without a grant: the content is encrypted under a key
     only AccessGrant carries, so creating one without the other leaves a row
     its own owner cannot read. Multisig workflow creation builds the same pair,
-    which is why this is a function rather than eight statements in two files.
+    which is why this is a function rather than eight statements in two files —
+    and why the quota is checked here, so neither path can skip it.
     """
+    # Locked until the commit below, so two concurrent creations cannot both
+    # see room for "one more" (security/quota.py).
+    quota.lock_owner(db, owner.address)
+    _enforce_quota(
+        quota.check_new_secret,
+        db,
+        owner.address,
+        len(secret_data.encrypted_data) + len(secret_data.name),
+    )
+
     secret = models.Secret(
         owner_address=owner.address,
         name=secret_data.name,
@@ -160,6 +179,15 @@ def update_secret(
 ):
     secret = _load_secret(secret_id, current_user.address, db, authorization.can_manage_secret)
     _refuse_if_workflow_managed(db, secret_id, "edit")
+
+    # An edit can grow a secret up to the 500 KB field bound; only the growth
+    # counts against the quota.
+    quota.lock_owner(db, current_user.address)
+    growth = (len(secret_update.encrypted_data) + len(secret_update.name)) - (
+        len(secret.encrypted_data or "") + len(secret.name or "")
+    )
+    if growth > 0:
+        _enforce_quota(quota.check_new_bytes, db, current_user.address, growth)
 
     secret.name = secret_update.name
     secret.encrypted_data = secret_update.encrypted_data
@@ -395,6 +423,12 @@ def upload_chunk(
         raise HTTPException(status_code=404, detail="Secret not found")
     if not authorization.can_write_secret(db, secret, current_user.address):
         raise HTTPException(status_code=403, detail="Only the owner can upload chunks")
+
+    # Lock the owner BEFORE counting anything. Both ceilings below are
+    # read-then-insert, and concurrent uploads used to each see room under the
+    # 50 MB per-file cap and all land past it (security/quota.py).
+    quota.lock_owner(db, current_user.address)
+    _enforce_quota(quota.check_new_bytes, db, current_user.address, len(chunk.encrypted_data))
 
     # Enforce total file size limit using SQL-level aggregation. Base64 since
     # the L-12 cutover: 4 chars per 3 bytes, so chars * 3/4 (was chars / 2).

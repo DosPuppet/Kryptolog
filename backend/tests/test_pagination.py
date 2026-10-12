@@ -40,7 +40,7 @@ def _make_secrets(db_session, owner, count, shared_with=None):
         secret = models.Secret(
             owner_address=owner,
             name=f"secret-{i}",
-            type="note",
+            type="standard",
             encrypted_data="ab" * 8,
         )
         db_session.add(secret)
@@ -139,7 +139,7 @@ class TestSecretListPaging:
 class TestWorkflowListPaging:
     def _workflow(self, db_session, owner, *, status="pending", signer=None, recipient=None):
         secret = models.Secret(
-            owner_address=owner, name="wf-secret", type="note", encrypted_data="ab" * 8
+            owner_address=owner, name="wf-secret", type="standard", encrypted_data="ab" * 8
         )
         db_session.add(secret)
         db_session.flush()

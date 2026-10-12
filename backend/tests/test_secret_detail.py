@@ -30,7 +30,7 @@ def _make_secret(client, token, name="s"):
         "/secrets",
         json={
             "name": name,
-            "type": "note",
+            "type": "standard",
             "encrypted_data": PAYLOAD,
             "encrypted_key": "00ff",
         },
@@ -109,7 +109,7 @@ class TestListsCarryNoCiphertext:
                 "name": "wf",
                 "secret_data": {
                     "name": "wf-secret",
-                    "type": "note",
+                    "type": "standard",
                     "encrypted_data": PAYLOAD,
                     "encrypted_key": "00ff",
                 },
@@ -212,7 +212,7 @@ class TestSecretDetail:
                 "name": "wf",
                 "secret_data": {
                     "name": "wf-secret",
-                    "type": "note",
+                    "type": "standard",
                     "encrypted_data": PAYLOAD,
                     "encrypted_key": "00ff",
                 },

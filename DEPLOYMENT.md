@@ -101,6 +101,14 @@ explicitly:
 
 `/docs`, `/redoc` and `/openapi.json` are not served in production.
 
+### Storage
+
+Every account has a quota — `KRYPTOLOG_QUOTA_SECRETS` (default 1 000 secrets)
+and `KRYPTOLOG_QUOTA_BYTES` (default 1 GiB, inline content and file chunks
+together) — and file chunks live in PostgreSQL. Size the database disk for
+*users × quota*, not for current usage, and monitor it: the quota bounds what one
+account can do, not what all of them can.
+
 ### Native dependencies
 
 `scripts/build_liboqs.sh` builds liboqs from a pinned, checksummed release;

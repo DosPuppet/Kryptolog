@@ -60,15 +60,20 @@ async def create_group(
     current_user: models.User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    if len(data.member_addresses) > schemas.MAX_GROUP_MEMBERS:
+    member_addrs = list({addr.lower() for addr in data.member_addresses})
+    if current_user.address not in member_addrs:
+        member_addrs.append(current_user.address)
+
+    # Counted AFTER deduplication and after adding the creator: the members the
+    # group will actually have. Checked on the submitted list, 50 others plus
+    # the creator made a group of 51 (audit 2026-09-23 F-6) — one that
+    # add_member would then refuse to grow and MAX_GROUP_NAME_LEN, sized for 50
+    # wraps, could not hold a renamed name for.
+    if len(member_addrs) > schemas.MAX_GROUP_MEMBERS:
         raise HTTPException(
             status_code=400,
             detail=f"Maximum {schemas.MAX_GROUP_MEMBERS} members per group",
         )
-
-    member_addrs = list({addr.lower() for addr in data.member_addresses})
-    if current_user.address not in member_addrs:
-        member_addrs.append(current_user.address)
 
     users = authorization.active_users(db).filter(models.User.address.in_(member_addrs)).all()
     found_addrs = {u.address for u in users}
