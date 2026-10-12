@@ -44,6 +44,32 @@ window.addEventListener('message', async (event) => {
                 result = signRes.signature;
                 break;
             }
+            // Typed signatures (crypto-core 3.0.0, audit 2026-10-12 K-03): only
+            // the fields cross; the background builds the body and attaches the
+            // origin Chrome reports for this tab, never one the page names.
+            case 'TRUSTKEYS_SIGN_LOGIN': {
+                const res = await callBackground('SIGN_LOGIN', {
+                    nonce: payload.nonce, deployment: payload.deployment,
+                });
+                result = res.signature;
+                break;
+            }
+            case 'TRUSTKEYS_SIGN_ACCOUNT_DELETION': {
+                const res = await callBackground('SIGN_ACCOUNT_DELETION', {
+                    nonce: payload.nonce, mode: payload.mode,
+                    redactionKeys: payload.redactionKeys, deployment: payload.deployment,
+                });
+                result = res.signature;
+                break;
+            }
+            case 'TRUSTKEYS_SIGN_MULTISIG_APPROVAL': {
+                const res = await callBackground('SIGN_MULTISIG_APPROVAL', {
+                    workflowId: payload.workflowId, secretId: payload.secretId,
+                    ciphertextSha256: payload.ciphertextSha256,
+                });
+                result = res.signature;
+                break;
+            }
             case 'TRUSTKEYS_SIGN_MESSAGE': {
                 const signMsgRes = await callBackground('SIGN_MESSAGE', { message: payload.message });
                 result = signMsgRes.signature;

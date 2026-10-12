@@ -32,11 +32,6 @@
     "optional_host_permissions": [
         "https://*/*"
     ],
-    "externally_connectable": {
-        "matches": [
-            "http://localhost:5173/*"
-        ]
-    },
     "background": {
         "service_worker": "src/background/index.js",
         "type": "module"

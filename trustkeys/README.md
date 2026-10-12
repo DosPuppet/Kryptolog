@@ -151,19 +151,45 @@ Get the active account's public keys.
 const account = await window.trustkeys.getAccount();
 // Returns {
 //   name: "My PQC Key",
-//   kyberPublicKey: "hex...",
-//   dilithiumPublicKey: "hex..."
+//   mlkemPublicKey: "hex...",   // ML-KEM-768 encryption key
+//   mldsaPublicKey: "hex..."    // ML-DSA-44 identity key (= the Kryptolog address)
 // }
 ```
 
 ### Digital Signatures (ML-DSA)
 
 #### `sign(message)`
-Sign a message using the active account's ML-DSA-44 private key.
+Sign a document with the active account's ML-DSA-44 private key. Accepts a
+Kryptolog `content`-context body (a signed document, whose text the approval
+window shows) or text that is not a Kryptolog body at all. **Refuses every other
+Kryptolog context** — login, key attestation, multisig approval, account
+deletion, chat message — which have their own typed calls below, so a site can
+never get one of them signed by passing it as a string (crypto-core 3.0.0).
 ```javascript
-const signature = await window.trustkeys.sign("Login Nonce: 12345");
-// Triggers Approval Popup. Returns hex-encoded signature.
+const signature = await window.trustkeys.sign(contentDomainBody);
+// Triggers Approval Popup. Returns a base64 signature.
 ```
+
+#### `signLogin({ nonce, deployment })`
+Sign a Kryptolog login challenge for **this page's own origin**. TrustKeys builds
+the body itself, with the origin the browser attaches to the request and the
+active account's encryption key, so a site can only ever sign in to itself.
+```javascript
+const { nonce, deployment } = await (await fetch(`${API}/auth/nonce/${address}`)).json();
+const signature = await window.trustkeys.signLogin({ nonce, deployment });
+// Approval window: "Sign in to Kryptolog at <origin>". Returns a base64 signature.
+```
+
+#### `getKeyAttestation()`
+The active account's self-signed ML-KEM key attestation. No popup: the signed
+message is fixed and names nothing the page chose.
+
+#### `signAccountDeletion({ nonce, mode, redactionKeys, deployment })`
+Authorize deleting the account on this origin. `mode` is `"leave"` or `"erase"`;
+the window states which, and how many messages an erase redacts.
+
+#### `signMultisigApproval({ workflowId, secretId, ciphertextSha256 })`
+Approve a multisig workflow; the window names the workflow.
 
 #### `verify(message, signature, publicKey)`
 Verify an ML-DSA-44 signature against a public key.
@@ -177,11 +203,11 @@ Sign a **chat message** with the active account's ML-DSA-44 key. Unlike `sign()`
 this can sign **without** a per-message popup — but only for payloads in the
 `message` domain (the call is refused otherwise), and only if the user enabled
 "Allow silent message signing" for the site (default off; dev origins always
-allowed). For sites without that capability it falls back to a per-message
-approval popup.
+allowed in development builds only). For sites without that capability it
+falls back to a per-message approval popup.
 ```javascript
 const signature = await window.trustkeys.signMessage(messageDomainPayload);
-// Returns hex-encoded signature. (Used by the messenger to authenticate messages.)
+// Returns a base64 signature. (Used by the messenger to authenticate messages.)
 ```
 
 ### Encryption (ML-KEM + AES)
@@ -189,7 +215,7 @@ const signature = await window.trustkeys.signMessage(messageDomainPayload);
 #### `encrypt(message, [publicKey])`
 Encrypt data. If `publicKey` is omitted, encrypts for the active account (self).
 ```javascript
-const encrypted = await window.trustkeys.encrypt("My Secret", recipientKyberKey);
+const encrypted = await window.trustkeys.encrypt("My Secret", recipientMlKemKey);
 // Returns ciphertext object.
 ```
 
@@ -210,14 +236,14 @@ const key = await window.trustkeys.generateSessionKey();
 ```
 
 #### `wrapSessionKey(sessionKey, publicKey)`
-Encrypt a session key for a specific recipient using their Kyber public key.
+Encrypt a session key for a specific recipient using their ML-KEM public key.
 ```javascript
-const wrapped = await window.trustkeys.wrapSessionKey(sessionKey, recipientKyberKey);
+const wrapped = await window.trustkeys.wrapSessionKey(sessionKey, recipientMlKemKey);
 // Returns encrypted blob.
 ```
 
 #### `unwrapSessionKey(wrappedKey)`
-Decrypt a session key using your private Kyber key.
+Decrypt a session key using your private ML-KEM key.
 ```javascript
 const sessionKey = await window.trustkeys.unwrapSessionKey(wrappedBlob);
 // Triggers Approval Popup. Returns sessionKey (hex).
@@ -239,7 +265,7 @@ const keys = await window.trustkeys.unwrapManySessionKeys([blob1, blob2, blob3])
   - **Plain JSON**: unencrypted private keys — **store securely**.
   (Export is scoped to the active account: extension account ids are random UUIDs, so a multi-account export would lose the active selection on import.)
 - **Import Keys**: Settings > Import Keys (JSON). Restores accounts from a plaintext JSON backup. Merges new accounts into the existing vault.
-- **Manage Trusted Sites**: Settings > Manage Trusted Sites. View/add/remove authorized origins and toggle each site's "Allow silent message signing" capability. Dev defaults (localhost, 127.0.0.1) cannot be removed.
+- **Manage Trusted Sites**: Settings > Manage Trusted Sites. View/add/remove authorized origins and toggle each site's "Allow silent message signing" capability. In a development build (`npm run build:dev`) localhost and 127.0.0.1 are trusted by default; a production build injects into no page until you add it here.
 
 ---
 

@@ -70,10 +70,17 @@ chrome.windows.onRemoved.addListener(handleWindowClosed);
 //               approval), so the wrapper must not send anything itself.
 const HANDLERS = {
     // --- Security ---
+    // The four vault-control types are extension-pages-only (audit 2026-09-23
+    // F-4). The content-script relay never forwards them, but that relay is one
+    // file away from changing, and a compromised renderer can forge content
+    // script messages: from a page sender, UNLOCK was a password oracle that
+    // also unlocked, and LOCK a denial of service.
     GET_STATUS: {
+        internal: true,
         fn: () => ({ success: true, isLocked: state.isLocked, hasPassword: state.hasPassword }),
     },
     SETUP_PASSWORD: {
+        internal: true,
         fn: async ({ request }) => {
             await auth.setupPassword(request.password);
             await auth.unlockWithSession(request.password);
@@ -81,6 +88,7 @@ const HANDLERS = {
         },
     },
     UNLOCK: {
+        internal: true,
         fn: async ({ request }) => {
             const success = await auth.unlockWithSession(request.password);
             if (success) await conn.syncDynamicScripts();
@@ -88,6 +96,7 @@ const HANDLERS = {
         },
     },
     LOCK: {
+        internal: true,
         fn: async () => {
             await auth.lockWithSession();
             return { success: true };
@@ -225,6 +234,23 @@ const HANDLERS = {
         raw: true,
         fn: ({ request, sender, sendResponse }) => crypto.handleSignAsync(request, sender, sendResponse),
     },
+    // Typed signatures (crypto-core 3.0.0, audit 2026-10-12 K-03): the body is
+    // built in the extension from these fields, with the sender's origin, and
+    // the approval window describes it in words. sign() refuses these contexts.
+    SIGN_LOGIN: {
+        raw: true,
+        fn: ({ request, sender, sendResponse }) => crypto.handleSignLoginAsync(request, sender, sendResponse),
+    },
+    SIGN_ACCOUNT_DELETION: {
+        raw: true,
+        fn: ({ request, sender, sendResponse }) =>
+            crypto.handleSignAccountDeletionAsync(request, sender, sendResponse),
+    },
+    SIGN_MULTISIG_APPROVAL: {
+        raw: true,
+        fn: ({ request, sender, sendResponse }) =>
+            crypto.handleSignMultisigApprovalAsync(request, sender, sendResponse),
+    },
     SIGN_MESSAGE: {
         raw: true,
         // Silent, domain-restricted chat-message signing (audit S1).
@@ -319,21 +345,8 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     return true; // Keep channel open
 });
 
-// External Message Handler
-chrome.runtime.onMessageExternal.addListener((request, sender, sendResponse) => {
-    (async () => {
-        try {
-            switch (request.type) {
-                case 'CHECK_CONNECTION':
-                    sendResponse({ success: true, connected: true, version: '1.0.0' });
-                    break;
-                default:
-                    sendResponse({ success: false, error: 'Unknown external message type' });
-            }
-        } catch (error) {
-            console.error('External background error:', error);
-            sendResponse({ success: false, error: error.message });
-        }
-    })();
-    return true;
-});
+// No onMessageExternal handler (audit 2026-09-11 Q-3). It answered
+// CHECK_CONNECTION with `connected: true` and a hard-coded version to any page
+// matching `externally_connectable` — an extension-presence oracle with no
+// caller anywhere in this repository. The manifest no longer declares
+// `externally_connectable`, so no page can address the extension directly.

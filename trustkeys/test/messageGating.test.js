@@ -27,6 +27,12 @@ const INTERNAL_ONLY = [
     { type: 'EXPORT_KEYS', password: 'guess' },
     { type: 'EXPORT_KEYS_ENCRYPTED', password: 'guess', passphrase: 'p' },
     { type: 'IMPORT_KEYS', accounts: [] },
+    // Vault control (audit 2026-09-23 F-4): from a page, UNLOCK was a password
+    // oracle that also unlocked, and LOCK a denial of service.
+    { type: 'GET_STATUS' },
+    { type: 'SETUP_PASSWORD', password: 'correct horse battery staple' },
+    { type: 'UNLOCK', password: 'guess' },
+    { type: 'LOCK' },
 ];
 
 describe('internal-only handlers reject external senders', () => {

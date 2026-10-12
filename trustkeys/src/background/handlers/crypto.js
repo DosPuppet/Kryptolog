@@ -1,14 +1,58 @@
-import { signMessage, encryptMessage, decryptMessage, verifySignature, generateSessionKey, wrapSessionKey, unwrapSessionKey, attestEncryptionKey, MESSAGE_SIGNING_PREFIX } from '../../utils/crypto.js';
+import {
+    signMessage, encryptMessage, decryptMessage, verifySignature, generateSessionKey, wrapSessionKey,
+    unwrapSessionKey, attestEncryptionKey, MESSAGE_SIGNING_PREFIX, SIGNING_CONTEXT, domainSeparate,
+    loginChallengeBody, accountDeletionBody, multisigApprovalMessage,
+} from '../../utils/crypto.js';
 import { state, requireUnlocked, requireActiveAccount, activeAccount, requireConnectedOrigin } from '../state.js';
 import { isInternalSender, getSenderOrigin, isDevOrigin } from '../utils.js';
 import { requestApproval } from '../approvals.js';
 
+// --- What a PAGE may ask TrustKeys to sign (audit 2026-10-12 K-03) ---
+//
+// The generic SIGN used to sign any string a connected site sent, so domain
+// separation protected nothing: a site could hand over a Kryptolog LOGIN
+// challenge, a key attestation or an account deletion and get it signed, the
+// approval window showing a raw body no person reads. Now the reserved bodies
+// are built HERE, from typed fields, with the origin Chrome attaches to the
+// sender — never one the page claims — and shown in words. The generic SIGN
+// keeps one Kryptolog context, `content` (a signed document, whose text is what
+// the window shows), plus non-Kryptolog text, which no Kryptolog verifier
+// accepts as anything.
+const CONTEXT_PREFIX = domainSeparate('', '').replace(/\n$/, ''); // "...v1\ncontext="
+const contextOf = (message) => {
+    if (typeof message !== 'string' || !message.startsWith(CONTEXT_PREFIX)) return null;
+    return message.slice(CONTEXT_PREFIX.length).split('\n', 1)[0];
+};
+
+/**
+ * Ask the user to approve signing `body` for the connected site that sent the
+ * request, then sign it with the active account. `kind` and `details` are what
+ * the window shows instead of the raw body.
+ */
+const requestSignature = async ({ sender, sendResponse, kind, details, body }) => {
+    const origin = getSenderOrigin(sender);
+    requireConnectedOrigin(origin);
+    const account = requireActiveAccount();
+
+    await requestApproval({
+        type: 'SIGN',
+        origin,
+        data: { origin, kind, details, account: account.name, message: body },
+        route: 'sign',
+        onApprove: async () => {
+            const active = activeAccount();
+            if (!active) return sendResponse({ success: false, error: "No active account" });
+            const signature = await signMessage(body, active.mldsa.privateKey);
+            sendResponse({ success: true, signature });
+        },
+        onReject: (err) => sendResponse({ success: false, error: err }),
+    });
+};
+
 export const handleSignAsync = async (request, sender, sendResponse) => {
     requireUnlocked();
 
-    // Check Internal vs External
     if (isInternalSender(sender)) {
-        // Internal Dashboard
         const account = requireActiveAccount();
 
         const signature = await signMessage(request.message, account.mldsa.privateKey);
@@ -16,34 +60,78 @@ export const handleSignAsync = async (request, sender, sendResponse) => {
         return;
     }
 
-    // External — authorize on Chrome's sender.origin only (audit M4).
-    const checkOrigin = getSenderOrigin(sender);
-    requireConnectedOrigin(checkOrigin);
+    const context = contextOf(request.message);
+    if (context !== null && context !== SIGNING_CONTEXT.CONTENT) {
+        return sendResponse({
+            success: false,
+            error: `TrustKeys does not sign "${context}" bodies through sign(); use the dedicated API`,
+        });
+    }
 
-    await requestApproval({
-        type: 'SIGN',
-        origin: checkOrigin,
-        data: { origin: checkOrigin, message: request.message },
-        route: 'sign',
-        onApprove: async () => {
-            const account = activeAccount();
-            if (!account) return sendResponse({ success: false, error: "No active account" });
-            const signature = await signMessage(request.message, account.mldsa.privateKey);
-            sendResponse({ success: true, signature });
-        },
-        onReject: (err) => sendResponse({ success: false, error: err }),
+    await requestSignature({
+        sender,
+        sendResponse,
+        kind: context === null ? 'text' : 'content',
+        // The document text, without the domain header the person never typed.
+        details: context === null ? {} : { text: request.message.slice(CONTEXT_PREFIX.length + context.length + 1) },
+        body: request.message,
     });
 };
 
-// Silent message signing (audit S1). Unlike handleSignAsync (which pops an
-// approval for external sites), this can auto-sign WITHOUT a popup so chat is
-// usable — but with two boundaries:
-//   1. Domain: ONLY payloads in the `message` context (prefix check), so a site
-//      can never use this to mint a login / multisig / content signature.
-//   2. Per-site capability: silent signing is only granted to sites the user
-//      explicitly trusted for it (autoSignSites), plus dev origins. For other
-//      connected sites we fall back to a per-message approval popup, so trusting
-//      a site for connection alone does NOT grant silent signing-as-you.
+// A Kryptolog login for the site asking, built here (K-02, K-03). The origin is
+// the one Chrome attaches to the sender, so a page cannot obtain a login for
+// another site; the encryption key is the active account's own.
+export const handleSignLoginAsync = async (request, sender, sendResponse) => {
+    requireUnlocked();
+    const account = requireActiveAccount();
+    const body = loginChallengeBody({
+        nonce: request.nonce,
+        origin: getSenderOrigin(sender),
+        deployment: request.deployment,
+        encryptionKey: account.mlkem.publicKey,
+    });
+    await requestSignature({
+        sender, sendResponse, kind: 'login', details: { deployment: request.deployment }, body,
+    });
+};
+
+const REDACTION_KEY = /^(dm|group):[0-9]{1,20}$/;
+const MAX_REDACTIONS = 1000;
+
+export const handleSignAccountDeletionAsync = async (request, sender, sendResponse) => {
+    requireUnlocked();
+    const keys = request.redactionKeys ?? [];
+    if (!Array.isArray(keys) || keys.length > MAX_REDACTIONS || !keys.every((k) => REDACTION_KEY.test(k))) {
+        throw new Error("Invalid redaction list");
+    }
+    const body = await accountDeletionBody({
+        nonce: request.nonce,
+        mode: request.mode,
+        redactionKeys: keys,
+        origin: getSenderOrigin(sender),
+        deployment: request.deployment,
+    });
+    await requestSignature({
+        sender, sendResponse, kind: 'account-deletion',
+        details: { mode: request.mode, redactions: keys.length, deployment: request.deployment },
+        body,
+    });
+};
+
+export const handleSignMultisigApprovalAsync = async (request, sender, sendResponse) => {
+    requireUnlocked();
+    const { workflowId, secretId, ciphertextSha256 } = request;
+    if (!Number.isSafeInteger(workflowId) || !Number.isSafeInteger(secretId) ||
+        typeof ciphertextSha256 !== 'string' || !/^[0-9a-f]{64}$/.test(ciphertextSha256)) {
+        throw new Error("Invalid workflow approval request");
+    }
+    await requestSignature({
+        sender, sendResponse, kind: 'multisig-approval',
+        details: { workflowId, secretId, ciphertextSha256 },
+        body: multisigApprovalMessage(workflowId, secretId, ciphertextSha256),
+    });
+};
+
 export const handleSignMessage = async (request, sender, sendResponse) => {
     requireUnlocked();
 
@@ -70,7 +158,10 @@ export const handleSignMessage = async (request, sender, sendResponse) => {
     const silentAllowed = internal || devAutoSign || !!(state.vault.autoSignSites && state.vault.autoSignSites[origin]);
     if (!silentAllowed) {
         // No silent-signing grant for this site → require per-message approval.
-        return handleSignAsync(request, sender, sendResponse);
+        // Not handleSignAsync: that refuses `message` bodies from pages, which
+        // is right for the generic API and wrong here, where the body has
+        // already been checked to be a chat message.
+        return requestSignature({ sender, sendResponse, kind: 'message', details: {}, body: message });
     }
 
     const account = activeAccount();
@@ -137,7 +228,7 @@ export const handleDecryptAsync = async (request, sender, sendResponse) => {
     await requestApproval({
         type: 'DECRYPT',
         origin: checkOrigin,
-        data: { origin: checkOrigin },
+        data: { origin: checkOrigin, kind: 'data', count: 1 },
         route: 'decrypt',
         onApprove: async () => {
             const account = activeAccount();
@@ -157,7 +248,7 @@ export const handleUnwrapSessionKeyAsync = async (request, sender, sendResponse)
     await requestApproval({
         type: 'DECRYPT',
         origin: checkOrigin,
-        data: { origin: checkOrigin },
+        data: { origin: checkOrigin, kind: 'session-keys', count: 1 },
         route: 'decrypt',
         onApprove: async () => {
             const account = activeAccount();
@@ -187,7 +278,7 @@ export const handleDecryptManyAsync = async (request, sender, sendResponse) => {
     await requestApproval({
         type: 'DECRYPT',
         origin: checkOrigin,
-        data: { origin: checkOrigin, count: request.items?.length },
+        data: { origin: checkOrigin, kind: 'data', count: request.items?.length },
         route: 'decrypt',
         onApprove: async () => {
             const account = activeAccount();
@@ -222,7 +313,7 @@ export const handleUnwrapManySessionKeysAsync = async (request, sender, sendResp
     await requestApproval({
         type: 'DECRYPT',
         origin: checkOrigin,
-        data: { origin: checkOrigin, count: request.wrappedKeys?.length },
+        data: { origin: checkOrigin, kind: 'session-keys', count: request.wrappedKeys?.length },
         route: 'decrypt',
         onApprove: async () => {
             const account = activeAccount();

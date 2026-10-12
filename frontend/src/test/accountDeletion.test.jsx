@@ -515,6 +515,11 @@ describe('an erase performed with the keys in the extension', () => {
                 name: 'ext-user',
             })),
             sign: vi.fn(async () => 'extension-signature'),
+            signLogin: vi.fn(async () => 'extension-signature'),
+            getKeyAttestation: vi.fn(async () => 'extension-attestation'),
+            // The deletion goes through the typed API now (crypto-core 3.0.0):
+            // the extension builds the body itself (audit 2026-10-12 K-03).
+            signAccountDeletion: vi.fn(async () => 'extension-signature'),
             signMessage: vi.fn(async () => 'extension-signature'),
         };
         // What vault.js answers while locked: no active account, no accounts.
@@ -541,8 +546,10 @@ describe('an erase performed with the keys in the extension', () => {
         await mountWithExtension();
         await withPasswordPrompts(() => api.deleteServerAccount('erase', { forgetVault: true }));
 
-        // The extension really was custody for this erase...
-        expect(window.trustkeys.sign).toHaveBeenCalled();
+        // The extension really was custody for this erase — through its typed
+        // deletion API, never the generic sign() (audit 2026-10-12 K-03)...
+        expect(window.trustkeys.signAccountDeletion).toHaveBeenCalled();
+        expect(window.trustkeys.sign).not.toHaveBeenCalled();
         expect(vault.sign).not.toHaveBeenCalled();
         // ...so nothing on this device belonged to the erased identity.
         expect(vault.wipeVault).not.toHaveBeenCalled();

@@ -150,8 +150,20 @@ export const getSenderOrigin = (sender) => (sender && sender.origin) ? sender.or
 // Dev origins: served over http on localhost and covered by the STATIC manifest
 // content_scripts, so they need no optional host permission and are exempt from
 // the HTTPS-only rule for user-added trusted sites.
-export const isDevOrigin = (origin) =>
-    !!origin && (origin.startsWith('http://localhost') || origin.startsWith('http://127.0.0.1'));
+//
+// Parsed, not prefix-matched: `http://localhost.example.com` starts with
+// `http://localhost` and is not a dev origin (audit 2026-10-12, extension
+// section). Harmless while no script was injected there, which is not a
+// property worth relying on.
+export const isDevOrigin = (origin) => {
+    if (typeof origin !== 'string') return false;
+    try {
+        const url = new URL(origin);
+        return url.protocol === 'http:' && (url.hostname === 'localhost' || url.hostname === '127.0.0.1');
+    } catch {
+        return false;
+    }
+};
 
 // A production trusted site must be HTTPS (a network attacker could inject script
 // into a plain-http origin and inherit its access to the user's keys).

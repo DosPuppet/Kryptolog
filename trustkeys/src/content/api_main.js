@@ -35,6 +35,23 @@
         sign: async (message) => {
             return postMessagePromise({ type: 'TRUSTKEYS_SIGN', message });
         },
+        // Typed signatures (crypto-core 3.0.0, audit 2026-10-12 K-03). sign()
+        // refuses login, deletion and approval bodies; these take the fields,
+        // and TrustKeys builds the body with the origin the BROWSER reports
+        // for this page, so a site can only ever sign in to itself.
+        signLogin: async ({ nonce, deployment }) => {
+            return postMessagePromise({ type: 'TRUSTKEYS_SIGN_LOGIN', nonce, deployment });
+        },
+        signAccountDeletion: async ({ nonce, mode, redactionKeys, deployment }) => {
+            return postMessagePromise({
+                type: 'TRUSTKEYS_SIGN_ACCOUNT_DELETION', nonce, mode, redactionKeys, deployment,
+            });
+        },
+        signMultisigApproval: async ({ workflowId, secretId, ciphertextSha256 }) => {
+            return postMessagePromise({
+                type: 'TRUSTKEYS_SIGN_MULTISIG_APPROVAL', workflowId, secretId, ciphertextSha256,
+            });
+        },
         // Self-signed binding of the active account's ML-KEM key to its identity
         // (audit M-1). Popup-free: the signed message is fixed and self-referential —
         // the page supplies nothing.

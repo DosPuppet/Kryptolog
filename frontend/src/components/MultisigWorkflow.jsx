@@ -13,7 +13,7 @@ import { apiFetch } from '../services/api';
 
 export default function MultisigWorkflow({ workflow: listWorkflow, onClose, onUpdate, onDelete, setUploadProgress, setStatusMessage }) {
     const { user, token } = useAuth();
-    const { encrypt: encryptPQC, decrypt: decryptPQC, sign: signPQC } = usePQC();
+    const { encrypt: encryptPQC, decrypt: decryptPQC, signApproval } = usePQC();
 
     // The workflow list no longer carries its secret's ciphertext (audit O-3),
     // so this modal — the only place that needs it — fetches the full workflow
@@ -139,7 +139,7 @@ export default function MultisigWorkflow({ workflow: listWorkflow, onClose, onUp
 
         try {
             const updatedWf = await signMultisigWorkflow({
-                workflow, user, token, decryptPQC, signPQC, encryptPQC, onProgress
+                workflow, user, token, decryptPQC, signApproval, encryptPQC, onProgress
             });
             onUpdate(updatedWf);
             // /sign returns the full workflow, so this keeps the open modal on

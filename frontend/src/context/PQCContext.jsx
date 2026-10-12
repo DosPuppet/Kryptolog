@@ -2,7 +2,7 @@ import { createContext, useContext, useState, useEffect, useRef } from 'react';
 import API_ENDPOINTS from '../config';
 import { useAuth } from './AuthContext';
 import { vaultService } from '../services/vault';
-import { loginChallengeBody, encryptionKeyAttestationBody, messageSigningBody, accountDeletionBody } from '../utils/crypto';
+import { loginChallengeBody, encryptionKeyAttestationBody, messageSigningBody, accountDeletionBody, multisigApprovalMessage } from '../utils/crypto';
 import { toast } from '../utils/toast';
 import { apiFetch } from '../services/api';
 import { PAGE_SIZE as MANIFEST_PAGE, pageUrl } from '../utils/paging';
@@ -144,7 +144,12 @@ export const PQCProvider = ({ children }) => {
         setModalConfig({ ...modalConfig, isOpen: false, resolve: null, reject: null });
     };
 
-    const performServerLogin = async (accountId, encryptionKey, signFn, username = null, inviteCode = null, attestFn = null) => {
+    // `signLogin({ nonce, origin, deployment, encryptionKey })` returns the login
+    // signature, `attestFn()` the key attestation. Not "sign this string": the
+    // extension no longer signs a login body a page hands it (audit 2026-10-12
+    // K-03) — it builds the body itself, with the origin the BROWSER reports,
+    // so a page cannot obtain a login meant for another site.
+    const performServerLogin = async (accountId, encryptionKey, signLogin, username = null, inviteCode = null, attestFn = null) => {
         // 1. Get Nonce
         const nonceRes = await fetch(API_ENDPOINTS.AUTH.NONCE(accountId));
         if (!nonceRes.ok) throw new Error("Failed to fetch nonce");
@@ -160,8 +165,7 @@ export const PQCProvider = ({ children }) => {
         //    operation can never produce these bytes. Built by crypto-core, not
         //    spelled out here: this is the one string the server must agree with
         //    byte for byte, and a second copy of it cannot be kept honest.
-        const message = loginChallengeBody({ nonce, origin, deployment, encryptionKey });
-        const signature = await signFn(message);
+        const signature = await signLogin({ nonce, origin, deployment, encryptionKey });
 
         // 2b. Key attestation (audit M-1): self-sign our own ML-KEM key so peers
         //     can verify the directory's key binding against our address.
@@ -171,9 +175,8 @@ export const PQCProvider = ({ children }) => {
         //     is the shape a key substitution takes.
         let attestation = null;
         if (encryptionKey) {
-            attestation = attestFn
-                ? await attestFn()
-                : await signFn(encryptionKeyAttestationBody(encryptionKey));
+            if (!attestFn) throw new Error("This custody path cannot attest its encryption key.");
+            attestation = await attestFn();
         }
 
         // 3. Verify on Backend
@@ -215,6 +218,13 @@ export const PQCProvider = ({ children }) => {
         }
     };
 
+    // The local vault signs the bodies this page builds — here the page IS the
+    // origin, and window.location.origin is the truth about it.
+    const vaultSignLogin = (password) =>
+        (args) => vaultService.sign(loginChallengeBody(args), password);
+    const vaultAttest = (password, encryptionKey) =>
+        () => vaultService.sign(encryptionKeyAttestationBody(encryptionKey), password);
+
     const loginTrustKeys = async (inviteCode = null) => {
         if (!window.trustkeys) {
             throw new Error("Extension not found");
@@ -238,13 +248,18 @@ export const PQCProvider = ({ children }) => {
 
         // inviteCode is only consulted server-side when this is a new identity and
         // invites are required (audit §5); harmless otherwise.
-        // Attestation comes from the dedicated popup-free extension API (it signs
-        // a fixed, self-referential message — nothing site-controlled). An older
-        // extension without it logs in fine, just without an attestation.
-        const attestFn = window.trustkeys.getKeyAttestation
-            ? () => window.trustkeys.getKeyAttestation()
-            : () => null;
-        return performServerLogin(accountId, encryptionKey, (msg) => window.trustkeys.sign(msg), tkAccount.name, inviteCode, attestFn);
+        // Both through dedicated extension APIs (crypto-core 3.0.0): the login
+        // body is built inside TrustKeys with the browser-attested origin, and
+        // the attestation signs a fixed, self-referential message. No fallback
+        // to the generic sign(): it refuses login bodies now (K-03).
+        return performServerLogin(
+            accountId,
+            encryptionKey,
+            ({ nonce, deployment }) => window.trustkeys.signLogin({ nonce, deployment }),
+            tkAccount.name,
+            inviteCode,
+            () => window.trustkeys.getKeyAttestation(),
+        );
     };
 
     // `inviteCode` is not dead weight on an unlock path: the vault is written to
@@ -264,7 +279,7 @@ export const PQCProvider = ({ children }) => {
         setMlkemKey(encryptionKey);
 
         // Pass known password
-        return performServerLogin(accountId, encryptionKey, (msg) => vaultService.sign(msg, password), account.name, inviteCode);
+        return performServerLogin(accountId, encryptionKey, vaultSignLogin(password), account.name, inviteCode, vaultAttest(password, encryptionKey));
     };
 
     const createLocalVault = async (name, password, inviteCode = null) => {
@@ -277,7 +292,7 @@ export const PQCProvider = ({ children }) => {
         setPqcAccount(accountId);
         setMlkemKey(encryptionKey);
 
-        return performServerLogin(accountId, encryptionKey, (msg) => vaultService.sign(msg, password), name, inviteCode);
+        return performServerLogin(accountId, encryptionKey, vaultSignLogin(password), name, inviteCode, vaultAttest(password, encryptionKey));
     };
 
     const importLocalVault = async (json, password, inviteCode = null) => {
@@ -290,7 +305,7 @@ export const PQCProvider = ({ children }) => {
         setPqcAccount(accountId);
         setMlkemKey(encryptionKey);
 
-        return performServerLogin(accountId, encryptionKey, (msg) => vaultService.sign(msg, password), account.name, inviteCode);
+        return performServerLogin(accountId, encryptionKey, vaultSignLogin(password), account.name, inviteCode, vaultAttest(password, encryptionKey));
     };
 
     // --- Device-to-device transfer ---
@@ -408,23 +423,36 @@ export const PQCProvider = ({ children }) => {
     //
     // Nothing to do for the extension: its approval window is not skippable,
     // which is why account deletion carries its own signing context in the
-    // first place.
+    // first place. It builds the body itself from these fields, with the
+    // browser-attested origin, and shows the mode and the redaction count in
+    // words instead of a raw body (audit 2026-10-12 K-03).
     const signDeletion = withCustody(
-        (message) => window.trustkeys.sign(message),
-        (password, message) => vaultService.sign(message, password),
+        ({ nonce, mode, redactionKeys, deployment }) =>
+            window.trustkeys.signAccountDeletion({ nonce, mode, redactionKeys, deployment }),
+        async (password, args) => vaultService.sign(await accountDeletionBody(args), password),
         "Enter your vault password to confirm deleting this account:",
         { forcePrompt: true }
+    );
+
+    // Approving a multisig workflow: the extension builds the approval body and
+    // names the workflow in its window rather than showing a hash in context
+    // (K-03); the vault signs the same bytes here.
+    const signApproval = withCustody(
+        ({ workflowId, secretId, ciphertextSha256 }) =>
+            window.trustkeys.signMultisigApproval({ workflowId, secretId, ciphertextSha256 }),
+        (password, { workflowId, secretId, ciphertextSha256 }) =>
+            vaultService.sign(multisigApprovalMessage(workflowId, secretId, ciphertextSha256), password),
+        "Enter password to approve this workflow:",
     );
 
     // Sign a chat message (audit S1). Distinct from sign() so it can stay SILENT
     // per message: the extension auto-signs message-domain payloads, and the
     // local vault caches the signing key after a single unlock this session.
     const signMessage = withCustody(
-        (body) => window.trustkeys.signMessage
-            ? window.trustkeys.signMessage(body)
-            // Older extensions without the silent path fall back to sign(),
-            // which pops a popup per message but stays functional.
-            : window.trustkeys.sign(body),
+        // No fallback to sign() for an extension without signMessage: since
+        // crypto-core 3.0.0 sign() refuses `message` bodies (audit 2026-10-12
+        // K-03), and the cutover ships both sides together.
+        (body) => window.trustkeys.signMessage(body),
         (password, body) => vaultService.signMessage(body, password),
         // Skipped once the key is cached, which is what keeps this silent.
         () => vaultService.hasCachedSigningKey()
@@ -647,11 +675,9 @@ export const PQCProvider = ({ children }) => {
         // context, so the extension shows an approval window instead of
         // auto-signing it — and the vault asks for the password even when a
         // derived key is cached.
-        const signature = await signDeletion(
-            await accountDeletionBody({
-                nonce, mode, redactionKeys: redactions.map((r) => r.key), origin, deployment,
-            })
-        );
+        const signature = await signDeletion({
+            nonce, mode, redactionKeys: redactions.map((r) => r.key), origin, deployment,
+        });
 
         const res = await apiFetch(API_ENDPOINTS.ACCOUNT.DELETE, token, {
             method: 'POST',
@@ -774,6 +800,7 @@ export const PQCProvider = ({ children }) => {
             decrypt,
             decryptMany,
             sign,
+            signApproval,
             signMessage,
             getVaultAccounts,
             addVaultAccount,
@@ -837,7 +864,7 @@ export const PQCProvider = ({ children }) => {
 
                 // performServerLogin needs a signing function and vaultService.sign
                 // needs the password, so the one we already hold signs the challenge.
-                return performServerLogin(accountId, encryptionKey, (msg) => vaultService.sign(msg, password), account.name);
+                return performServerLogin(accountId, encryptionKey, vaultSignLogin(password), account.name, null, vaultAttest(password, encryptionKey));
             },
             hasBiometrics: () => biometricsEnabled
         }}>

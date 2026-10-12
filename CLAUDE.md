@@ -1212,8 +1212,8 @@ single crypto-core **3.0.0** cutover (lots 4–6); hybridization is a later **4.
 | 1 | Supply chain: hashed lock Dependabot can regenerate, pinned liboqs, npm advisories | P0 | done — `bd12c2b` |
 | 2 | Default deployment posture (exposed services, proxy headers, docs, body limit) | P0 | done — `915615d` |
 | 3 | Quotas and input bounds | P0 | done — `c159a8a` |
-| 4 | Protocol cutover, crypto-core 3.0.0 | P1 | done |
-| 5 | TrustKeys custody (ships with 4) | P1 | |
+| 4 | Protocol cutover, crypto-core 3.0.0 | P1 | done — `687a196` |
+| 5 | TrustKeys custody (ships with 4) | P1 | done |
 | 6 | Web client trust UX | P1 | |
 | 7 | Authorization, directory, data integrity | P1 | |
 | 8 | Realtime and push availability | P1 | |
@@ -1391,3 +1391,41 @@ extension vaults must be recreated too.
 - The shared fixture was regenerated from `auth.py` deliberately, JS agreed byte
   for byte, and its new `keysh` literal is allowlisted in `.gitleaks.toml` (the
   2.x one stays, history still holds it).
+
+### Lot 5 — TrustKeys custody
+
+Closes K-03, 2026-09-23 F-4, the `isDevOrigin` prefix bug, 2026-09-11 F-6 and
+Q-3. Ships with lot 4: the SPA and the extension must be deployed together.
+
+- **`sign()` refuses every Kryptolog context but `content`** from a page (and
+  signs non-Kryptolog text, which no Kryptolog verifier accepts as anything).
+  Login, account deletion and multisig approval have typed calls —
+  `signLogin({nonce, deployment})`, `signAccountDeletion({...})`,
+  `signMultisigApproval({...})` — and **the extension builds those bodies itself**:
+  the origin is Chrome's `sender.origin`, never a page field, and the login's
+  encryption key is the active account's. So a connected site can only ever sign
+  in to itself, which is the extension half of K-02. Extension pages (internal
+  senders) still sign anything, as before.
+- **The approval window describes the request in words** (`kind` + `details`:
+  "Sign in to Kryptolog at …", "Permanently ERASE this account… N messages will
+  be redacted", the workflow number), with the exact bytes behind a disclosure.
+  The decrypt window says how many items and whether they are conversation keys.
+- **`SIGN_MESSAGE` without a silent grant asks as a chat message** through the
+  same approval helper — not via `handleSignAsync`, which would now refuse it.
+  The SPA's `signMessage` lost its fallback to `sign()` for the same reason.
+- **`UNLOCK`, `LOCK`, `SETUP_PASSWORD`, `GET_STATUS` are internal-only**
+  (2026-09-23 F-4), enumerated in `messageGating.test.js`.
+- `isDevOrigin` parses the URL: `http://localhost.evil.example` is not dev.
+- **The production manifest injects into no page statically**
+  (`manifest.config.js`): the localhost content scripts keep their entries, so
+  crxjs still builds them and `connection.js` still finds the built names for
+  trusted sites, but production points their `matches` at a reserved `.invalid`
+  host. The cleaner route — `?script&iife` imports, dynamic registration only —
+  changes how crxjs bundles the scripts and **needs a real browser to verify**;
+  worth doing alongside the browser E2E of lot 10. `externally_connectable` and
+  the `onMessageExternal` handler are gone from every build (no caller existed).
+- **Not verified in a browser.** Everything above is covered by the vitest
+  harness and both builds were inspected, but the approval windows' rendering
+  and the production manifest's behaviour in Chrome want a manual pass:
+  build with `npm run build` (production) for that check, and `build:dev` for
+  the E2E recipe as before.

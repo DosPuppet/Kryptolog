@@ -103,10 +103,23 @@ describe('with the extension present', () => {
         expect(window.trustkeys.unwrapSessionKey).toHaveBeenCalledTimes(2);
     });
 
-    it('falls back to sign() when the extension has no silent signMessage', async () => {
+    it('signs chat messages only through signMessage, never the generic sign()', async () => {
+        // sign() refuses message bodies since crypto-core 3.0.0 (K-03).
+        window.trustkeys.signMessage = vi.fn(async () => 'ext-message-signature');
         mount();
-        await expect(api.signMessage('body')).resolves.toBe('ext-signature');
-        expect(window.trustkeys.sign).toHaveBeenCalledWith('body');
+        await expect(api.signMessage('body')).resolves.toBe('ext-message-signature');
+        expect(window.trustkeys.sign).not.toHaveBeenCalled();
+    });
+
+    it('approves a workflow through the typed API, with fields and not a body', async () => {
+        // The extension builds the approval body itself and names the
+        // workflow in its window (audit 2026-10-12 K-03).
+        window.trustkeys.signMultisigApproval = vi.fn(async () => 'ext-approval');
+        mount();
+        const fields = { workflowId: 7, secretId: 42, ciphertextSha256: 'ab'.repeat(32) };
+        await expect(api.signApproval(fields)).resolves.toBe('ext-approval');
+        expect(window.trustkeys.signMultisigApproval).toHaveBeenCalledWith(fields);
+        expect(window.trustkeys.sign).not.toHaveBeenCalled();
     });
 
     it('keeps the rest of a batch when one item fails to decrypt', async () => {

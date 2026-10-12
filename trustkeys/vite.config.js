@@ -1,7 +1,7 @@
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 import { crx } from '@crxjs/vite-plugin'
-import manifest from './manifest.json'
+import { manifestFor } from './manifest.config.js'
 
 // https://vite.dev/config/
 export default defineConfig(({ mode }) => ({
@@ -21,6 +21,7 @@ export default defineConfig(({ mode }) => ({
   },
   plugins: [
     react(),
-    crx({ manifest }),
+    // Production drops the static localhost injection: see manifest.config.js.
+    crx({ manifest: manifestFor(mode) }),
   ],
 }))

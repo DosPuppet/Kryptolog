@@ -1,6 +1,6 @@
 import API_ENDPOINTS from '../../config';
 import { fetchAllPages, pageUrl } from '../../utils/paging';
-import { sha256Hex, multisigApprovalMessage, decryptSymmetric } from '../../utils/crypto';
+import { sha256Hex, decryptSymmetric } from '../../utils/crypto';
 import { assertSafeRecipient } from '../../services/trustedKeys';
 import { apiFetch } from '../../services/api';
 
@@ -9,7 +9,7 @@ import { apiFetch } from '../../services/api';
 // this workflow — a server-verifiable approval. The creator's own signature
 // over the plaintext lives inside the secret (created in MultisigCreateModal)
 // and is verified separately. Returns the updated workflow from the server.
-export const signMultisigWorkflow = async ({ workflow, user, token, decryptPQC, signPQC, encryptPQC, onProgress }) => {
+export const signMultisigWorkflow = async ({ workflow, user, token, decryptPQC, signApproval, encryptPQC, onProgress }) => {
     let encryptedKey = null;
 
     // 1. Try to get key from my Signer Entry
@@ -74,9 +74,12 @@ export const signMultisigWorkflow = async ({ workflow, user, token, decryptPQC, 
     // ciphertext it holds and verify this signature, so it can gate completion
     // on the actual signing key (not merely a session token). One signature,
     // no extra prompt.
+    // Structured, not a pre-built string: the extension builds the body itself
+    // and shows the workflow it is approving (audit 2026-10-12 K-03).
     const ctHash = await sha256Hex(workflow.secret.encrypted_data);
-    const approvalMessage = multisigApprovalMessage(workflow.id, workflow.secret_id, ctHash);
-    const signature = await signPQC(approvalMessage);
+    const signature = await signApproval({
+        workflowId: workflow.id, secretId: workflow.secret_id, ciphertextSha256: ctHash,
+    });
 
     // Completing Signer Logic: Release Recipient Keys.
     // N-of-M: the signature that reaches the threshold completes the

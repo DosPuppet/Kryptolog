@@ -45,21 +45,21 @@ describe('a workflow without its ciphertext', () => {
 
     it('cannot be signed', async () => {
         const decryptPQC = vi.fn().mockResolvedValue('00'.repeat(32));
-        const signPQC = vi.fn();
+        const signApproval = vi.fn();
 
         await expect(signMultisigWorkflow({
             workflow: summaryWorkflow(),
             user: USER,
             token: 't',
             decryptPQC,
-            signPQC,
+            signApproval,
             encryptPQC: vi.fn(),
             onProgress: vi.fn(),
         })).rejects.toThrow(/content not found to sign/i);
 
         // And it stopped BEFORE producing a signature — a signature over a
         // hash of nothing is the failure this guards against.
-        expect(signPQC).not.toHaveBeenCalled();
+        expect(signApproval).not.toHaveBeenCalled();
     });
 
     it('still carries everything the list itself renders', () => {

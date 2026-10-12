@@ -96,8 +96,13 @@ describe('isAllowedTrustedOrigin', () => {
     });
 
     it('is not fooled by a hostname that merely starts with the dev origin', () => {
-        expect(utils.isDevOrigin('http://localhost.evil.example')).toBe(true); // known prefix match
-        // ...but it still has to be http(s) and, above, https to be trusted in prod.
+        // This was pinned as a "known prefix match"; it is parsed now.
+        expect(utils.isDevOrigin('http://localhost.evil.example')).toBe(false);
+        expect(utils.isDevOrigin('http://127.0.0.1.evil.example')).toBe(false);
+        expect(utils.isDevOrigin('http://localhost:5173')).toBe(true);
+        expect(utils.isDevOrigin('https://localhost')).toBe(false);
+        // As an ordinary HTTPS site it can still be trusted, by a person, explicitly.
         expect(utils.isAllowedTrustedOrigin('https://localhost.evil.example')).toBe(true);
+        expect(utils.isAllowedTrustedOrigin('http://localhost.evil.example')).toBe(false);
     });
 });
