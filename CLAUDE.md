@@ -1197,3 +1197,52 @@ it.
 **M-1 is the second finding closed from the 2026-09-11 independent audit**
 (H-1 was fixed during the audit itself). M-2…M-6 and F-1…F-10 are still open;
 the detail stays in the untracked report.
+
+## Remediation — 2026-10-12 audit (consolidated) — branch `remediation-2026-10`
+
+A third independent audit (2026-10-12, untracked `audit/AUDIT-2026-10-12-full.md`,
+ids `K-01`…`K-20`) reviewed `238ee15`, the same commit as the 2026-09-23 one. Its
+findings are worked together with every item still open from 2026-09-23
+(`audit/AUDIT-2026-09-23-complet.md`) and 2026-09-11, grouped by the code they
+touch. One commit per lot, every gate green before each. Format changes go into a
+single crypto-core **3.0.0** cutover (lots 4–6); hybridization is a later **4.0.0**.
+
+| Lot | Scope | Prio | Status |
+|---|---|---|---|
+| 1 | Supply chain: hashed lock Dependabot can regenerate, pinned liboqs, npm advisories | P0 | done |
+| 2 | Default deployment posture (exposed services, proxy headers, docs, body limit) | P0 | |
+| 3 | Quotas and input bounds | P0 | |
+| 4 | Protocol cutover, crypto-core 3.0.0 | P1 | |
+| 5 | TrustKeys custody (ships with 4) | P1 | |
+| 6 | Web client trust UX | P1 | |
+| 7 | Authorization, directory, data integrity | P1 | |
+| 8 | Realtime and push availability | P1 | |
+| 9 | Operations: audit log, retention, backup, health | P2 | |
+| 10 | Assurance and documentation | P2 | |
+| 11 | Hybridization, crypto-core 4.0.0 | P3 | |
+
+### Lot 1 — supply chain
+
+- **The backend lock is now `requirements.txt`, compiled from `requirements.in`.**
+  It used to be `requirements.lock` from a floors-only `requirements.txt`, a pair
+  Dependabot does not recognise: every pip PR bumped a floor, left the lock behind
+  and failed the freshness check, which is how the security gate stayed red on
+  `main` from 2026-09-16 (K-11). `.in -> .txt` is pip-compile's own layout.
+  **Compile it under Python 3.12** (`docker run python:3.12 …` works), the version
+  the CI freshness check uses: markers resolve per interpreter.
+- **Installs use the lock, with hashes, everywhere**: `start_all.sh` installed the
+  floors (K-14), and CI tested against the floors rather than what ships. CI now
+  runs `--require-hashes -r requirements.txt`, then `requirements-dev.txt`, which
+  deliberately no longer includes the lock (a hashed file pulled into an unhashed
+  one turns on hash-checking for everything).
+- **`scripts/build_liboqs.sh` builds liboqs 0.16.0 from a checksummed tarball**
+  into `~/_oqs`. Left alone, liboqs-python clones and compiles an unpinned copy
+  at first import (K-14). `serve.sh` refuses to start without it (`--check`);
+  the dev paths build it. Minimal build: ML-DSA-44 and ML-KEM-768 only. This also
+  ends the 0.15/0.16 binding mismatch (audit 2026-09-11 F-10).
+- The dependency bump is not small: SQLAlchemy 2.0 → **2.1**, multidict 6 → **7**,
+  FastAPI 0.141 → 0.143, pyjwt 2.15. All 544 backend tests pass on it unchanged.
+- npm: three **high** advisories (brace-expansion, source-map-js) fixed by
+  `npm audit fix`, lockfiles only. `esbuild` low stays, by the same choice as before.
+- The stale Dependabot branches were not merged: they target the old file layout
+  and Dependabot will rebase or supersede them after the push.

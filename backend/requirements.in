@@ -1,0 +1,37 @@
+# Runtime dependency FLOORS. Not what production installs — see below.
+#
+# requirements.txt is compiled from this file by pip-compile and pins every
+# resolved version, transitive ones included, together with its artifact hashes
+# (audit KRY-007). Install that, never this:
+#
+#     pip install --require-hashes -r requirements.txt
+#
+# Regenerate after editing this file — under Python 3.12, the version CI checks
+# freshness with, since markers can resolve differently on another interpreter:
+#
+#     pip-compile --generate-hashes --output-file=requirements.txt requirements.in
+#
+# The .in -> .txt pair is pip-compile's own convention, and it is chosen for
+# Dependabot: it recognises the pair and regenerates the hashed file in the same
+# PR. The previous requirements.txt (floors) -> requirements.lock pair was not
+# recognised, so every Dependabot pip PR bumped a floor, left the lock behind,
+# failed the freshness check, and could not land without manual work — which is
+# how the security gate came to stay red on main (audit 2026-10-12 K-11).
+fastapi>=0.141.1
+uvicorn[standard]>=0.52.4  # [standard] bundles websockets/uvloop — WS endpoints break without it
+sqlalchemy>=2.0.52
+pyjwt>=2.15.0        # >=2.15.0 for the advisories open on 2.13.0 (audit 2026-10-12 K-11)
+pydantic>=2.13.5
+liboqs-python>=0.16.0   # ML-DSA-44 (FIPS 204) in-process; links the liboqs C library built by scripts/build_liboqs.sh
+python-multipart>=0.0.32
+httpx>=0.28.1
+slowapi==0.1.10
+redis>=8.1.0              # optional shared/persistent rate-limit storage (set REDIS_URL); falls back to in-memory
+alembic>=1.20.0
+psycopg[binary]>=3.3.5  # PostgreSQL driver (SQLAlchemy URL scheme: postgresql+psycopg://)
+pywebpush>=2.5.0
+# Transitive, floored here only because the versions resolved before carried
+# advisories (audit 2026-10-12 K-11). pip-compile would otherwise keep the old
+# pin, since it never upgrades a satisfied requirement on its own.
+urllib3>=2.8.0
+multidict>=6.9.1

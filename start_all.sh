@@ -64,16 +64,25 @@ else
     echo "WARNING: docker not found — assuming Postgres is already running at $DB_URL"
 fi
 
-# 4. Ensure backend Python dependencies (idempotent: pip skips what's already
-# satisfied, so liboqs is only compiled on first run or version bumps).
+# 4. Ensure backend Python dependencies, from the HASHED lock (audit 2026-10-12
+# K-14). This installed the floors file before, so a fresh machine resolved
+# whatever was newest that day — the lock and its hashes protected CI and
+# nobody else. Idempotent: pip skips what is already satisfied.
 # --user is invalid inside a virtualenv, where installs go to the venv itself.
 echo "Checking backend dependencies..."
 PIP_USER_FLAG="--user"
 if python3 -c 'import sys; sys.exit(0 if sys.prefix != sys.base_prefix else 1)'; then
     PIP_USER_FLAG=""
 fi
-if ! python3 -m pip install $PIP_USER_FLAG -q -r backend/requirements.txt; then
+if ! python3 -m pip install $PIP_USER_FLAG -q --require-hashes -r backend/requirements.txt; then
     echo "ERROR: failed to install backend Python dependencies (backend/requirements.txt)."
+    exit 1
+fi
+
+# The C library under the binding, pinned and checksummed. Without it the first
+# `import oqs` would clone and compile an unpinned copy (K-14).
+if ! scripts/build_liboqs.sh; then
+    echo "ERROR: failed to build liboqs — refusing to start."
     exit 1
 fi
 

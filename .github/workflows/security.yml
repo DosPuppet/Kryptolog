@@ -37,25 +37,28 @@ jobs:
       - name: Install pip-audit
         run: pip install pip-audit
       - name: Audit locked dependencies
-        # Audits the resolved lockfile, so this reflects what production
-        # actually installs — not just the floors in requirements.txt.
-        run: pip-audit --requirement backend/requirements.lock --strict
+        # Audits the resolved, hashed lock, so this reflects what production
+        # actually installs — not just the floors in requirements.in.
+        run: pip-audit --requirement backend/requirements.txt --strict
 
-      - name: Verify the lockfile matches requirements.txt
+      - name: Verify the lockfile matches requirements.in
         # A stale lock silently reverts the supply-chain guarantee: production
-        # would install pinned-but-outdated versions while requirements.txt has
-        # moved on. Regenerate and diff to prove they agree.
+        # would install pinned-but-outdated versions while requirements.in has
+        # moved on. Regenerate and diff to prove they agree. Python 3.12 above
+        # is load-bearing: markers resolve per interpreter, so the lock has to
+        # be compiled under the same version this check runs.
         run: |
           pip install pip-tools
-          cp backend/requirements.lock /tmp/committed.lock
+          cp backend/requirements.txt /tmp/committed.lock
+          cd backend
           pip-compile --quiet --generate-hashes \
-            --output-file=backend/requirements.lock backend/requirements.txt
+            --output-file=requirements.txt requirements.in
           if ! diff -q <(grep -vE '^\s*#' /tmp/committed.lock) \
-                       <(grep -vE '^\s*#' backend/requirements.lock) >/dev/null; then
-            echo "::error::requirements.lock is out of date. Run:"
-            echo "  pip-compile --generate-hashes --output-file=backend/requirements.lock backend/requirements.txt"
+                       <(grep -vE '^\s*#' requirements.txt) >/dev/null; then
+            echo "::error::backend/requirements.txt is out of date. Under Python 3.12, run:"
+            echo "  cd backend && pip-compile --generate-hashes --output-file=requirements.txt requirements.in"
             diff <(grep -vE '^\s*#' /tmp/committed.lock) \
-                 <(grep -vE '^\s*#' backend/requirements.lock) || true
+                 <(grep -vE '^\s*#' requirements.txt) || true
             exit 1
           fi
 

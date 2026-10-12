@@ -143,12 +143,14 @@ cp .env.example .env       # defaults match the compose services
 # Python dependencies — use the project venv (recommended)
 python3 -m venv ../.venv
 source ../.venv/bin/activate
-pip install -r requirements.txt   # builds liboqs (C) — needs cmake + a compiler
+pip install --require-hashes -r requirements.txt   # hashed lock, compiled from requirements.in
+../scripts/build_liboqs.sh                         # pinned liboqs C library — needs cmake + a compiler
 ```
 
-> `liboqs-python` compiles the `liboqs` C library on first install/import. If it
-> fails, ensure `cmake` is on your PATH (`pip install cmake`) and a C compiler is
-> available.
+> `scripts/build_liboqs.sh` builds `liboqs` from a pinned, checksummed release
+> into `~/_oqs` (or `$OQS_INSTALL_PATH`), where `liboqs-python` finds it. Left to
+> itself, the binding would instead clone and compile an unpinned copy at first
+> import; `serve.sh` refuses to start without the pinned library.
 
 Generate the JWT signing secret (HS256 — server-issued, server-verified, no
 keypair needed) and paste the printed line into `backend/.env`:
@@ -303,7 +305,7 @@ fakeredis locally; CI also runs them against a real Redis via `TEST_REDIS_URL`).
 ```bash
 cd backend
 source ../.venv/bin/activate
-pip install -r requirements-dev.txt   # test-only deps; runtime deps stay in requirements.txt
+pip install -r requirements-dev.txt   # test-only deps, on top of the hashed runtime lock
 python3 -m pytest tests/ -v
 ```
 
