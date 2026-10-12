@@ -1743,9 +1743,13 @@ the user's decision, with lot 12's budget items (forward secrecy, code-delivery
 integrity, an external audit). Final counts: backend **668**, frontend **270**,
 crypto-core **67**, extension **128**, e2e **1** (the critical path).
 
+**Merged to `main` on 2026-10-12** (fast-forward, `238ee15`..`c347d2a`: lots
+1–10 and the documentation pass; the branch is still around at the merged
+commit).
+
 **Not done, and needed before relying on any of it:**
-- **Not merged, not pushed.** No GitHub Actions run has seen lots 1–10, and the
-  new `e2e` CI job has never run. Every previous first push found something.
+- **Not pushed.** No GitHub Actions run has seen lots 1–10, and the new `e2e`
+  CI job has never run. Every previous first push found something.
 - **The dev stack still holds pre-3.0.0 data**, unreadable since lot 4: run
   `E2E-RECIPE.md` step 0 (`docker compose --env-file backend/.env down -v`)
   before using it, and recreate local vaults, `.kvault` backups and extension
