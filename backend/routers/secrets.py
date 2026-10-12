@@ -1,6 +1,6 @@
 from datetime import timedelta
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, Request
 from sqlalchemy import func
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
@@ -14,7 +14,7 @@ from database import get_db
 from dependencies import get_current_user, limiter
 from security import authorization, quota
 from utils.clock import utcnow_naive
-from utils.push import display_name, notify_user_push_async
+from utils.push import display_name, schedule_push
 from websocket_manager import manager
 
 router = APIRouter(tags=["secrets"])
@@ -238,8 +238,9 @@ def delete_secret(
 
 @router.post("/secrets/share", response_model=schemas.AccessGrantResponse)
 @limiter.limit("30/minute")
-async def share_secret(
+def share_secret(
     request: Request,
+    background_tasks: BackgroundTasks,
     grant: schemas.AccessGrantCreate,
     current_user: models.User = Depends(get_current_user),
     db: Session = Depends(get_db),
@@ -270,7 +271,8 @@ async def share_secret(
         expires_at=expires_at,
     )
 
-    await manager.send_personal_message(
+    background_tasks.add_task(
+        manager.send_personal_message,
         {
             "type": "SECRET_SHARED",
             "data": {
@@ -283,8 +285,7 @@ async def share_secret(
     )
 
     sender_name = display_name(current_user)
-    await notify_user_push_async(
-        db,
+    schedule_push(
         grantee_address,
         title="Secret Shared",
         # Generic body: secret titles are E2EE blobs the server can't read (M-3).

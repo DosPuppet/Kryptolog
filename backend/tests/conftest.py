@@ -162,6 +162,11 @@ def _setup_db():
     """Create fresh tables before each test and drop them after."""
     Base.metadata.create_all(bind=engine)
     yield
+    # Pushes run off the request path now (utils/push.py): a job still in
+    # flight would query a schema that is about to be dropped.
+    from utils.push import drain_pushes
+
+    assert drain_pushes(timeout=30), "a push job outlived its test"
     Base.metadata.drop_all(bind=engine)
 
 

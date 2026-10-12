@@ -1,6 +1,6 @@
 import uuid
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, Request
 from sqlalchemy import func
 from sqlalchemy.orm import Session, joinedload
 
@@ -12,7 +12,7 @@ from security import authorization
 from security.crypto_validation import is_usable_encryption_key
 from utils.clock import to_wire_utc
 from utils.group_events import broadcast_removal
-from utils.push import display_name, notify_many_push_async
+from utils.push import display_name, schedule_pushes
 from websocket_manager import manager
 
 router = APIRouter(prefix="/groups", tags=["groups"])
@@ -54,8 +54,9 @@ def _load_channel_or_404(
 
 @router.post("", response_model=schemas.GroupChannelResponse)
 @limiter.limit("10/minute")
-async def create_group(
+def create_group(
     request: Request,
+    background_tasks: BackgroundTasks,
     data: schemas.GroupChannelCreate,
     current_user: models.User = Depends(get_current_user),
     db: Session = Depends(get_db),
@@ -114,23 +115,20 @@ async def create_group(
     db.commit()
     db.refresh(channel)
 
-    for addr in member_addrs:
-        if addr != current_user.address:
-            await manager.send_personal_message(
-                {
-                    "type": "GROUP_JOINED",
-                    "channel": schemas.GroupChannelResponse.model_validate(channel),
-                },
-                addr,
-            )
+    # JSON-ready, not the model (audit 2026-09-23 Q-1).
+    joined = {
+        "type": "GROUP_JOINED",
+        "channel": schemas.GroupChannelResponse.model_validate(channel).model_dump(mode="json"),
+    }
+    background_tasks.add_task(
+        manager.send_many,
+        [(joined, addr) for addr in member_addrs if addr != current_user.address],
+    )
 
-    # Push fan-out AFTER the WebSocket sends, in one off-loop hop: pushes are
-    # blocking network calls, so doing them inline here would stall every other
-    # request on this worker for the whole broadcast. Generic body: channel
-    # names are E2EE blobs the server can't read (audit M-3) — and MUST not try
-    # to display.
-    await notify_many_push_async(
-        db,
+    # Queued, not sent here (audit 2026-09-23 M-1, utils/push.py). Generic
+    # body: channel names are E2EE blobs the server can't read (audit M-3) —
+    # and MUST not try to display.
+    schedule_pushes(
         [
             (
                 addr,
@@ -257,8 +255,9 @@ def get_group(
 
 @router.post("/{channel_id}/messages", response_model=schemas.GroupMessageResponse)
 @limiter.limit("20/minute")
-async def send_group_message(
+def send_group_message(
     request: Request,
+    background_tasks: BackgroundTasks,
     channel_id: str,
     data: schemas.GroupMessageCreate,
     current_user: models.User = Depends(get_current_user),
@@ -283,15 +282,14 @@ async def send_group_message(
 
     sender_name = display_name(current_user)
 
-    for member in channel.members:
-        await manager.send_personal_message(msg_data, member.user_address)
+    background_tasks.add_task(
+        manager.send_many, [(msg_data, member.user_address) for member in channel.members]
+    )
 
-    # Push fan-out AFTER the WebSocket sends, in one off-loop hop. Inline this
-    # would be up to 50 blocking HTTPS requests on the event loop per message,
-    # freezing the whole worker. Generic title: the channel name is an E2EE
-    # blob (audit M-3).
-    await notify_many_push_async(
-        db,
+    # Queued, not sent here (audit 2026-09-23 M-1): inline this was up to 50
+    # members' pushes inside the sender's request. Generic title: the channel
+    # name is an E2EE blob (audit M-3).
+    schedule_pushes(
         [
             (
                 member.user_address,
@@ -340,8 +338,9 @@ def get_group_history(
 
 @router.post("/{channel_id}/members", response_model=schemas.GroupMemberResponse)
 @limiter.limit("10/minute")
-async def add_member(
+def add_member(
     request: Request,
+    background_tasks: BackgroundTasks,
     channel_id: str,
     data: schemas.GroupMemberAdd,
     current_user: models.User = Depends(get_current_user),
@@ -398,8 +397,7 @@ async def add_member(
 
     recipients = {m.user_address for m in channel.members} | {new_addr}
 
-    for addr in recipients:
-        await manager.send_personal_message(event, addr)
+    background_tasks.add_task(manager.send_many, [(event, addr) for addr in recipients])
 
     return new_member
 
@@ -409,8 +407,9 @@ async def add_member(
 
 @router.delete("/{channel_id}/members/{member_address}")
 @limiter.limit("10/minute")
-async def remove_member(
+def remove_member(
     request: Request,
+    background_tasks: BackgroundTasks,
     channel_id: str,
     member_address: str,
     current_user: models.User = Depends(get_current_user),
@@ -465,8 +464,14 @@ async def remove_member(
     if group_deleted:
         return {"status": "ok", "group_deleted": True}
 
-    await broadcast_removal(
-        channel_id, target_addr, current_user.address, remaining_addrs, new_owner_info, is_self
+    background_tasks.add_task(
+        broadcast_removal,
+        channel_id,
+        target_addr,
+        current_user.address,
+        remaining_addrs,
+        new_owner_info,
+        is_self,
     )
     return {"status": "ok"}
 
@@ -478,8 +483,9 @@ async def remove_member(
     "/{channel_id}/members/{member_address}/role", response_model=schemas.GroupMemberResponse
 )
 @limiter.limit("10/minute")
-async def update_member_role(
+def update_member_role(
     request: Request,
+    background_tasks: BackgroundTasks,
     channel_id: str,
     member_address: str,
     data: schemas.GroupMemberRoleUpdate,
@@ -520,8 +526,7 @@ async def update_member_role(
         },
     }
 
-    for m in channel.members:
-        await manager.send_personal_message(event, m.user_address)
+    background_tasks.add_task(manager.send_many, [(event, m.user_address) for m in channel.members])
 
     return target_member
 
@@ -531,8 +536,9 @@ async def update_member_role(
 
 @router.put("/{channel_id}", response_model=schemas.GroupChannelResponse)
 @limiter.limit("10/minute")
-async def update_group(
+def update_group(
     request: Request,
+    background_tasks: BackgroundTasks,
     channel_id: str,
     data: schemas.GroupUpdate,
     current_user: models.User = Depends(get_current_user),
@@ -552,7 +558,6 @@ async def update_group(
 
     event = {"type": "GROUP_UPDATED", "channel_id": channel_id, "name": channel.name}
 
-    for m in channel.members:
-        await manager.send_personal_message(event, m.user_address)
+    background_tasks.add_task(manager.send_many, [(event, m.user_address) for m in channel.members])
 
     return channel

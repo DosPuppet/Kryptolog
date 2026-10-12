@@ -11,7 +11,7 @@ from dependencies import get_current_user, limiter
 from routers.secrets import create_secret_with_owner_grant
 from security import authorization
 from utils.clock import utcnow_naive
-from utils.push import display_name, notify_user_push
+from utils.push import display_name, schedule_push
 
 router = APIRouter(prefix="/multisig", tags=["multisig"])
 
@@ -136,8 +136,7 @@ def create_multisig_workflow(
     sender_name = display_name(current_user)
     for s_addr in signers:
         if s_addr != current_user.address:
-            notify_user_push(
-                db,
+            schedule_push(
                 s_addr,
                 title="Signature Required",
                 body=f"{sender_name} requested your signature for: {new_workflow.name}",
@@ -349,15 +348,14 @@ def _is_completing_signature(db, wf) -> bool:
     return (already_signed + 1) >= quorum
 
 
-def _notify_signature(db, wf, sender_name: str, signer_address: str, is_completing: bool) -> None:
+def _notify_signature(wf, sender_name: str, signer_address: str, is_completing: bool) -> None:
     """Announce a signature, and a release if it completed the workflow.
 
     Best-effort and deliberately called AFTER the commit: a push failure must
     never roll back a recorded signature.
     """
     if wf.owner_address != signer_address:
-        notify_user_push(
-            db,
+        schedule_push(
             wf.owner_address,
             title="Workflow Signed",
             body=f"{sender_name} signed your workflow: {wf.name}",
@@ -366,8 +364,7 @@ def _notify_signature(db, wf, sender_name: str, signer_address: str, is_completi
 
     if is_completing:
         for recipient in wf.recipients:
-            notify_user_push(
-                db,
+            schedule_push(
                 recipient.user_address,
                 title="Secret Released",
                 body=f"Multisig workflow '{wf.name}' is complete. You now have access to the secret.",
@@ -436,7 +433,7 @@ def sign_multisig_workflow(
     # all. This also releases the FOR UPDATE lock taken above.
     db.commit()
 
-    _notify_signature(db, wf, display_name(current_user), current_user.address, is_completing)
+    _notify_signature(wf, display_name(current_user), current_user.address, is_completing)
 
     db.refresh(wf)
     return wf
@@ -479,8 +476,7 @@ def reject_multisig_workflow(
 
     sender_name = display_name(current_user)
     if wf.owner_address != current_user.address:
-        notify_user_push(
-            db,
+        schedule_push(
             wf.owner_address,
             title="Workflow Rejected",
             body=f"{sender_name} rejected your workflow: {wf.name}",

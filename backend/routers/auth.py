@@ -1,6 +1,6 @@
 from datetime import timedelta
 
-from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request, status
 from sqlalchemy.orm import Session
 
 import auth
@@ -363,8 +363,9 @@ def login(request: Request, login_req: schemas.LoginRequest, db: Session = Depen
 
 @router.post("/logout")
 @limiter.limit("20/minute")
-async def logout(
+def logout(
     request: Request,
+    background_tasks: BackgroundTasks,
     current_user: models.User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
@@ -376,9 +377,11 @@ async def logout(
     delivering every incoming message in real time (audit 2026-09-11 M-1) — and
     "revoke all sessions" is aimed precisely at a tab the user no longer
     controls. The row has to be committed before the hangup, or a socket that
-    races the close and reconnects is re-admitted against the old version.
+    races the close and reconnects is re-admitted against the old version — a
+    background task runs after the response, so after the commit by
+    construction.
     """
     current_user.token_version = (current_user.token_version or 0) + 1
     db.commit()
-    await manager.close_address(current_user.address, reason=SESSION_REVOKED)
+    background_tasks.add_task(manager.close_address, current_user.address, reason=SESSION_REVOKED)
     return {"status": "ok"}

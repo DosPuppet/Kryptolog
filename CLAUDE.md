@@ -1215,8 +1215,8 @@ single crypto-core **3.0.0** cutover (lots 4–6); hybridization is a later **4.
 | 4 | Protocol cutover, crypto-core 3.0.0 | P1 | done — `687a196` |
 | 5 | TrustKeys custody (ships with 4) | P1 | done — `6a483ab` |
 | 6 | Web client trust UX | P1 | done — `34aeb32` |
-| 7 | Authorization, directory, data integrity | P1 | done |
-| 8 | Realtime and push availability | P1 | |
+| 7 | Authorization, directory, data integrity | P1 | done — `f6a9e58` |
+| 8 | Realtime and push availability | P1 | done |
 | 9 | Operations: audit log, retention, backup, health | P2 | |
 | 10 | Assurance and documentation | P2 | |
 | 11 | Hybridization, crypto-core 4.0.0 | P3 | |
@@ -1519,11 +1519,13 @@ serving. No `CRYPTO_CORE_VERSION` bump.
   keys at release, and completion refuses to leave one without.
 - **Indexes** (Q-3): grants by grantee, workflows by secret and owner, secrets
   by owner, memberships/signers/recipients by user. The twelve `ix_*_id`
-  indexes on primary keys are gone. **So are the indexes on `secrets.name` and
-  `multisig_workflows.name`, which were a live bug:** both hold encrypted
-  blobs nobody can query, and PostgreSQL refuses a B-tree entry over 8 KB, so a
-  secret whose name the schema accepts (10 000 characters) was a **500**.
-  The downgrade does not restore them, and the upgrade drops them `IF EXISTS`.
+  indexes on primary keys are gone. **So is the index on `secrets.name`, which
+  was a live bug:** it holds an encrypted blob nobody can query, and PostgreSQL
+  refuses a B-tree entry over 8 KB, so a secret whose name the schema accepts
+  (10 000 characters) was a **500**. `multisig_workflows.name` lost its index
+  too, but only because nothing queries it — it is plaintext capped at 200, and
+  this section first called it encrypted (corrected in lot 8). The downgrade
+  restores neither, and the upgrade drops both `IF EXISTS`.
 - Housekeeping: the `test_deployment` helper from lot 4 was collected by pytest
   as a test in every module that imported it; it is `server_deployment` now.
 
@@ -1532,3 +1534,64 @@ killed: among them the old delete-then-insert share (caught both by the
 concurrent-share test and by the re-share-keeps-its-id test) and a two-commit
 workflow creation (caught only by forcing a failure after the secret is
 written, since nothing else can tell one transaction from three).
+
+### Lot 8 — realtime and push availability
+
+Closes 2026-09-23 M-1, M-2, Q-1, Q-2 and 2026-09-11 F-8. No migration, no
+`CRYPTO_CORE_VERSION` bump. **Deploy the SPA with the server**: unsubscribe
+moved from the query string to the body, so an old SPA's unsubscribe is a 422.
+
+- **Pushes are queued, not sent in the request** (M-1, `utils/push.py`). A DM,
+  share or group post used to wait for every one of the recipient's pushes,
+  serially, on hosts the recipient chose. Now `schedule_push(es)` hands them to
+  a dedicated pool of `PUSH_WORKERS` (4) — a slow host can hold those, never
+  the server's threadpool — each job opening its own Session. The queue is
+  bounded (`PUSH_QUEUE_MAX`) and **drops** when full: a push is a hint, the
+  message is in the database, and a backlog must never become backpressure on
+  senders. `conftest` drains the queue after every test, before the schema is
+  dropped. `notify_user_push_async` / `notify_many_push_async` are gone.
+- **At most ten subscriptions per account**, oldest evicted, under the owner
+  row lock. **DNS resolution in the SSRF guard is bounded** (3 s): the push
+  timeout covered connect and read but not the name lookup. **A DM to yourself
+  is a 400** — the reflector half of the finding; no client does it.
+- **The fan-out listener is supervised** (M-2). It used to stop on its first
+  connection error, and since `publish` worked again once Redis returned, the
+  local fallback stopped firing too: realtime was dead on that worker until a
+  restart. `_supervise` resubscribes with backoff (0.5 s doubling to 30 s), and
+  while it is down `send_personal_message` also delivers to this worker's own
+  sockets. **A dead link does not always raise**, which the first test of this
+  showed: an idle listener now publishes a probe on its own channel every 5 s
+  and treats 15 s of total silence as a loss. `manager.listening` reports the
+  state, for lot 9's health probe. (redis-py's pub/sub reconnects a dropped
+  connection on its own when read with `get_message` — which is what the
+  listener uses now instead of `listen()`; the silent-link test therefore
+  stubs the read rather than cutting the socket.)
+- **Every frame is serialized before it is sent, in both modes** (Q-1).
+  `GROUP_JOINED` carried a Pydantic object for its whole life; `json.dumps`
+  failed inside the publish's `except`, logging the same WARNING as a Redis
+  outage, and in local mode nothing serialized it unless a socket was open. An
+  unserializable frame now fails the request that built it — the existing
+  group tests fail with the audit's exact `TypeError` if the fix is reverted.
+  The SPA, meanwhile, listened for a `GROUP_CREATED` the server never sent;
+  `test_ws_frames.py` now reads both sides and pins the set of frame types
+  the backend emits against the handler keys the SPA registers, both ways.
+- **No route does synchronous database work on the event loop** (Q-2). The
+  nine `async def` routes that used the sync Session are `def` now, and hand
+  their frames to `BackgroundTasks` (`manager.send_many`, in order, after the
+  response). `test_route_concurrency.py` fails on any `async def` endpoint that
+  takes a Session, except `delete_account`, which moves its core to
+  `run_in_threadpool` itself and is named there with the reason.
+- **Unsubscribe takes the endpoint in the body** (11/F-8): it is a capability
+  URL. The SPA had two callers; the second, in `subscribe()`, was found only
+  by reading the file again. Both go through `unsubscribeEndpoint` now, and its
+  test also scans the source for the query-string form.
+- Correction to lot 7, found here: `multisig_workflows.name` is **plaintext**
+  (≤ 200 characters), not an encrypted blob — the push bodies interpolate it.
+  The migration docstring, the model comment and lot 7's section say so now.
+
+Backend 605 → **621**, SPA 263 → **265**. Sixteen gates mutation-tested, all
+killed — two only after a second test: the first pass let through "no local
+delivery while the listener is down" (the restart test had Redis itself down,
+so the old publish-failure fallback delivered anyway; the case that matters is
+Redis up and only this worker's subscription gone) and "serialize leniently
+with `default=str`" (the group tests catch Q-1 only while the bug exists).

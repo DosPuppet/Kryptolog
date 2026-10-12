@@ -176,7 +176,7 @@ class MultisigWorkflow(Base):
     __tablename__ = "multisig_workflows"
 
     id = Column(Integer, primary_key=True)
-    name = Column(String)  # encrypted, like Secret.name: never indexed
+    name = Column(String)  # plaintext, ≤ 200 chars; never queried, so not indexed
     owner_address = Column(String, ForeignKey("users.address"), index=True)
     # Indexed: is_workflow_managed asks it on every secret mutation (2026-09-23 Q-3).
     secret_id = Column(Integer, ForeignKey("secrets.id"), index=True)

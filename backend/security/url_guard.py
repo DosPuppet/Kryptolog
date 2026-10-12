@@ -24,6 +24,8 @@ import ipaddress
 import logging
 import socket
 from collections.abc import Sequence
+from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import TimeoutError as FutureTimeout
 from urllib.parse import urlparse
 
 import requests
@@ -68,6 +70,25 @@ def _address_is_safe(ip: ipaddress._BaseAddress) -> bool:
     return bool(getattr(ip, "is_global", True))
 
 
+# Resolution gets its own bound (audit 2026-09-23 M-1). PUSH_TIMEOUT_SECONDS
+# covers the connection and the read, but the name is resolved here first, by
+# the system resolver, with no limit of ours: a hostname under an
+# attacker-run nameserver that answers slowly held the caller for as long as
+# the resolver cared to wait. getaddrinfo cannot be cancelled, so it runs on a
+# small pool and the caller stops waiting; a lookup that outlives the bound
+# finishes on that pool and is discarded.
+DNS_TIMEOUT_SECONDS = 3.0
+_resolver = ThreadPoolExecutor(max_workers=8, thread_name_prefix="dns")
+
+
+def _getaddrinfo_bounded(hostname: str, port: int):
+    future = _resolver.submit(socket.getaddrinfo, hostname, port, proto=socket.IPPROTO_TCP)
+    try:
+        return future.result(timeout=DNS_TIMEOUT_SECONDS)
+    except FutureTimeout as exc:
+        raise UnsafeUrlError(f"Resolving {hostname} timed out") from exc
+
+
 def resolve_safe_addresses(hostname: str, port: int) -> list[str]:
     """Resolve `hostname`, requiring every returned address to be safe.
 
@@ -75,7 +96,7 @@ def resolve_safe_addresses(hostname: str, port: int) -> list[str]:
     address must not be usable, since we cannot control which one is dialled.
     """
     try:
-        infos = socket.getaddrinfo(hostname, port, proto=socket.IPPROTO_TCP)
+        infos = _getaddrinfo_bounded(hostname, port)
     except socket.gaierror as exc:
         raise UnsafeUrlError(f"Cannot resolve host: {hostname}") from exc
 

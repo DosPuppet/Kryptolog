@@ -1,11 +1,13 @@
-import asyncio
 import threading
 from unittest.mock import MagicMock, patch
 
 import pytest
+from conftest import auth_header
 
+import utils.push
 from models import PushSubscription
-from utils.push import PUSH_TIMEOUT_SECONDS, notify_user_push, notify_user_push_async
+from routers.notifications import MAX_SUBSCRIPTIONS_PER_USER
+from utils.push import PUSH_TIMEOUT_SECONDS, drain_pushes, notify_user_push, schedule_pushes
 
 
 @pytest.fixture(autouse=True)
@@ -131,36 +133,110 @@ class TestPushDoesNotStallTheEventLoop:
         assert kwargs["timeout"] == PUSH_TIMEOUT_SECONDS
         assert PUSH_TIMEOUT_SECONDS > 0
 
-    def test_async_wrapper_runs_the_blocking_send_off_the_loop(self, db_session, user1):
-        """Guarantee 2: the blocking work happens on a worker thread.
+    def test_the_sender_does_not_wait_for_the_recipients_pushes(
+        self, client, db_session, user1, user2
+    ):
+        """Audit 2026-09-23 M-1: a DM used to wait for every one of the
+        recipient's pushes, each up to PUSH_TIMEOUT_SECONDS, on hosts the
+        RECIPIENT chose. Here the push host never answers until released; the
+        sender's request must come back anyway, and the send must happen on a
+        push worker, not on whatever thread served the request."""
+        _, recipient = user1
+        sender_token, _ = user2
+        self._subscribe(db_session, recipient["address"], "https://stalls.endpoint")
 
-        Asserted by identity of the thread the send runs on, not by timing —
-        a timing test would be flaky and would not actually prove the loop was
-        free.
-        """
-        _, current_user = user1
-        self._subscribe(db_session, current_user["address"], "https://offloaded.endpoint")
-
+        release = threading.Event()
         send_threads = []
 
-        def _record(*args, **kwargs):
-            send_threads.append(threading.current_thread().ident)
+        def _stall(*args, **kwargs):
+            send_threads.append(threading.current_thread().name)
+            release.wait(timeout=30)
             return MagicMock()
 
-        async def _run():
-            loop_thread = threading.current_thread().ident
-            with patch("utils.push.webpush", side_effect=_record):
-                await notify_user_push_async(
-                    db_session,
-                    current_user["address"],
-                    "T",
-                    "B",
-                )
-            return loop_thread
+        with patch("utils.push.webpush", side_effect=_stall):
+            resp = client.post(
+                "/messages",
+                json={"recipient_address": recipient["address"], "content": "{}"},
+                headers=auth_header(sender_token),
+            )
+            assert resp.status_code == 200, resp.text
+            assert not release.is_set()  # answered while the push still hangs
+            release.set()
+            assert drain_pushes(timeout=10)
 
-        loop_thread = asyncio.run(_run())
+        assert send_threads and all(name.startswith("push") for name in send_threads)
 
-        assert send_threads, "webpush was never called"
-        assert all(t != loop_thread for t in send_threads), (
-            "the blocking push ran on the event-loop thread"
+    def test_a_full_queue_drops_pushes_instead_of_waiting(self, db_session, user1, monkeypatch):
+        """A backlog must never become backpressure on whoever is sending."""
+        _, current_user = user1
+        self._subscribe(db_session, current_user["address"], "https://busy.endpoint")
+        monkeypatch.setattr(utils.push, "_slots", threading.BoundedSemaphore(1))
+
+        release = threading.Event()
+        calls = []
+
+        def _stall(*args, **kwargs):
+            calls.append(1)
+            release.wait(timeout=30)
+            return MagicMock()
+
+        with patch("utils.push.webpush", side_effect=_stall):
+            schedule_pushes([(current_user["address"], "T", "B", None)] * 3)
+            release.set()
+            assert drain_pushes(timeout=10)
+        assert len(calls) == 1
+
+
+class TestSubscriptions:
+    def _register(self, client, token, n):
+        return client.post(
+            "/notifications/subscribe",
+            json={"endpoint": f"https://push.example/{n}", "p256dh": "p", "auth": "a"},
+            headers=auth_header(token),
         )
+
+    def test_an_account_holds_at_most_ten_and_the_oldest_go(
+        self, client, db_session, user1, user2, monkeypatch
+    ):
+        """Audit 2026-09-23 M-1: subscriptions were uncapped, so one account
+        could make every message sent to it cost hundreds of outbound requests."""
+        from dependencies import limiter
+
+        monkeypatch.setattr(limiter, "enabled", False)  # twelve registrations
+        token, me = user1
+        other_token, _ = user2
+        self._register(client, other_token, "other")
+        for n in range(MAX_SUBSCRIPTIONS_PER_USER + 2):
+            assert self._register(client, token, n).status_code == 200
+
+        mine = sorted(
+            s.endpoint
+            for s in db_session.query(PushSubscription).filter_by(user_address=me["address"])
+        )
+        assert mine == sorted(
+            f"https://push.example/{n}" for n in range(2, MAX_SUBSCRIPTIONS_PER_USER + 2)
+        )
+        # Somebody else's are not part of anyone's count.
+        assert (
+            db_session.query(PushSubscription)
+            .filter_by(endpoint="https://push.example/other")
+            .count()
+            == 1
+        )
+
+    def test_unsubscribe_takes_the_endpoint_in_the_body(self, client, db_session, user1):
+        """Audit 2026-09-11 F-8: an endpoint is a capability URL, and query
+        strings end up in access logs."""
+        token, me = user1
+        self._register(client, token, "x")
+        endpoint = "https://push.example/x"
+
+        in_query = client.post(
+            f"/notifications/unsubscribe?endpoint={endpoint}", headers=auth_header(token)
+        )
+        assert in_query.status_code == 422
+        resp = client.post(
+            "/notifications/unsubscribe", json={"endpoint": endpoint}, headers=auth_header(token)
+        )
+        assert resp.status_code == 200
+        assert db_session.query(PushSubscription).filter_by(user_address=me["address"]).count() == 0

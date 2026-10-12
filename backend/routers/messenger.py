@@ -5,6 +5,7 @@ import time
 
 from fastapi import (
     APIRouter,
+    BackgroundTasks,
     Depends,
     HTTPException,
     Query,
@@ -25,7 +26,7 @@ from dependencies import get_current_user, limiter, user_for_token
 from security import authorization
 from security.crypto_validation import is_usable_encryption_key
 from utils.clock import to_wire_utc
-from utils.push import display_name, notify_user_push_async
+from utils.push import display_name, schedule_push
 from websocket_manager import SESSION_REVOKED, manager
 
 logger = logging.getLogger("kryptolog.messenger")
@@ -35,13 +36,19 @@ router = APIRouter(prefix="/messages", tags=["messenger"])
 
 @router.post("", response_model=schemas.MessageResponse)
 @limiter.limit("20/minute")
-async def send_message(
+def send_message(
     request: Request,
+    background_tasks: BackgroundTasks,
     msg: schemas.MessageCreate,
     current_user: models.User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
     recipient_addr = msg.recipient_address.lower()
+    # No client writes to itself, and it was the reflector half of audit
+    # 2026-09-23 M-1: each self-DM made the server send a push to hosts the
+    # sender chose, twenty times a minute.
+    if recipient_addr == current_user.address:
+        raise HTTPException(status_code=400, detail="You cannot message yourself")
     recipient = authorization.find_active_user(db, recipient_addr)
     if not recipient:
         raise HTTPException(status_code=404, detail="Recipient not found")
@@ -77,19 +84,19 @@ async def send_message(
         },
     }
 
-    await manager.send_personal_message(msg_data, recipient_addr)
+    # Recipient first, then the sender's other devices (for sync), once the
+    # response is out (audit 2026-09-23 Q-2).
+    background_tasks.add_task(
+        manager.send_many, [(msg_data, recipient_addr), (msg_data, current_user.address)]
+    )
 
     sender_name = display_name(current_user)
-    await notify_user_push_async(
-        db,
+    schedule_push(
         recipient_addr,
         title="New Message",
         body=f"You have a new secure message from {sender_name}",
         data={"type": "messenger", "sender": current_user.address},
     )
-
-    # Send to Sender (for sync across their devices)
-    await manager.send_personal_message(msg_data, current_user.address)
 
     return new_msg
 

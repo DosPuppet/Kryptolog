@@ -150,3 +150,30 @@ class TestIsSafeHelper:
             assert is_safe_push_endpoint("https://evil.example.com/p") is False
         with _resolves_to(PUBLIC_IP):
             assert is_safe_push_endpoint("https://push.example.com/p") is True
+
+
+class TestResolutionIsBounded:
+    """Audit 2026-09-23 M-1: the push timeout covered connect and read, but
+    the name was resolved first by the system resolver with no bound of ours,
+    so a slow nameserver held the caller for as long as it liked."""
+
+    def test_a_resolver_that_hangs_is_refused_within_the_bound(self, monkeypatch):
+        import threading
+        import time
+
+        import security.url_guard as guard
+
+        monkeypatch.setattr(guard, "DNS_TIMEOUT_SECONDS", 0.2)
+        release = threading.Event()
+
+        def hang(*args, **kwargs):
+            release.wait(timeout=10)
+            return [(2, 1, 6, "", (PUBLIC_IP, 443))]
+
+        with patch("security.url_guard.socket.getaddrinfo", side_effect=hang):
+            started = time.monotonic()
+            with pytest.raises(UnsafeUrlError, match="timed out"):
+                validate_push_endpoint("https://slow-dns.example/push")
+            elapsed = time.monotonic() - started
+        release.set()
+        assert elapsed < 2

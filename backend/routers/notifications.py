@@ -5,9 +5,20 @@ import models
 import schemas
 from database import get_db
 from dependencies import get_current_user, limiter
+from security import quota
 from security.url_guard import UnsafeUrlError, validate_push_endpoint
+from utils.push import schedule_push
 
 router = APIRouter(prefix="/notifications", tags=["notifications"])
+
+# Subscriptions one account may hold (audit 2026-09-23 M-1). Every push to an
+# account costs one outbound request per subscription, to hosts the account
+# chose; with no cap, a few hundred registrations on a host that stalls made
+# every message TO that account cost minutes of server time. Ten covers a
+# person's browsers and devices. The oldest is evicted rather than the new one
+# refused: a subscription is not a credential, losing a stale one costs nothing,
+# and refusing would strand the browser the user is actually holding.
+MAX_SUBSCRIPTIONS_PER_USER = 10
 
 
 @router.post("/subscribe", response_model=schemas.PushSubscriptionResponse)
@@ -55,10 +66,24 @@ def subscribe(
         models.PushSubscription.user_address != current_user.address,
     ).delete(synchronize_session=False)
 
+    # Serialized per account, so two concurrent registrations cannot both
+    # count room for one more (the quota module's lock, for the same reason).
+    quota.lock_owner(db, current_user.address)
     new_sub = models.PushSubscription(
         user_address=current_user.address, endpoint=sub.endpoint, p256dh=sub.p256dh, auth=sub.auth
     )
     db.add(new_sub)
+    db.flush()
+    keep = (
+        db.query(models.PushSubscription.id)
+        .filter(models.PushSubscription.user_address == current_user.address)
+        .order_by(models.PushSubscription.id.desc())
+        .limit(MAX_SUBSCRIPTIONS_PER_USER)
+    )
+    db.query(models.PushSubscription).filter(
+        models.PushSubscription.user_address == current_user.address,
+        models.PushSubscription.id.not_in(keep.scalar_subquery()),
+    ).delete(synchronize_session=False)
     db.commit()
     db.refresh(new_sub)
     return new_sub
@@ -68,13 +93,13 @@ def subscribe(
 @limiter.limit("10/minute")
 def unsubscribe(
     request: Request,
-    endpoint: str,
+    body: schemas.PushUnsubscribe,
     current_user: models.User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
     db.query(models.PushSubscription).filter(
         models.PushSubscription.user_address == current_user.address,
-        models.PushSubscription.endpoint == endpoint,
+        models.PushSubscription.endpoint == body.endpoint,
     ).delete()
     db.commit()
     return {"status": "ok"}
@@ -87,9 +112,7 @@ def test_push(
     current_user: models.User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    """Send a test push notification to the current user."""
-    from utils.push import notify_user_push
-
+    """Queue a test push notification to the current user."""
     subs_count = (
         db.query(models.PushSubscription)
         .filter(models.PushSubscription.user_address == current_user.address)
@@ -102,11 +125,12 @@ def test_push(
             "message": "No push subscriptions found for your account. Enable push notifications first.",
         }
 
-    notify_user_push(
-        db,
+    # Queued like every other push (audit 2026-09-23 M-1): sent inline, this
+    # was up to ten slow hosts' worth of a server thread per click.
+    schedule_push(
         current_user.address,
         "🔔 Kryptolog Test",
         "Push notifications are working!",
         {"type": "test"},
     )
-    return {"status": "sent", "subscriptions": subs_count}
+    return {"status": "queued", "subscriptions": subs_count}

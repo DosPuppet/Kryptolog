@@ -13,9 +13,11 @@ Three changes to the storage invariants, one migration:
   and recipients by user. The existing unique constraints lead with the parent
   id, so "everything this user is part of" was a sequential scan.
 - **No more `ix_<table>_id`** on primary keys, which already are unique
-  indexes, and no index on `secrets.name` / `multisig_workflows.name`. Those
-  hold encrypted blobs nothing can query, and PostgreSQL refuses a B-tree entry
-  over ~8 KB: a secret with a long name was a 500 although the schema allows it.
+  indexes, and no index on `secrets.name` / `multisig_workflows.name`. A
+  secret's name is an encrypted blob nothing can query, and PostgreSQL refuses
+  a B-tree entry over ~8 KB: a secret with a long name was a 500 although the
+  schema allows it. A workflow's name is plaintext capped at 200 characters, so
+  its index was harmless — but nothing ever queried it either.
 
 Revision ID: e1f2a3b4c5d6
 Revises: d0e1f2a3b4c5

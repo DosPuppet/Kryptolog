@@ -581,6 +581,12 @@ class PushSubscriptionCreate(BaseModel):
     auth: str = Field(..., max_length=256)
 
 
+class PushUnsubscribe(BaseModel):
+    # In the body, not the query string (audit 2026-09-11 F-8): an endpoint is
+    # a capability URL, and query strings land in access logs and proxies.
+    endpoint: str = Field(..., max_length=2000)
+
+
 class PushSubscriptionResponse(PushSubscriptionCreate):
     id: int
     user_address: str

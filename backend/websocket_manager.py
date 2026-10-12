@@ -54,6 +54,18 @@ PRESENCE_PREFIX = "kryptolog:ws:presence:"
 PRESENCE_STATES = ("focused", "blurred")
 PRESENCE_TTL_SECONDS = 90  # entry lifetime without a heartbeat (worker death)
 PRESENCE_HEARTBEAT_SECONDS = 30  # refresh cadence — keep well under the TTL
+# Reconnect backoff for the fan-out listener (audit 2026-09-23 M-2): from the
+# first value, doubling, capped at the second.
+LISTENER_RETRY_INITIAL_SECONDS = 0.5
+LISTENER_RETRY_MAX_SECONDS = 30.0
+# Liveness of the subscription itself. A connection can die without raising —
+# a half-open TCP link reads as silence forever — so an idle listener
+# publishes a probe on its own channel every LISTENER_PROBE_SECONDS, and
+# treats LISTENER_STALE_SECONDS without receiving ANYTHING (its own probes
+# included) as a lost subscription.
+LISTENER_PROBE_SECONDS = 5.0
+LISTENER_STALE_SECONDS = 15.0
+PROBE_FRAME = json.dumps({"probe": True})
 
 
 class ConnectionManager:
@@ -71,6 +83,9 @@ class ConnectionManager:
         self._pubsub = None
         self._listener_task: asyncio.Task | None = None
         self._heartbeat_task: asyncio.Task | None = None
+        # True only while a subscription is actually being read. Delivery and
+        # the health probe both ask it (audit 2026-09-23 M-2).
+        self._listening = False
 
     # ---------- lifecycle ----------
 
@@ -99,7 +114,8 @@ class ConnectionManager:
             self._redis = redis_client
             self._redis_sync = redis_sync_client
             self._pubsub = pubsub
-            self._listener_task = asyncio.create_task(self._listen(pubsub))
+            self._listening = True
+            self._listener_task = asyncio.create_task(self._supervise(pubsub))
             self._heartbeat_task = asyncio.create_task(self._heartbeat())
             logger.info("WebSocket fan-out: shared mode enabled (Redis pub/sub)")
         except Exception as e:
@@ -112,6 +128,7 @@ class ConnectionManager:
             self._redis_sync = None
 
     async def shutdown(self) -> None:
+        self._listening = False
         for task in (self._listener_task, self._heartbeat_task):
             if task:
                 task.cancel()
@@ -129,22 +146,88 @@ class ConnectionManager:
 
     # ---------- background tasks (shared mode) ----------
 
+    @property
+    def listening(self) -> bool:
+        """Is this worker reading the fan-out channel right now?
+
+        False in local mode, and in shared mode while the listener is between a
+        lost connection and its resubscription. The health probe reports it.
+        """
+        return self.shared and self._listening
+
+    async def _supervise(self, pubsub) -> None:
+        """Keep a listener on the fan-out channel for as long as shared mode lasts.
+
+        The listener used to be started once and, on its first connection
+        error, log "listener stopped" and return (audit 2026-09-23 M-2). Once
+        Redis came back `publish` succeeded again, so the local fallback stopped
+        firing — and nobody was listening: realtime delivery on this worker was
+        dead until a restart, with one WARNING line to show for it. Now a lost
+        subscription is re-established with exponential backoff, and while it is
+        down `send_personal_message` also delivers to this worker's own sockets.
+        """
+        delay = LISTENER_RETRY_INITIAL_SECONDS
+        try:
+            while True:
+                if pubsub is None:
+                    try:
+                        pubsub = self._redis.pubsub()
+                        await pubsub.subscribe(FANOUT_CHANNEL)
+                        self._pubsub = pubsub
+                        self._listening = True
+                        delay = LISTENER_RETRY_INITIAL_SECONDS
+                        logger.info("WS fan-out listener resubscribed")
+                    except asyncio.CancelledError:
+                        raise
+                    except Exception as e:
+                        logger.warning("WS fan-out resubscribe failed (%s); retrying", e)
+                        pubsub = None
+                        await asyncio.sleep(delay)
+                        delay = min(delay * 2, LISTENER_RETRY_MAX_SECONDS)
+                        continue
+                try:
+                    await self._listen(pubsub)
+                except asyncio.CancelledError:
+                    raise
+                except Exception as e:
+                    self._listening = False
+                    logger.error(
+                        "WS fan-out listener lost (%s); delivering locally until it is back", e
+                    )
+                    try:
+                        await pubsub.aclose()
+                    except Exception:
+                        pass
+                    pubsub = None
+                    await asyncio.sleep(delay)
+                    delay = min(delay * 2, LISTENER_RETRY_MAX_SECONDS)
+        except asyncio.CancelledError:
+            self._listening = False
+
     async def _listen(self, pubsub) -> None:
         """Deliver fan-out events published by any worker (including this one)
-        to the sockets THIS worker holds."""
-        try:
-            async for item in pubsub.listen():
-                if item.get("type") != "message":
-                    continue
-                try:
-                    event = json.loads(item["data"])
-                    await self._deliver_local(event["message"], event["addr"])
-                except Exception as e:
-                    logger.warning("WS fan-out: ignoring malformed event: %s", e)
-        except asyncio.CancelledError:
-            pass
-        except Exception as e:
-            logger.warning("WS fan-out listener stopped: %s", e)
+        to the sockets THIS worker holds. Raises when the connection is lost or
+        has gone silent; `_supervise` decides what happens next."""
+        loop = asyncio.get_running_loop()
+        last_heard = loop.time()
+        while True:
+            item = await pubsub.get_message(
+                ignore_subscribe_messages=True, timeout=LISTENER_PROBE_SECONDS
+            )
+            if item is None:
+                if loop.time() - last_heard > LISTENER_STALE_SECONDS:
+                    raise ConnectionError("fan-out subscription went silent")
+                # Raises if Redis is unreachable, which is also a loss.
+                await self._redis.publish(FANOUT_CHANNEL, PROBE_FRAME)
+                continue
+            last_heard = loop.time()
+            if item.get("type") != "message" or item["data"] == PROBE_FRAME:
+                continue
+            try:
+                event = json.loads(item["data"])
+                await self._deliver_local(event["message"], event["addr"])
+            except Exception as e:
+                logger.warning("WS fan-out: ignoring malformed event: %s", e)
 
     async def _heartbeat(self) -> None:
         """Push the expiry score of this worker's connections forward so they
@@ -286,20 +369,38 @@ class ConnectionManager:
     # ---------- delivery ----------
 
     async def send_personal_message(self, message: dict, user_address: str):
+        # Serialized first, in both modes, and outside the try (audit
+        # 2026-09-23 Q-1). GROUP_JOINED carried a Pydantic object for its whole
+        # life: json.dumps refused it inside the publish's `except`, so every
+        # group creation logged "publish failed" — the line a Redis outage logs
+        # — and in local mode nothing was serialized at all unless a socket was
+        # open. An unserializable frame is a bug in the route that built it, and
+        # now fails that route's request, which its tests see.
+        envelope = json.dumps({"addr": user_address, "message": message})
         if self.shared:
             try:
-                await self._redis.publish(
-                    FANOUT_CHANNEL,
-                    json.dumps({"addr": user_address, "message": message}),
-                )
+                await self._redis.publish(FANOUT_CHANNEL, envelope)
                 # Local sockets are served when the event comes back through
-                # the subscriber, same as on every other worker.
-                return
+                # the subscriber, same as on every other worker — unless this
+                # worker's subscriber is down, in which case nothing would
+                # (audit 2026-09-23 M-2). Other workers still got the publish.
+                if self._listening:
+                    return
             except Exception as e:
                 logger.warning(
                     "WS fan-out publish failed (%s) — delivering to local sockets only", e
                 )
         await self._deliver_local(message, user_address)
+
+    async def send_many(self, deliveries) -> None:
+        """Send (message, address) pairs in order.
+
+        What a sync route hands to BackgroundTasks (audit 2026-09-23 Q-2): the
+        route does its database work in a worker thread and returns, and the
+        frames go out on the loop afterwards, still in the order given.
+        """
+        for message, user_address in deliveries:
+            await self.send_personal_message(message, user_address)
 
     async def _deliver_local(self, message: dict, user_address: str):
         for connection in self.active_connections.get(user_address, []):

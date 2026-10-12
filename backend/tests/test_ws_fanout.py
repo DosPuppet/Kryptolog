@@ -518,3 +518,157 @@ async def test_closing_works_without_redis(addr):
 
     assert ws.closed
     assert mgr.active_connections.get(addr) in (None, [])
+
+
+# ---------- the listener survives Redis going away (audit 2026-09-23 M-2) ----------
+
+
+@pytest.fixture
+def fast_listener(monkeypatch):
+    """Probe, staleness and retry on a test's time scale. fakeredis only:
+    these tests cut the connection through its server object."""
+    if os.getenv("TEST_REDIS_URL"):
+        pytest.skip("needs fakeredis to simulate the outage")
+    import websocket_manager
+
+    monkeypatch.setattr(websocket_manager, "LISTENER_RETRY_INITIAL_SECONDS", 0.05)
+    monkeypatch.setattr(websocket_manager, "LISTENER_PROBE_SECONDS", 0.05)
+    monkeypatch.setattr(websocket_manager, "LISTENER_STALE_SECONDS", 0.2)
+
+
+async def _shared_manager_on(server):
+    import fakeredis
+    import fakeredis.aioredis
+
+    mgr = ConnectionManager(redis_url="redis://fake")
+    await mgr.startup(
+        redis_client=fakeredis.aioredis.FakeRedis(server=server, decode_responses=True),
+        redis_sync_client=fakeredis.FakeRedis(server=server, decode_responses=True),
+    )
+    return mgr
+
+
+@pytest.mark.anyio
+async def test_realtime_delivery_survives_a_redis_restart(addr, fast_listener):
+    """The listener used to log "stopped" and return on its first connection
+    error, and nothing restarted it: once Redis was back, publish succeeded,
+    so the local fallback stopped firing, and nobody was listening."""
+    import fakeredis
+
+    server = fakeredis.FakeServer()
+    mgr = await _shared_manager_on(server)
+    try:
+        ws = FakeWebSocket()
+        await mgr.connect(ws, addr)
+
+        server.connected = False
+        await mgr._pubsub.connection.disconnect()
+        assert await _wait_for(lambda: not mgr.listening)
+
+        # While it is down, this worker's own sockets are served locally.
+        await mgr.send_personal_message({"type": "DURING"}, addr)
+        assert {"type": "DURING"} in ws.sent
+
+        server.connected = True
+        assert await _wait_for(lambda: mgr.listening)
+        await mgr.send_personal_message({"type": "AFTER"}, addr)
+        assert await _wait_for(lambda: {"type": "AFTER"} in ws.sent)
+        # Back on the channel, not on the fallback: delivered exactly once.
+        await asyncio.sleep(0.2)
+        assert ws.sent.count({"type": "AFTER"}) == 1
+    finally:
+        await mgr.shutdown()
+
+
+@pytest.mark.anyio
+async def test_a_subscription_that_goes_silent_is_replaced(addr, fast_listener):
+    """A dead link does not always raise: a half-open connection is silence.
+    Redis stays up here and publish keeps succeeding — only this worker's
+    subscription is gone, which is exactly what the fallback cannot see."""
+    import fakeredis
+
+    server = fakeredis.FakeServer()
+    mgr = await _shared_manager_on(server)
+    try:
+        ws = FakeWebSocket()
+        await mgr.connect(ws, addr)
+        first = mgr._pubsub
+
+        async def silence(*args, timeout=None, **kwargs):
+            await asyncio.sleep(timeout or 0)
+            return None
+
+        # Not a disconnect: redis-py reconnects those by itself on the next
+        # read. What it cannot notice is a link that answers nothing at all.
+        first.get_message = silence
+        assert await _wait_for(lambda: mgr._pubsub is not first and mgr.listening)
+
+        await mgr.send_personal_message({"type": "AFTER"}, addr)
+        assert await _wait_for(lambda: {"type": "AFTER"} in ws.sent)
+    finally:
+        await mgr.shutdown()
+
+
+@pytest.mark.anyio
+async def test_probes_are_not_delivered_to_anyone(addr, fast_listener, caplog):
+    """Nor logged: a probe is not a malformed event, and treating it as one
+    would write a WARNING every few seconds on every idle worker."""
+    import fakeredis
+
+    mgr = await _shared_manager_on(fakeredis.FakeServer())
+    try:
+        ws = FakeWebSocket()
+        await mgr.connect(ws, addr)
+        with caplog.at_level("WARNING", logger="kryptolog.ws"):
+            await asyncio.sleep(0.3)  # several idle probe rounds
+        assert ws.sent == []
+        assert mgr.listening
+        assert not [r for r in caplog.records if r.levelname == "WARNING"]
+    finally:
+        await mgr.shutdown()
+
+
+@pytest.mark.anyio
+async def test_while_only_this_subscription_is_down_local_sockets_are_still_served(
+    addr, fast_listener
+):
+    """The case the old fallback could not see: Redis is up and publish
+    succeeds, but THIS worker is not listening, so its own sockets would get
+    nothing. Here the subscription goes silent and cannot be re-established."""
+    import fakeredis
+
+    mgr = await _shared_manager_on(fakeredis.FakeServer())
+    try:
+        ws = FakeWebSocket()
+        await mgr.connect(ws, addr)
+
+        async def silence(*args, timeout=None, **kwargs):
+            await asyncio.sleep(timeout or 0)
+            return None
+
+        def no_pubsub():
+            raise ConnectionError("cannot subscribe")
+
+        mgr._pubsub.get_message = silence
+        mgr._redis.pubsub = no_pubsub
+        assert await _wait_for(lambda: not mgr.listening)
+
+        await mgr.send_personal_message({"type": "WHILE_DOWN"}, addr)
+        assert ws.sent.count({"type": "WHILE_DOWN"}) == 1
+    finally:
+        await mgr.shutdown()
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("shared", [False, True])
+async def test_an_unserializable_frame_is_refused_in_both_modes(addr, shared):
+    """Audit 2026-09-23 Q-1: GROUP_JOINED carried a Pydantic object. In shared
+    mode json.dumps failed inside the publish's `except` and read as a Redis
+    outage; in local mode nothing serialized it unless a socket was open. With
+    no socket open, in either mode, it must still fail loudly."""
+    mgr = await _make_shared_manager() if shared else ConnectionManager(redis_url="")
+    try:
+        with pytest.raises(TypeError):
+            await mgr.send_personal_message({"type": "X", "obj": object()}, addr)
+    finally:
+        await mgr.shutdown()

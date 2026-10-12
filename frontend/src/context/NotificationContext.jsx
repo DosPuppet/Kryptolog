@@ -30,6 +30,17 @@ function urlBase64ToUint8Array(base64String) {
 // iOS Safari in a normal tab (not an installed PWA) has NO Notification API.
 // Touching `Notification.permission` unguarded throws at render and blanks the
 // whole app, so gate every access behind this.
+// The endpoint travels in the body, never the query string (audit 2026-09-11
+// F-8): it is a capability URL, and query strings land in access logs and
+// proxies. One helper, because there were two callers and one of them was
+// missed the first time round.
+export const unsubscribeEndpoint = (endpoint, token) =>
+    apiFetch(API_ENDPOINTS.NOTIFICATIONS.UNSUBSCRIBE, token, {
+        method: 'POST',
+        body: { endpoint },
+        raw: true,
+    });
+
 const NOTIFICATIONS_SUPPORTED = typeof window !== 'undefined' && 'Notification' in window;
 const currentPermission = () => (NOTIFICATIONS_SUPPORTED ? Notification.permission : 'default');
 
@@ -103,10 +114,7 @@ export const NotificationProvider = ({ children }) => {
             // Drop the previous endpoint server-side so we never accumulate stale
             // subscriptions for this device (which would deliver duplicate pushes).
             if (oldEndpoint && oldEndpoint !== subData.endpoint) {
-                apiFetch(`${API_ENDPOINTS.NOTIFICATIONS.UNSUBSCRIBE}?endpoint=${encodeURIComponent(oldEndpoint)}`, authToken, {
-                    method: 'POST',
-                    raw: true,
-                }).catch(() => { /* best effort */ });
+                unsubscribeEndpoint(oldEndpoint, authToken).catch(() => { /* best effort */ });
             }
 
             setSubscription(newSub);
@@ -156,11 +164,7 @@ export const NotificationProvider = ({ children }) => {
         try {
             // Unsubscribe from backend first
             const authToken = token;  // never persisted — see the note in subscribe (audit L-8)
-            await apiFetch(
-                `${API_ENDPOINTS.NOTIFICATIONS.UNSUBSCRIBE}?endpoint=${encodeURIComponent(subscription.endpoint)}`,
-                authToken,
-                { method: 'POST', raw: true }
-            );
+            await unsubscribeEndpoint(subscription.endpoint, authToken);
 
             // Unsubscribe from browser
             await subscription.unsubscribe();

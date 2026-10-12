@@ -11,7 +11,11 @@ export const createGroupEventHandlers = ({
     setActiveGroupConversation,
     activeGroupConversationRef,
 }) => ({
-    GROUP_CREATED: () => {
+    // Sent to each member a group is created with (audit 2026-09-23 Q-1). It
+    // never worked from either end: the server could not serialize it, and
+    // this map listened for a GROUP_CREATED the server never sent — so a new
+    // group appeared only on its first message or a reload.
+    GROUP_JOINED: () => {
         fetchGroupConversations();
     },
 

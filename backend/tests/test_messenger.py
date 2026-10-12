@@ -17,6 +17,13 @@ def _send_message(client, token, recipient_address, content="Hello encrypted"):
 
 
 class TestSendMessage:
+    def test_messaging_yourself_is_refused(self, client, user1):
+        """Audit 2026-09-23 M-1: no client does it, and each one made the
+        server push to hosts the sender chose — a reflector at 20 a minute."""
+        token, me = user1
+        resp = _send_message(client, token, me["address"].upper())
+        assert resp.status_code == 400
+
     def test_send_message_success(self, client, user1, user2):
         token1, _ = user1
         _, u2 = user2

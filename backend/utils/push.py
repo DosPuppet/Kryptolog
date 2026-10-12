@@ -1,9 +1,10 @@
 import json
 import logging
 import os
+import threading
+from concurrent.futures import ThreadPoolExecutor, wait
 
 from pywebpush import WebPushException, webpush
-from starlette.concurrency import run_in_threadpool
 
 from security.url_guard import UnsafeUrlError, build_guarded_session
 
@@ -150,30 +151,71 @@ def notify_user_push(db, user_address, title, body, data=None):
             db.commit()
 
 
-async def notify_user_push_async(db, user_address, title, body, data=None):
-    """Await-able `notify_user_push` for use from `async def` endpoints.
+# ── Delivery off the request path (audit 2026-09-23 M-1) ─────────────────
+#
+# Every push used to be sent inside the request that caused it: a DM, a share,
+# a group post waited for all of the recipient's pushes, serially, each bounded
+# by PUSH_TIMEOUT_SECONDS. The endpoints are chosen by the recipient, so a user
+# who registered a few hundred subscriptions on a host that accepts and then
+# stalls made everyone who wrote to them wait N × 10 s, holding a thread of the
+# pool that serves every sync route — a handful of such sends and the worker
+# stopped answering.
+#
+# Now a send is queued and the request returns. Pushes run on their OWN small
+# pool, so a slow host can occupy at most PUSH_WORKERS threads, never the
+# server's; each job opens its own Session, since the request's is closed by
+# the time it runs. The queue is bounded and drops rather than waits when full:
+# a push is a hint that something arrived, the data itself is in the database,
+# and a backlog must never become backpressure on the people sending messages.
+# Combined with the per-account subscription cap, one recipient now costs at
+# most MAX_SUBSCRIPTIONS_PER_USER × PUSH_TIMEOUT_SECONDS of ONE push worker.
+PUSH_WORKERS = 4
+PUSH_QUEUE_MAX = 1000
 
-    Runs the blocking push path in a worker thread so the event loop stays free.
-    The request's Session is touched only inside that thread while this
-    coroutine is suspended, so it is never used from two places at once.
-    """
-    await run_in_threadpool(notify_user_push, db, user_address, title, body, data)
+_executor = ThreadPoolExecutor(max_workers=PUSH_WORKERS, thread_name_prefix="push")
+_slots = threading.BoundedSemaphore(PUSH_QUEUE_MAX)
+_pending: set = set()
+_pending_lock = threading.Lock()
 
 
-async def notify_many_push_async(db, notifications):
-    """Fan out several pushes in ONE worker-thread hop.
+def _run_push(user_address, title, body, data):
+    from database import SessionLocal
 
-    `notifications` is an iterable of (user_address, title, body, data). A group
-    broadcast would otherwise pay a thread handoff per member; more importantly
-    the sends stay off the event loop while remaining serial, so a large group
-    can't occupy the whole threadpool at once.
-    """
-    items = list(notifications)
-    if not items:
-        return
+    db = SessionLocal()
+    try:
+        notify_user_push(db, user_address, title, body, data)
+    except Exception:
+        logger.exception("Push job for %s... failed", user_address[:10])
+    finally:
+        db.close()
 
-    def _send_all():
-        for user_address, title, body, data in items:
-            notify_user_push(db, user_address, title, body, data)
 
-    await run_in_threadpool(_send_all)
+def _done(future):
+    _slots.release()
+    with _pending_lock:
+        _pending.discard(future)
+
+
+def schedule_pushes(notifications) -> None:
+    """Queue (user_address, title, body, data) pushes and return at once."""
+    for user_address, title, body, data in notifications:
+        if not _slots.acquire(blocking=False):
+            logger.warning("Push queue full; dropping a push to %s...", user_address[:10])
+            continue
+        future = _executor.submit(_run_push, user_address, title, body, data)
+        with _pending_lock:
+            _pending.add(future)
+        future.add_done_callback(_done)
+
+
+def schedule_push(user_address, title, body, data=None) -> None:
+    schedule_pushes([(user_address, title, body, data)])
+
+
+def drain_pushes(timeout: float = 30.0) -> bool:
+    """Wait for every queued push to finish. For shutdown and tests: a test
+    must not leave a job writing to a schema the next test drops."""
+    with _pending_lock:
+        pending = list(_pending)
+    done, not_done = wait(pending, timeout=timeout)
+    return not not_done
