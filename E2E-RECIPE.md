@@ -24,7 +24,10 @@ past a failure — a step here failing is the point of the exercise.
 # reset the repo offers. `alembic downgrade base` is NOT equivalent — two
 # migrations recreate tables they dropped, and f6a7b8c9d0e5's downgrade is a
 # no-op by design.
-docker compose down -v && docker compose up -d postgres redis
+# Compose takes its passwords from backend/.env (audit 2026-10-12 K-01). After
+# `down -v` the new volume is initialised with POSTGRES_PASSWORD from that file.
+docker compose --env-file backend/.env down -v && \
+  docker compose --env-file backend/.env up -d postgres redis
 
 # `start_all.sh` calls `python3 -m pip` with whatever python3 is on PATH, so the
 # venv has to be active first or it fails at the dependency step.

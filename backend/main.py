@@ -42,7 +42,9 @@ async def _lifespan(app: FastAPI):
     await ws_manager.shutdown()
 
 
-app = FastAPI(lifespan=_lifespan)
+import config  # noqa: E402
+
+app = FastAPI(lifespan=_lifespan, **config.api_docs_settings())
 app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
@@ -90,10 +92,22 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
         return response
 
 
+# The body ceiling the reverse proxy used to be the only holder of (audit
+# 2026-10-12 K-16). Added BEFORE the headers middleware so it sits INSIDE it,
+# next to FastAPI: SecurityHeadersMiddleware is a BaseHTTPMiddleware, which
+# relays the request stream through its own task and rewraps anything raised
+# there, so from outside it a chunked body that overran the limit reached
+# FastAPI as an unknown error and came back as a generic 400. Inside, the 413
+# arrives intact, with the security headers on it. A declared Content-Length is
+# still refused before any body byte is read: BaseHTTPMiddleware streams lazily.
+from security.body_limit import BodySizeLimitMiddleware  # noqa: E402
+
+app.add_middleware(BodySizeLimitMiddleware)
+
 app.add_middleware(SecurityHeadersMiddleware)
 
+
 # CORS configuration
-import config
 
 origins = config.get_allowed_origins()
 if origins:
@@ -136,6 +150,9 @@ app.add_middleware(
 import auth as signing
 
 signing.get_jwt_secret()
+# Same fail-closed rule for the two settings that decide who can reach the
+# server at all — see config.check_production_settings.
+config.check_production_settings()
 
 # ── Routers ─────────────────────────────────────────────────────
 

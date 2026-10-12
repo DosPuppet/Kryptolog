@@ -16,7 +16,27 @@ import argparse
 
 import invites
 from database import SessionLocal, engine
-from models import Base
+
+
+def _schema_is_current() -> bool:
+    """True when the database is migrated to the newest Alembic revision.
+
+    This script used to call `Base.metadata.create_all()` "to make sure the table
+    exists" (audit 2026-09-11 F-7). On a fresh database that built every table
+    WITHOUT stamping a revision, so the `alembic upgrade head` that start_all.sh
+    and serve.sh run next tried to create them all again and failed — a server
+    that refused to start because someone minted an invite first. Invites are
+    on by default now (audit 2026-10-12 K-09), which makes this the first thing
+    a new deployment runs, so it checks instead of creating.
+    """
+    from alembic.config import Config
+    from alembic.runtime.migration import MigrationContext
+    from alembic.script import ScriptDirectory
+
+    heads = set(ScriptDirectory.from_config(Config("alembic.ini")).get_heads())
+    with engine.connect() as conn:
+        current = set(MigrationContext.configure(conn).get_current_heads())
+    return current == heads
 
 
 def main():
@@ -32,8 +52,11 @@ def main():
     )
     args = parser.parse_args()
 
-    # Make sure the table exists even on a fresh DB the app hasn't migrated yet.
-    Base.metadata.create_all(bind=engine)
+    if not _schema_is_current():
+        raise SystemExit(
+            "The database is not migrated to the current schema. Run "
+            "`alembic upgrade head` (start_all.sh and serve.sh do) and try again."
+        )
 
     db = SessionLocal()
     try:

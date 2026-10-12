@@ -14,28 +14,24 @@ from security import authorization
 
 logger = logging.getLogger("kryptolog.ratelimit")
 
-# Reverse-proxy awareness for rate limiting.
-# Behind nginx (proxy_pass to 127.0.0.1), every request's direct peer is the
-# proxy, so keying limits on request.client.host collapses everyone into one
-# bucket. We trust forwarding headers ONLY when the direct peer is a configured
-# proxy IP, then use nginx's X-Real-IP (set to $remote_addr — not client-spoofable)
-# or, as a fallback, the right-most X-Forwarded-For entry (the hop nginx appended).
-TRUSTED_PROXY_IPS = {
-    ip.strip() for ip in (os.getenv("TRUSTED_PROXY_IPS") or "127.0.0.1").split(",") if ip.strip()
-}
-
 
 def client_ip(request: Request) -> str:
-    """Rate-limit key: the real client IP, resolved safely behind a trusted proxy."""
-    peer = request.client.host if request.client else None
-    if peer in TRUSTED_PROXY_IPS:
-        real = request.headers.get("x-real-ip")
-        if real:
-            return real.strip()
-        xff = request.headers.get("x-forwarded-for")
-        if xff:
-            # Right-most entry is the hop our own proxy appended (least spoofable).
-            return xff.split(",")[-1].strip()
+    """Rate-limit key: the connecting client, as uvicorn resolved it.
+
+    Behind a reverse proxy every request's TCP peer is the proxy, so the real
+    client has to come from a forwarding header — and only when that peer is a
+    trusted proxy. That resolution is uvicorn's job, not ours: `serve.sh` passes
+    `--proxy-headers --forwarded-allow-ips "$TRUSTED_PROXY_IPS"`, and uvicorn
+    rewrites `request.client` to the right-most UNTRUSTED X-Forwarded-For hop.
+
+    This used to read X-Real-IP itself whenever the peer was trusted (audit
+    2026-10-12 K-17). That header is only safe if the proxy overwrites it, and
+    not every proxy does: Caddy relays a client-sent X-Real-IP untouched, so any
+    client behind it chose its own rate-limit bucket — one fresh quota per
+    request, on the login limit included. X-Forwarded-For has no such ambiguity:
+    every proxy appends to it, and the walk from the right stops at the first
+    hop no trusted proxy vouched for.
+    """
     return get_remote_address(request)
 
 

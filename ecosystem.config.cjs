@@ -33,10 +33,16 @@ module.exports = {
       exp_backoff_restart_delay: 1000,
       max_restarts: 5
     },
+    // LOCAL preview of the built SPA, on loopback (audit 2026-10-12 K-01/K-16).
+    // `vite preview` emits no security headers — the CSP exists only as a
+    // <meta> tag, which cannot express frame-ancestors — so it must not face a
+    // network. Production serves frontend/dist from the reverse proxy
+    // (DEPLOYMENT.md). KRYPTOLOG_FRONTEND_HOST overrides the bind for testing
+    // from another device on a trusted LAN, deliberately and visibly.
     {
       name: 'kryptolog-frontend',
       script: 'npm',
-      args: 'run preview -- --host 0.0.0.0 --port 5173',
+      args: `run preview -- --host ${process.env.KRYPTOLOG_FRONTEND_HOST || '127.0.0.1'} --port 5173`,
       cwd: './frontend',
       instances: 1,
       autorestart: true,

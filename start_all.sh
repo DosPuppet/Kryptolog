@@ -1,5 +1,11 @@
 #!/bin/bash
-# Unified startup script for Kryptolog using PM2
+# Unified startup script for Kryptolog using PM2 — a LOCAL / development stack.
+#
+# Everything it starts listens on 127.0.0.1 (audit 2026-10-12 K-01): Postgres and
+# Redis through docker-compose.yml, the API through backend/serve.sh, the SPA
+# preview through ecosystem.config.cjs. A deployment reachable by anyone else
+# puts a reverse proxy in front and serves frontend/dist statically — see
+# DEPLOYMENT.md. `vite preview` is not a production server (K-16).
 
 # Ensure we are in the project root
 cd "$(dirname "$0")"
@@ -21,10 +27,13 @@ if ! source scripts/load_env.sh; then
     echo "  running with a silently unloaded environment (no DATABASE_URL, no JWT secret)."
     exit 1
 fi
-if [ -f backend/.env ]; then
-  echo "Loading variables from backend/.env"
-  kryptolog_load_env backend/.env
+# First run: backend/.env is generated with random secrets — there is no
+# well-known password to fall back to any more (audit 2026-10-12 K-01).
+if ! scripts/init_env.sh; then
+    exit 1
 fi
+echo "Loading variables from backend/.env"
+kryptolog_load_env backend/.env
 
 # Apply Development Defaults if not set
 export ALLOWED_ORIGINS="${ALLOWED_ORIGINS:-http://localhost:5173,http://127.0.0.1:5173}"
@@ -46,12 +55,13 @@ DB_URL="${DATABASE_URL:-postgresql+psycopg://kryptolog:kryptolog@localhost:5432/
 if [[ "$DB_URL" != *"localhost"* && "$DB_URL" != *"127.0.0.1"* ]]; then
     echo "DATABASE_URL points at an external database — skipping local Postgres startup."
 elif command -v docker &> /dev/null; then
-    echo "Starting PostgreSQL + Redis (docker compose)..."
-    docker compose up -d postgres redis
+    echo "Starting PostgreSQL + Redis (docker compose, loopback only)..."
+    # --env-file: compose takes the passwords from backend/.env (K-01).
+    docker compose --env-file backend/.env up -d postgres redis
     echo -n "Waiting for Postgres to be healthy"
     PG_STATUS=""
     for _ in $(seq 1 30); do
-        PG_STATUS=$(docker inspect --format '{{.State.Health.Status}}' "$(docker compose ps -q postgres)" 2>/dev/null)
+        PG_STATUS=$(docker inspect --format '{{.State.Health.Status}}' "$(docker compose --env-file backend/.env ps -q postgres)" 2>/dev/null)
         [ "$PG_STATUS" = "healthy" ] && break
         echo -n "."
         sleep 1

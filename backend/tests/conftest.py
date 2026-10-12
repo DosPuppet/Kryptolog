@@ -19,9 +19,16 @@ import pytest
 # Ensure backend root is importable
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-TEST_DATABASE_URL = os.getenv(
-    "TEST_DATABASE_URL",
-    "postgresql+psycopg://kryptolog:kryptolog@localhost:5432/kryptolog_test",
+# The compose Postgres password lives in backend/.env now (audit 2026-10-12
+# K-01), and pytest does not load that file itself.
+from utils.dotenv import read_dotenv_value  # noqa: E402
+
+# Environment first (CI sets it), then backend/.env, then the CI service's own
+# credentials — which only exist inside the CI job's throwaway container.
+TEST_DATABASE_URL = (
+    os.getenv("TEST_DATABASE_URL")
+    or read_dotenv_value("TEST_DATABASE_URL")
+    or "postgresql+psycopg://kryptolog:kryptolog@localhost:5432/kryptolog_test"
 )
 
 # Must be set before importing `database`/`main`: `database` builds its engine

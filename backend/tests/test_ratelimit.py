@@ -1,58 +1,77 @@
-"""Tests for the reverse-proxy-aware rate-limit key (dependencies.client_ip).
+"""Tests for the rate-limit key (dependencies.client_ip).
 
-Behind nginx the direct peer is the proxy, so the limiter must resolve the real
-client IP from trusted forwarding headers — but only when the peer is actually a
-trusted proxy, otherwise a client could spoof headers to dodge limits.
+Behind a proxy the direct peer is the proxy, so the limiter must key on the real
+client — resolved from a forwarding header only when the peer is a trusted
+proxy, otherwise a client could spoof its way to a fresh bucket.
+
+That resolution belongs to uvicorn now (audit 2026-10-12 K-17), so these tests
+run requests through uvicorn's own ProxyHeadersMiddleware, configured the way
+serve.sh configures it, rather than asserting on a function in isolation: the
+property worth pinning is what a deployed server does.
 """
 
+import asyncio
+import pathlib
+
+import httpx
 from starlette.requests import Request
+from starlette.responses import PlainTextResponse
+from uvicorn.middleware.proxy_headers import ProxyHeadersMiddleware
 
-from dependencies import TRUSTED_PROXY_IPS, _ratelimit_storage_uri, client_ip
-
-
-def _request(peer_host, headers=None):
-    raw_headers = [(k.lower().encode(), v.encode()) for k, v in (headers or {}).items()]
-    scope = {
-        "type": "http",
-        "method": "GET",
-        "path": "/",
-        "client": (peer_host, 12345),
-        "headers": raw_headers,
-    }
-    return Request(scope)
+from dependencies import _ratelimit_storage_uri, client_ip
 
 
-def test_default_trusted_proxy_is_localhost():
-    assert "127.0.0.1" in TRUSTED_PROXY_IPS
+async def _key_app(scope, receive, send):
+    await PlainTextResponse(client_ip(Request(scope)))(scope, receive, send)
+
+
+def _key_for(peer_host, headers=None, trusted="127.0.0.1"):
+    """The rate-limit key a request from `peer_host` gets behind uvicorn."""
+    app = ProxyHeadersMiddleware(_key_app, trusted_hosts=trusted)
+    transport = httpx.ASGITransport(app=app, client=(peer_host, 12345))
+
+    async def go():
+        async with httpx.AsyncClient(transport=transport, base_url="http://t") as c:
+            return (await c.get("/", headers=headers or {})).text
+
+    return asyncio.run(go())
 
 
 def test_direct_client_no_proxy():
     # No proxy in front: the peer IS the client.
-    req = _request("203.0.113.7")
-    assert client_ip(req) == "203.0.113.7"
+    assert _key_for("203.0.113.7") == "203.0.113.7"
 
 
-def test_trusted_proxy_uses_x_real_ip():
-    req = _request(
-        "127.0.0.1", {"x-real-ip": "203.0.113.9", "x-forwarded-for": "1.1.1.1, 203.0.113.9"}
-    )
-    assert client_ip(req) == "203.0.113.9"
+def test_trusted_proxy_uses_the_hop_it_appended():
+    # nginx: proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for, i.e.
+    # whatever the client sent, then the address nginx actually saw.
+    assert _key_for("127.0.0.1", {"x-forwarded-for": "9.9.9.9, 203.0.113.5"}) == "203.0.113.5"
 
 
-def test_trusted_proxy_falls_back_to_rightmost_xff():
-    req = _request("127.0.0.1", {"x-forwarded-for": "9.9.9.9, 203.0.113.5"})
-    assert client_ip(req) == "203.0.113.5"
+def test_a_client_sent_x_real_ip_is_ignored_even_from_a_trusted_proxy():
+    """K-17: a proxy that relays X-Real-IP untouched (Caddy does) let every
+    client pick its own bucket. Only X-Forwarded-For is read now."""
+    key = _key_for("127.0.0.1", {"x-real-ip": "198.51.100.1", "x-forwarded-for": "203.0.113.9"})
+    assert key == "203.0.113.9"
 
 
 def test_untrusted_peer_ignores_spoofed_headers():
     # A direct (non-proxy) client cannot spoof its way to a different bucket.
-    req = _request("203.0.113.50", {"x-real-ip": "127.0.0.1", "x-forwarded-for": "8.8.8.8"})
-    assert client_ip(req) == "203.0.113.50"
+    key = _key_for("203.0.113.50", {"x-real-ip": "127.0.0.1", "x-forwarded-for": "8.8.8.8"})
+    assert key == "203.0.113.50"
 
 
 def test_trusted_proxy_without_headers_uses_peer():
-    req = _request("127.0.0.1")
-    assert client_ip(req) == "127.0.0.1"
+    assert _key_for("127.0.0.1") == "127.0.0.1"
+
+
+def test_serve_sh_hands_proxy_resolution_to_uvicorn():
+    """client_ip trusts request.client, so the flags that make uvicorn rewrite
+    it are part of the rule. Dropping them silently keys every client behind a
+    proxy on the proxy's own address: one shared quota for everybody."""
+    serve = (pathlib.Path(__file__).parents[1] / "serve.sh").read_text()
+    assert "--proxy-headers" in serve
+    assert '--forwarded-allow-ips "$TRUSTED_PROXY_IPS"' in serve
 
 
 # --- Rate-limit storage selection (audit F-3) ---

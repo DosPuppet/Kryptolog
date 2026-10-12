@@ -1209,8 +1209,8 @@ single crypto-core **3.0.0** cutover (lots 4–6); hybridization is a later **4.
 
 | Lot | Scope | Prio | Status |
 |---|---|---|---|
-| 1 | Supply chain: hashed lock Dependabot can regenerate, pinned liboqs, npm advisories | P0 | done |
-| 2 | Default deployment posture (exposed services, proxy headers, docs, body limit) | P0 | |
+| 1 | Supply chain: hashed lock Dependabot can regenerate, pinned liboqs, npm advisories | P0 | done — `bd12c2b` |
+| 2 | Default deployment posture (exposed services, proxy headers, docs, body limit) | P0 | done |
 | 3 | Quotas and input bounds | P0 | |
 | 4 | Protocol cutover, crypto-core 3.0.0 | P1 | |
 | 5 | TrustKeys custody (ships with 4) | P1 | |
@@ -1246,3 +1246,53 @@ single crypto-core **3.0.0** cutover (lots 4–6); hybridization is a later **4.
   `npm audit fix`, lockfiles only. `esbuild` low stays, by the same choice as before.
 - The stale Dependabot branches were not merged: they target the old file layout
   and Dependabot will rebase or supersede them after the push.
+
+### Lot 2 — default deployment posture
+
+Closes K-01 (high), K-16, K-17, K-18, K-19, and 2026-09-11 M-2, M-4 (part), F-1,
+F-7, F-9. **`DEPLOYMENT.md` is new** and is what to read before exposing anything.
+
+- **Everything `start_all.sh` starts listens on 127.0.0.1.** Compose publishes
+  Postgres and Redis on loopback (Docker's published ports bypass UFW), `serve.sh`
+  binds uvicorn there (`KRYPTOLOG_BIND` overrides), PM2's `vite preview` too
+  (`KRYPTOLOG_FRONTEND_HOST`). Production serves `frontend/dist` from the proxy.
+- **No well-known password anywhere.** `docker-compose.yml` reads
+  `POSTGRES_PASSWORD` / `REDIS_PASSWORD` from `backend/.env` and stops without
+  them, so **every compose command needs `--env-file backend/.env`**.
+  `scripts/init_env.sh` generates that file on first run (mode 600) and refuses
+  an old one missing the keys instead of inventing a password the existing volume
+  would not know. **This dev box was rotated on 2026-10-12**: the Postgres role
+  has a new password (`ALTER ROLE`), Redis now requires one, and `backend/.env`
+  carries both. `pytest`, `alembic` and `generate_invites.py`
+  read `DATABASE_URL` / `TEST_DATABASE_URL` from `backend/.env` when the
+  environment has none (`utils/dotenv.read_dotenv_value`, data only, environment
+  wins) — the old built-in default carried the password that no longer exists,
+  and a bare `alembic check` failed on it.
+- **The rate-limit key comes from uvicorn, not from us (K-17).** `client_ip` is
+  `request.client.host`; `serve.sh` runs `--proxy-headers --forwarded-allow-ips
+  "$TRUSTED_PROXY_IPS"`, which takes the right-most `X-Forwarded-For` hop no
+  trusted proxy vouched for. `X-Real-IP` is ignored — Caddy relays a client-sent
+  one untouched. Verified live through the nginx example from a non-loopback
+  address: rotating spoofed `X-Real-IP` and `X-Forwarded-For` still hits one
+  bucket. **Test from a non-loopback address**: a loopback client is itself a
+  trusted hop, so uvicorn walks past it into whatever the client wrote.
+- **The backend has its own 8 MB body ceiling** (`security/body_limit.py`), so a
+  proxy without one no longer means unbounded reads. It must stay added BEFORE
+  `SecurityHeadersMiddleware` in `main.py`: that one is a `BaseHTTPMiddleware`,
+  and from outside it the overflow of a chunked body reaches FastAPI rewrapped
+  and comes back as a generic 400. Found by mutation testing, pinned by
+  `test_the_real_app_refuses_an_undeclared_oversized_body_with_413`. nginx's
+  `client_max_body_size` went 64M → 8M to match.
+- **Production refuses to start on a policy nobody chose**:
+  `KRYPTOLOG_REQUIRE_INVITE` must be set (true *or* false) and `ALLOWED_ORIGINS`
+  must be non-empty (an empty list makes the WebSocket Origin check accept
+  everything). `/docs`, `/redoc`, `/openapi.json` are off in production.
+  `.env.example` ships production mode and invite-only signup.
+- `generate_invites.py` no longer calls `create_all` (2026-09-11 F-7): it refuses
+  to run until Alembic is at head, instead of building an unstamped schema that
+  the next `alembic upgrade` fails on.
+- uvicorn: no `Server` header, WebSocket frames capped at 64 KB (16 MB default).
+- README no longer says the PQC libraries are "audited" (K-19), and states that
+  ML-KEM wraps per *session* and that the *server* withholds multisig releases.
+- **Deliberately not done:** a per-IP WebSocket connection cap (2026-09-23 Q-5).
+  Behind a corporate NAT an office shares one address. Recorded in DEPLOYMENT.md.

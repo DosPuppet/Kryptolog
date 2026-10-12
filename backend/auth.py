@@ -9,6 +9,8 @@ from datetime import UTC, datetime, timedelta
 import jwt
 import oqs
 
+import config
+
 logger = logging.getLogger("kryptolog.auth")
 
 # --- Post-quantum signature config (NIST FIPS 204) ---
@@ -29,7 +31,7 @@ _JWT_SECRET = None  # str
 
 
 def _is_production() -> bool:
-    return (os.getenv("KRYPTOLOG_ENV") or "development").strip().lower() in ("production", "prod")
+    return config.is_production()
 
 
 def _load_jwt_secret() -> str:

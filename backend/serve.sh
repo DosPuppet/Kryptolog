@@ -65,7 +65,23 @@ fi
 # server directly instead of a wrapper that would swallow SIGTERM and turn
 # every restart into a kill after the graceful-stop timeout.
 echo "Starting FastAPI backend..."
+#
+# Loopback by default (audit 2026-10-12 K-01): the API is meant to be reached
+# through the reverse proxy, which is where TLS, HSTS, the SPA's CSP and the
+# body limit live. Bound to 0.0.0.0 it was reachable around all of that.
+# KRYPTOLOG_BIND overrides it for a proxy on another host.
+#
+# Proxy headers are resolved by uvicorn, trusting only TRUSTED_PROXY_IPS (K-17;
+# see dependencies.client_ip). The WebSocket frame cap is far above anything a
+# client sends — an AUTH frame carrying a JWT is the largest — and far below
+# uvicorn's 16 MB default. No Server header: the version helps nobody but a
+# scanner (audit 2026-09-11 F-1).
+TRUSTED_PROXY_IPS="${TRUSTED_PROXY_IPS:-127.0.0.1}"
 exec "$PY" -m uvicorn main:app \
-    --host 0.0.0.0 \
+    --host "${KRYPTOLOG_BIND:-127.0.0.1}" \
     --port 8000 \
+    --proxy-headers \
+    --forwarded-allow-ips "$TRUSTED_PROXY_IPS" \
+    --no-server-header \
+    --ws-max-size 65536 \
     --h11-max-incomplete-event-size 65536
