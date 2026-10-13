@@ -25,6 +25,9 @@ const vault = {
     hasCachedSigningKey: vi.fn(() => false),
     decryptMany: vi.fn(async () => ['vault-plaintext']),
     unwrapManySessionKeys: vi.fn(async () => ['vault-unwrapped']),
+    importEncryptedBlob: vi.fn(async () => ({
+        name: 'Moved', mldsa: { publicKey: 'aa'.repeat(16) }, mlkem: { publicKey: 'bb'.repeat(16) },
+    })),
 };
 
 vi.mock('../services/vault', () => ({ vaultService: vault }));
@@ -133,3 +136,30 @@ describe('with the extension present', () => {
         );
     });
 });
+
+describe('receiving a vault from another device', () => {
+    // It signed the login body's FIELDS ("[object Object]") and sent no
+    // attestation, so the server refused it after the vault was already
+    // written: a device transfer could never finish signing in.
+    it('signs the real login challenge and attests the encryption key', async () => {
+        const posted = [];
+        global.fetch = vi.fn(async (url, init = {}) => {
+            if (String(url).includes('/auth/nonce/')) {
+                return { ok: true, json: async () => ({ nonce: 'ab12', deployment: 'dev' }) };
+            }
+            posted.push(JSON.parse(init.body));
+            return { ok: true, json: async () => ({ access_token: 'tok', user: { address: 'aa'.repeat(16) } }) };
+        });
+        await mount();
+        await act(async () => { await api.receiveVault('{}', 'transfer-pass', 'new local password'); });
+
+        const signed = vault.sign.mock.calls.map(([body]) => body);
+        expect(signed.some((b) => typeof b === 'string' && b.includes('\ncontext=login\n'))).toBe(true);
+        expect(signed.some((b) => typeof b === 'string' && b.includes('\ncontext=key-attestation\n'))).toBe(true);
+        expect(signed.every((b) => typeof b === 'string')).toBe(true);
+        expect(posted[0]).toMatchObject({
+            signature: 'vault-signature', encryption_key_attestation: 'vault-signature',
+        });
+    });
+});
+

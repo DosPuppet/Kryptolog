@@ -328,7 +328,15 @@ export const PQCProvider = ({ children }) => {
         setPqcAccount(accountId);
         setMlkemKey(encryptionKey);
 
-        return performServerLogin(accountId, encryptionKey, (msg) => vaultService.sign(msg, newLocalPassword), account.name, inviteCode);
+        // The same two helpers as every other local-vault login. This path used
+        // to pass `(msg) => vaultService.sign(msg, pw)` — which received the
+        // body's FIELDS, not the body, so it signed "[object Object]" — and no
+        // attestation at all, so the login threw only after the vault had been
+        // written: a device transfer could never finish signing in.
+        return performServerLogin(
+            accountId, encryptionKey, vaultSignLogin(newLocalPassword), account.name, inviteCode,
+            vaultAttest(newLocalPassword, encryptionKey),
+        );
     };
 
     // Every custody operation answers the same question first: is the key held
