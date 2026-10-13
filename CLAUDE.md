@@ -1831,5 +1831,6 @@ whose DNS answers every name (a captive Wi-Fi portal did, here) — environmenta
 not this change. Mutation-tested: a verifier that accepts everything fails 20
 tests across five files; dropping the startup probe fails its gate.
 
-**Committed on branch `pqc-pyca-2026-10`** (`68bfc70`). Not merged to `main`,
-not pushed — the first CI run without liboqs has not happened yet.
+**Merged to `main` on 2026-10-13** (fast-forward, `210e4ed`..`26b2f2f`; the
+branch `pqc-pyca-2026-10` is still around at the merged commit). **Not pushed** —
+the first CI run without liboqs has not happened yet.
