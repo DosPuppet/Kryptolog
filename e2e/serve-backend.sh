@@ -36,6 +36,5 @@ done
 # within a minute of the last one would otherwise inherit its login count and
 # hit the 5/minute limit — found as a flake on back-to-back runs.
 "$PY" -c 'import os, redis; redis.Redis.from_url(os.environ["REDIS_URL"]).flushdb()'
-../scripts/build_liboqs.sh --check
 "$PY" -m alembic upgrade head
 exec "$PY" -m uvicorn main:app --host 127.0.0.1 --port 8002 --no-server-header

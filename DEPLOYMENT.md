@@ -134,10 +134,12 @@ account can do, not what all of them can.
 
 ### Native dependencies
 
-`scripts/build_liboqs.sh` builds liboqs from a pinned, checksummed release;
-`serve.sh` refuses to start without it, so liboqs-python never compiles an
-unpinned copy itself. Python packages come from the hashed lock:
-`pip install --require-hashes -r backend/requirements.txt`.
+None to build. Python packages come from the hashed lock:
+`pip install --require-hashes -r backend/requirements.txt`. ML-DSA-44 comes from
+the `cryptography` wheel and the OpenSSL it bundles; the backend refuses to
+import on a `cryptography` without it (older than 48, or a source build against
+OpenSSL < 3.5), rather than failing every login later. Wheels exist for Linux
+x86_64/aarch64; on another platform the lock falls back to a source build.
 
 ### Rotating the Postgres password
 

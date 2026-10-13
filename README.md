@@ -4,7 +4,7 @@ A secure secret management and document signing platform built on **NIST FIPS po
 
 For how the pieces fit together read [ARCHITECTURE.md](ARCHITECTURE.md); for what is and is not protected, [THREAT_MODEL.md](THREAT_MODEL.md); before exposing it to anyone, [DEPLOYMENT.md](DEPLOYMENT.md).
 
-Crypto runs on standards-based open-source libraries: [`@noble/post-quantum`](https://github.com/paulmillr/noble-post-quantum) in the browser and extension (pure TS, no WASM), and [`liboqs`](https://github.com/open-quantum-safe/liboqs-python) in the backend (in-process, no sidecar). Neither has had an independent third-party audit: `@noble/post-quantum` is self-audited and makes no side-channel claims, and the liboqs maintainers advise against production use without a hybrid classical algorithm. Byte-for-byte agreement between the two is proven in CI; the libraries themselves are trusted, not verified, by this project.
+Crypto runs on standards-based open-source libraries: [`@noble/post-quantum`](https://github.com/paulmillr/noble-post-quantum) in the browser and extension (pure TS, no WASM), and [`pyca/cryptography`](https://cryptography.io/) — ML-DSA from OpenSSL — in the backend (in-process, no sidecar). `@noble/post-quantum` has had no independent third-party audit: it is self-audited and makes no side-channel claims. It stays because no production-grade replacement runs in every browser yet. The server only *verifies* signatures, which handles no secret. Byte-for-byte agreement between the two is proven in CI, down to the same ML-DSA public key from the same seed; the libraries themselves are trusted, not verified, by this project.
 
 ---
 
@@ -12,14 +12,14 @@ Crypto runs on standards-based open-source libraries: [`@noble/post-quantum`](ht
 
 ```
 kryptolog/
-├── backend/            Python FastAPI API (in-process ML-DSA via liboqs)
+├── backend/            Python FastAPI API (in-process ML-DSA via pyca/cryptography)
 ├── frontend/           React 19 SPA (Vite + TailwindCSS 4)
 ├── trustkeys/          Chrome/Brave extension (MV3, React 18) — PQC key custodian
 ├── packages/
 │   └── crypto-core/    Shared crypto package — single source of truth for every
 │                       wire/storage primitive (consumed by SPA + extension)
 ├── e2e/                Playwright end-to-end suite: real Chromium + the extension
-├── scripts/            init_env.sh, build_liboqs.sh, backup.sh / restore.sh
+├── scripts/            init_env.sh, backup.sh / restore.sh
 └── docker-compose.yml  Local PostgreSQL 16 + Redis 7 (loopback only) for dev + tests
 ```
 
@@ -35,7 +35,7 @@ kryptolog/
 │       Backend API           │
 │   FastAPI + SQLAlchemy      │
 │   PyJWT HS256 tokens        │
-│   liboqs ML-DSA-44 verify   │
+│   ML-DSA-44 verify (OpenSSL)│
 │   localhost:8000            │
 └─────┬──────────────────┬────┘
       │                  │ (optional, enables multi-worker)
@@ -55,7 +55,7 @@ Two app processes run locally — the FastAPI API and the Vite dev server — on
 | Feature | Description |
 |---------|-------------|
 | **Post-Quantum Authentication** | TrustKeys / local-vault ML-DSA-44 login-challenge signatures, bound to this server's origin and deployment id; the server then issues a 30-minute HS256 session JWT, revocable (sign-out ends every session and hangs up their sockets) |
-| **Post-Quantum Cryptography** | ML-KEM-768 (FIPS 203) + ML-DSA-44 (FIPS 204), via `@noble/post-quantum` (clients) and `liboqs` (server) |
+| **Post-Quantum Cryptography** | ML-KEM-768 (FIPS 203) + ML-DSA-44 (FIPS 204), via `@noble/post-quantum` (clients) and `pyca/cryptography` on OpenSSL (server) |
 | **Secret Vault** | E2EE secrets with hybrid encryption (ML-KEM-768 KEM + AES-GCM) — **including entry titles** (the server stores only ciphertext names) |
 | **File Vault** | Chunked encrypted file upload/download (up to 50 MB) |
 | **Secure Sharing** | Re-wrap session keys for any recipient (ML-KEM-768) |
@@ -116,9 +116,8 @@ state.
 
 | Tool | Version | Notes |
 |------|---------|-------|
-| **Python** | 3.12 | Backend API. The hashed lock is compiled for 3.12, which CI uses |
+| **Python** | 3.12 | Backend API. The hashed lock is compiled for 3.12, which CI uses. `cryptography` ships wheels for Linux and Apple-silicon macOS; on an **Intel Mac** it builds from source (Rust + an OpenSSL ≥ 3.5, which ML-DSA needs), so running the backend in a Linux container is simpler there |
 | **Docker** | Any recent | Easiest way to run PostgreSQL + Redis locally (`docker compose`). Not needed if you point the backend at external instances. |
-| **CMake + C compiler** | Latest | Required to build `liboqs` (the backend's PQC library). `pip install cmake` works; any system `gcc`/`clang` is fine. |
 | **Node.js** | 22.x | Frontend, extension and e2e builds |
 | **npm** | 10.x | Comes with Node.js |
 | **Chrome / Brave** | Latest | Required for TrustKeys extension |
@@ -156,13 +155,11 @@ cd backend
 python3 -m venv ../.venv
 source ../.venv/bin/activate
 pip install --require-hashes -r requirements.txt   # hashed lock, compiled from requirements.in
-../scripts/build_liboqs.sh                         # pinned liboqs C library — needs cmake + a compiler
 ```
 
-> `scripts/build_liboqs.sh` builds `liboqs` from a pinned, checksummed release
-> into `~/_oqs` (or `$OQS_INSTALL_PATH`), where `liboqs-python` finds it. Left to
-> itself, the binding would instead clone and compile an unpinned copy at first
-> import; `serve.sh` refuses to start without the pinned library.
+> ML-DSA comes from the `cryptography` wheel, which bundles its own OpenSSL, so
+> nothing is compiled. The backend refuses to import on a `cryptography` without
+> ML-DSA-44 (older than 48, or built against OpenSSL < 3.5).
 
 `init_env.sh` already generated the JWT signing secret (`KRYPTOLOG_JWT_SECRET`,
 HS256) and the deployment id. To rotate the secret later, `python
@@ -217,8 +214,7 @@ Then load in Chrome/Brave:
 ```
 
 The script generates `backend/.env` on first run, starts the compose Postgres +
-Redis (skipped for external `DATABASE_URL` / missing Docker), builds the pinned
-liboqs if needed, installs PM2 and frontend dependencies, builds the frontend if
+Redis (skipped for external `DATABASE_URL` / missing Docker), installs PM2 and frontend dependencies, builds the frontend if
 `dist/` is absent, applies migrations, and launches both services under PM2 —
 all bound to `127.0.0.1`. **Activate the venv first**: it installs with whatever
 `python3` is on `PATH`.
@@ -338,10 +334,11 @@ body, and the PQC gate — with real ML-DSA signatures on every signature-gated
 path (`@pytest.mark.real_signatures`). `alembic check`, `ruff check` and
 `ruff format --check` are blocking gates too.
 
-The PQC gate (`backend/tests/test_pqc.py`) proves ML-DSA-44 interop between `liboqs`
-(server) and `@noble/post-quantum` (clients) using the shared fixture
-`tests/fixtures/pqc_interop.json`, plus FIPS size conformance and the (classical
-HS256) JWT issue/verify/tamper/expiry paths.
+The PQC gate (`backend/tests/test_pqc.py`) proves ML-DSA-44 interop between OpenSSL
+(server, through `pyca/cryptography`) and `@noble/post-quantum` (clients) using the
+shared fixture `tests/fixtures/pqc_interop.json` — both directions of signature,
+and the same public key from the same seed — plus FIPS size conformance and the
+(classical HS256) JWT issue/verify/tamper/expiry paths.
 
 ### Frontend (vitest), crypto-core and the extension
 
@@ -352,7 +349,7 @@ cd trustkeys && npm test               # extension (vitest, chrome.* mocked)
 ```
 
 `src/test/pqc.test.js` covers ML-KEM-768 wrap/unwrap round-trips, ML-DSA-44
-sign/verify + tamper rejection, the liboqs→noble interop fixture, and a
+sign/verify + tamper rejection, the OpenSSL→noble interop fixture, and a
 deterministic seeded-keygen byte-pin. `crypto-core`'s suite pins the wire/storage
 formats both apps share.
 
@@ -419,7 +416,7 @@ alembic downgrade -1 # step back one revision
 | Validation | Pydantic 2.14 |
 | ASGI server | uvicorn (standard) |
 | Rate limiting | slowapi 0.1.10 — in-memory by default; Redis-backed when `REDIS_URL` is set |
-| Post-quantum crypto | liboqs-python 0.16 on liboqs 0.16.0 built from a pinned, checksummed release (ML-DSA-44, FIPS 204) — verifies every signature the server relies on |
+| Post-quantum crypto | pyca/cryptography 50 on its bundled OpenSSL (ML-DSA-44, FIPS 204) — verifies every signature the server relies on |
 | JWT | PyJWT 2.15 — HS256 (server-issued, server-verified) |
 
 Exact versions, with hashes, are in `backend/requirements.txt`, compiled from `backend/requirements.in`.

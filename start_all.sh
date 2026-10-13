@@ -41,7 +41,8 @@ export ALLOWED_ORIGINS="${ALLOWED_ORIGINS:-http://localhost:5173,http://127.0.0.
 # JWTs are HS256-signed (PyJWT). For a persistent secret, run
 # `python backend/generate_server_keys.py` and set KRYPTOLOG_JWT_SECRET (in
 # backend/.env or the environment); otherwise an ephemeral secret is used.
-# (liboqs/ML-DSA-44 is still used in-process to verify client login challenges.)
+# (ML-DSA-44 is still used in-process, through pyca/cryptography, to verify
+# client login challenges.)
 if [ -z "$KRYPTOLOG_JWT_SECRET" ]; then
     echo "WARNING: KRYPTOLOG_JWT_SECRET not set — backend will use an ephemeral JWT secret."
 fi
@@ -86,13 +87,6 @@ if python3 -c 'import sys; sys.exit(0 if sys.prefix != sys.base_prefix else 1)';
 fi
 if ! python3 -m pip install $PIP_USER_FLAG -q --require-hashes -r backend/requirements.txt; then
     echo "ERROR: failed to install backend Python dependencies (backend/requirements.txt)."
-    exit 1
-fi
-
-# The C library under the binding, pinned and checksummed. Without it the first
-# `import oqs` would clone and compile an unpinned copy (K-14).
-if ! scripts/build_liboqs.sh; then
-    echo "ERROR: failed to build liboqs — refusing to start."
     exit 1
 fi
 

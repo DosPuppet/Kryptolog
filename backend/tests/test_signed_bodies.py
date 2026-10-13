@@ -22,9 +22,8 @@ import hashlib
 import json
 import pathlib
 
-import oqs
 import pytest
-from conftest import TEST_ORIGIN, get_nonce, server_deployment
+from conftest import TEST_ORIGIN, MLDSA44Signer, get_nonce, server_deployment
 
 import auth
 
@@ -324,22 +323,22 @@ class TestARealLoginSignatureThroughTheEndpoint:
         v = _vectors()
         enc_key = v["mlkem_public_key"]
 
-        with oqs.Signature(auth.SIG_ALG) as signer:
-            address = signer.generate_keypair().hex()
-            nonce = get_nonce(client, address)
-            # Built the way the SPA builds it: crypto-core's loginChallengeBody
-            # is pinned against auth._login_message by the fixture tests above,
-            # so signing the server's form is signing the client's form.
-            signature = self._sign(
-                auth._login_message(
-                    nonce,
-                    encryption_public_key=enc_key,
-                    origin=TEST_ORIGIN,
-                    deployment=server_deployment(),
-                ),
-                signer,
-            )
-            attestation = self._sign(auth.encryption_key_attestation_message(enc_key), signer)
+        signer = MLDSA44Signer()
+        address = signer.address
+        nonce = get_nonce(client, address)
+        # Built the way the SPA builds it: crypto-core's loginChallengeBody
+        # is pinned against auth._login_message by the fixture tests above,
+        # so signing the server's form is signing the client's form.
+        signature = self._sign(
+            auth._login_message(
+                nonce,
+                encryption_public_key=enc_key,
+                origin=TEST_ORIGIN,
+                deployment=server_deployment(),
+            ),
+            signer,
+        )
+        attestation = self._sign(auth.encryption_key_attestation_message(enc_key), signer)
 
         resp = client.post(
             "/auth/login",
@@ -366,13 +365,13 @@ class TestARealLoginSignatureThroughTheEndpoint:
         stale nonce and submitting THAT is caught earlier, by the nonce lookup,
         which would prove nothing about the signature.
         """
-        with oqs.Signature(auth.SIG_ALG) as signer:
-            address = signer.generate_keypair().hex()
-            nonce = get_nonce(client, address)
-            signature = self._sign(
-                auth._login_message("a" * 32, origin=TEST_ORIGIN, deployment=server_deployment()),
-                signer,
-            )
+        signer = MLDSA44Signer()
+        address = signer.address
+        nonce = get_nonce(client, address)
+        signature = self._sign(
+            auth._login_message("a" * 32, origin=TEST_ORIGIN, deployment=server_deployment()),
+            signer,
+        )
 
         resp = client.post(
             "/auth/login",
@@ -391,13 +390,13 @@ class TestARealLoginSignatureThroughTheEndpoint:
         """M-2: signing the bare challenge must not authorize an ML-KEM key, or
         a network attacker could attach one of their own to the login."""
         v = _vectors()
-        with oqs.Signature(auth.SIG_ALG) as signer:
-            address = signer.generate_keypair().hex()
-            nonce = get_nonce(client, address)
-            signature = self._sign(
-                auth._login_message(nonce, origin=TEST_ORIGIN, deployment=server_deployment()),
-                signer,
-            )
+        signer = MLDSA44Signer()
+        address = signer.address
+        nonce = get_nonce(client, address)
+        signature = self._sign(
+            auth._login_message(nonce, origin=TEST_ORIGIN, deployment=server_deployment()),
+            signer,
+        )
 
         resp = client.post(
             "/auth/login",
@@ -431,10 +430,10 @@ class TestARealLoginSignatureThroughTheEndpoint:
         accepts any origin, which is why this sets it."""
         monkeypatch.setenv("ALLOWED_ORIGINS", TEST_ORIGIN)
         server = {"origin": TEST_ORIGIN, "deployment": server_deployment(), **signed_for}
-        with oqs.Signature(auth.SIG_ALG) as signer:
-            address = signer.generate_keypair().hex()
-            nonce = get_nonce(client, address)
-            signature = self._sign(auth._login_message(nonce, **server), signer)
+        signer = MLDSA44Signer()
+        address = signer.address
+        nonce = get_nonce(client, address)
+        signature = self._sign(auth._login_message(nonce, **server), signer)
 
         resp = client.post(
             "/auth/login",

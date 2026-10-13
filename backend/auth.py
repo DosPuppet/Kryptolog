@@ -8,19 +8,36 @@ import secrets
 from datetime import UTC, datetime, timedelta
 
 import jwt
-import oqs
+from cryptography.exceptions import InvalidSignature, UnsupportedAlgorithm
 
 import config
 
 logger = logging.getLogger("kryptolog.auth")
 
 # --- Post-quantum signature config (NIST FIPS 204) ---
-# liboqs (ML-DSA-44) is used in-process to verify CLIENT login challenges and
-# multisig approvals — the only place server-side PQC is genuinely
-# needed (the old Node `pqc_service.js` sidecar, audit A1/M1, is gone). Byte
-# encodings are interop-verified against the browser/extension's
-# @noble/post-quantum (see tests/test_pqc.py).
+# pyca/cryptography (ML-DSA-44, on the OpenSSL >= 3.5 its wheels bundle) is used
+# in-process to verify CLIENT login challenges, multisig approvals and the other
+# signed bodies — the only place server-side PQC is genuinely needed (the old
+# Node `pqc_service.js` sidecar, audit A1/M1, is gone). It replaced liboqs,
+# whose upstream disclaims production use. Byte encodings are interop-verified
+# against the browser/extension's @noble/post-quantum, down to the same public
+# key from the same seed (see tests/test_pqc.py).
 SIG_ALG = "ML-DSA-44"
+
+try:
+    from cryptography.hazmat.primitives.asymmetric import mldsa
+
+    mldsa.MLDSA44PrivateKey.generate()
+except (ImportError, UnsupportedAlgorithm) as e:
+    # Refuse to import rather than fail every login at runtime: a server that
+    # cannot verify ML-DSA-44 cannot authenticate anybody. This is reachable
+    # only off the hashed lock — cryptography < 48, or a source build linked
+    # against an OpenSSL older than 3.5 — and is the check `serve.sh` used to
+    # run against the liboqs build.
+    raise RuntimeError(
+        "cryptography lacks ML-DSA-44: install backend/requirements.txt "
+        "(cryptography >= 48 built against OpenSSL >= 3.5)"
+    ) from e
 
 # --- JWT signing (classical) ---
 # Access tokens are server-issued and server-verified only (no JWKS, clients
@@ -392,6 +409,22 @@ def _sig_bytes(signature: str) -> bytes:
     return decoded
 
 
+def _verify_ml_dsa44(public_key: bytes, message: bytes, signature: bytes) -> bool:
+    """Pure ML-DSA-44 verification with the EMPTY context string — what noble's
+    `ml_dsa44.sign` produces by default and what liboqs verified before, so no
+    signature changed meaning in the swap. A context would be domain separation
+    at the FIPS 204 layer; ours lives in the signed body (`_domain_separate`).
+
+    False for a signature that does not verify. A malformed key or signature
+    raises ValueError, which each caller already turns into False.
+    """
+    try:
+        mldsa.MLDSA44PublicKey.from_public_bytes(public_key).verify(signature, message)
+    except InvalidSignature:
+        return False
+    return True
+
+
 def verify_message_signature(address: str, message: str, signature: str) -> bool:
     """Verify an exact-message ML-DSA-44 signature. `address` is the signer's
     public key in HEX (an address is an identifier); `signature` is BASE64 (an
@@ -399,10 +432,9 @@ def verify_message_signature(address: str, message: str, signature: str) -> bool
     check (e.g. multisig approvals). `message` is the exact UTF-8 string signed.
     """
     try:
-        with oqs.Signature(SIG_ALG) as verifier:
-            return verifier.verify(
-                message.encode("utf-8"), _sig_bytes(signature), bytes.fromhex(address)
-            )
+        return _verify_ml_dsa44(
+            bytes.fromhex(address), message.encode("utf-8"), _sig_bytes(signature)
+        )
     except Exception as e:
         # Verification failures are expected/attacker-triggerable — keep at debug.
         logger.debug("Message signature verification failed: %s", e)
@@ -430,8 +462,7 @@ def verify_pqc_signature(
         ).encode("utf-8")
         sig_bytes = _sig_bytes(signature)
         pk_bytes = bytes.fromhex(public_key)
-        with oqs.Signature(SIG_ALG) as verifier:
-            return verifier.verify(message, sig_bytes, pk_bytes)
+        return _verify_ml_dsa44(pk_bytes, message, sig_bytes)
     except Exception as e:
         logger.debug("PQC verification error: %s", e)
         return False

@@ -4,7 +4,7 @@ At login a client may send a self-signature by its identity key over its own
 ML-KEM key. The server verifies it (never stores a bad one) and serves it back
 to peers, who verify it client-side before encrypting to that key. These tests
 cover storage, rejection, backfill, key-change replacement, and one real
-ML-DSA-44 round-trip through the endpoint (liboqs, no mocks).
+ML-DSA-44 round-trip through the endpoint (OpenSSL, no mocks).
 """
 
 import base64
@@ -17,6 +17,7 @@ from conftest import (
     TEST_ENCRYPTION_KEY,
     TEST_ORIGIN,
     TEST_USER_ADDRESS,
+    MLDSA44Signer,
     auth_header,
     get_nonce,
     server_deployment,
@@ -180,15 +181,14 @@ class TestAttestationRejection:
 
 class TestRealCrypto:
     def test_real_mldsa_attestation_roundtrip(self, client, monkeypatch):
-        """Full path with real ML-DSA-44 (liboqs): a genuine self-attestation is
+        """Full path with real ML-DSA-44: a genuine self-attestation is
         accepted and stored; a signature over a DIFFERENT key is rejected."""
-        import oqs
 
         # Restore the real verifier (conftest mocks it for endpoint tests).
         monkeypatch.setattr("auth.verify_message_signature", _REAL_VERIFY)
 
-        signer = oqs.Signature(auth_module.SIG_ALG)
-        address = signer.generate_keypair().hex()
+        signer = MLDSA44Signer()
+        address = signer.address
         enc_key = "3c" * 1184
 
         att_msg = auth_module.encryption_key_attestation_message(enc_key)

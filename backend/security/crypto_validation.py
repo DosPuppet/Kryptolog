@@ -2,7 +2,7 @@
 
 KRY-011: capability checks were written as `len(key) < 500`, which a run of
 600 arbitrary characters satisfies. The real security boundary is elsewhere
-(`bytes.fromhex` + liboqs verification in auth.py), so this was never
+(`bytes.fromhex` + ML-DSA verification in auth.py), so this was never
 directly exploitable — but a length floor is a poor proxy for "this is an
 ML-KEM public key", it makes the invariant unauditable, and it lets malformed
 keys reach storage where they surface later as confusing failures.
@@ -91,10 +91,11 @@ def is_valid_hex_of_length(value: str | None, hex_len: int) -> bool:
 def is_valid_ml_kem_public_key(value: str | None) -> bool:
     """True if `value` is a well-formed hex ML-KEM-768 public key.
 
-    Structural only — and that is the ceiling, not an omission. ML-KEM has no
-    cheap validity predicate: liboqs will happily encapsulate against 1184
-    bytes of `AA`, so "decode it with the PQC library" (as the audit suggests)
-    rejects nothing that this check does not already reject. What actually
+    Structural only — and that is the ceiling, not an omission. ML-KEM's only
+    cheap validity predicate is the FIPS 203 modulus check (every 12-bit
+    coefficient below q), and 1184 bytes of `AA` pass it: OpenSSL encapsulates
+    against them happily. So "decode it with the PQC library" (as the audit
+    suggests) rejects almost nothing that this check does not already reject. What actually
     binds a key to an identity is the ML-DSA key attestation, which the
     project already implements and verifies in auth.py.
     """

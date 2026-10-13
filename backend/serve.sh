@@ -43,14 +43,6 @@ for candidate in .venv/bin/python3 ../.venv/bin/python3; do
     fi
 done
 
-# Never let the binding compile its own liboqs (audit 2026-10-12 K-14): without
-# the pinned library, `import oqs` below would clone and build an unchecked copy
-# inside a PM2 restart. Checked, not built — building is a deployment step.
-if ! ../scripts/build_liboqs.sh --check; then
-    echo "ERROR: run scripts/build_liboqs.sh before starting — refusing to start."
-    exit 1
-fi
-
 # Migrations are a deliberate deployment step, not an import-time side effect
 # (audit M-3) — and a hard gate: serving new code against an old schema is the
 # failure this script exists to prevent, so a failure here must not degrade

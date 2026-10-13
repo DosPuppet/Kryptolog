@@ -25,6 +25,7 @@ import pytest
 from conftest import (
     TEST_ENCRYPTION_KEY,
     TEST_ORIGIN,
+    MLDSA44Signer,
     auth_header,
     do_login,
     get_nonce,
@@ -728,193 +729,185 @@ class TestAuthorizingTheDeletion:
 
     @pytest.mark.real_signatures
     def test_a_genuine_signature_deletes_and_a_forged_one_does_not(self, client, db_session):
-        import oqs
+        signer = MLDSA44Signer()
+        address = signer.address
+        token = self._real_login(client, signer, address, "RealDelete")
 
-        with oqs.Signature(auth.SIG_ALG) as signer:
-            address = signer.generate_keypair().hex()
-            token = self._real_login(client, signer, address, "RealDelete")
+        nonce = get_nonce(client, address)
+        forged = client.post(
+            "/account/delete",
+            json={
+                "mode": "leave",
+                "nonce": nonce,
+                "origin": TEST_ORIGIN,
+                "deployment": server_deployment(),
+                "signature": DUMMY_SIG,
+                "redactions": [],
+            },
+            headers=auth_header(token),
+        )
+        assert forged.status_code == 401, forged.text
 
-            nonce = get_nonce(client, address)
-            forged = client.post(
-                "/account/delete",
-                json={
-                    "mode": "leave",
-                    "nonce": nonce,
-                    "origin": TEST_ORIGIN,
-                    "deployment": server_deployment(),
-                    "signature": DUMMY_SIG,
-                    "redactions": [],
-                },
-                headers=auth_header(token),
-            )
-            assert forged.status_code == 401, forged.text
-
-            nonce = get_nonce(client, address)
-            good = self._sign(
-                auth.account_deletion_message(
-                    nonce, "leave", [], origin=TEST_ORIGIN, deployment=server_deployment()
-                ),
-                signer,
-            )
-            resp = client.post(
-                "/account/delete",
-                json={
-                    "mode": "leave",
-                    "nonce": nonce,
-                    "origin": TEST_ORIGIN,
-                    "deployment": server_deployment(),
-                    "signature": good,
-                    "redactions": [],
-                },
-                headers=auth_header(token),
-            )
-            assert resp.status_code == 200, resp.text
+        nonce = get_nonce(client, address)
+        good = self._sign(
+            auth.account_deletion_message(
+                nonce, "leave", [], origin=TEST_ORIGIN, deployment=server_deployment()
+            ),
+            signer,
+        )
+        resp = client.post(
+            "/account/delete",
+            json={
+                "mode": "leave",
+                "nonce": nonce,
+                "origin": TEST_ORIGIN,
+                "deployment": server_deployment(),
+                "signature": good,
+                "redactions": [],
+            },
+            headers=auth_header(token),
+        )
+        assert resp.status_code == 200, resp.text
 
     @pytest.mark.real_signatures
     def test_a_leave_signature_cannot_be_replayed_as_an_erase(self, client, db_session):
         """The mode is inside the signed body precisely so a relay cannot
         escalate a leave into an erase, destroying data the user asked to
         keep."""
-        import oqs
+        signer = MLDSA44Signer()
+        address = signer.address
+        token = self._real_login(client, signer, address, "ModeBound")
+        nonce = get_nonce(client, address)
+        leave_sig = self._sign(
+            auth.account_deletion_message(
+                nonce, "leave", [], origin=TEST_ORIGIN, deployment=server_deployment()
+            ),
+            signer,
+        )
 
-        with oqs.Signature(auth.SIG_ALG) as signer:
-            address = signer.generate_keypair().hex()
-            token = self._real_login(client, signer, address, "ModeBound")
-            nonce = get_nonce(client, address)
-            leave_sig = self._sign(
-                auth.account_deletion_message(
-                    nonce, "leave", [], origin=TEST_ORIGIN, deployment=server_deployment()
-                ),
-                signer,
-            )
-
-            resp = client.post(
-                "/account/delete",
-                json={
-                    "mode": "erase",
-                    "nonce": nonce,
-                    "origin": TEST_ORIGIN,
-                    "deployment": server_deployment(),
-                    "signature": leave_sig,
-                    "redactions": [],
-                },
-                headers=auth_header(token),
-            )
-            assert resp.status_code == 401, resp.text
-            db_session.expire_all()
-            assert db_session.query(models.User).filter_by(address=address).one().deleted_at is None
+        resp = client.post(
+            "/account/delete",
+            json={
+                "mode": "erase",
+                "nonce": nonce,
+                "origin": TEST_ORIGIN,
+                "deployment": server_deployment(),
+                "signature": leave_sig,
+                "redactions": [],
+            },
+            headers=auth_header(token),
+        )
+        assert resp.status_code == 401, resp.text
+        db_session.expire_all()
+        assert db_session.query(models.User).filter_by(address=address).one().deleted_at is None
 
     @pytest.mark.real_signatures
     def test_a_login_signature_over_the_same_nonce_is_refused(self, client):
         """H1: the contexts are disjoint, so a signature minted to log in
         cannot be spent to delete the account it logged into."""
-        import oqs
+        signer = MLDSA44Signer()
+        address = signer.address
+        token = self._real_login(client, signer, address, "ContextBound")
+        nonce = get_nonce(client, address)
+        login_sig = self._sign(
+            auth._login_message(
+                nonce,
+                encryption_public_key=TEST_ENCRYPTION_KEY,
+                origin=TEST_ORIGIN,
+                deployment=server_deployment(),
+            ),
+            signer,
+        )
 
-        with oqs.Signature(auth.SIG_ALG) as signer:
-            address = signer.generate_keypair().hex()
-            token = self._real_login(client, signer, address, "ContextBound")
-            nonce = get_nonce(client, address)
-            login_sig = self._sign(
-                auth._login_message(
-                    nonce,
-                    encryption_public_key=TEST_ENCRYPTION_KEY,
-                    origin=TEST_ORIGIN,
-                    deployment=server_deployment(),
-                ),
-                signer,
-            )
-
-            resp = client.post(
-                "/account/delete",
-                json={
-                    "mode": "leave",
-                    "nonce": nonce,
-                    "origin": TEST_ORIGIN,
-                    "deployment": server_deployment(),
-                    "signature": login_sig,
-                    "redactions": [],
-                },
-                headers=auth_header(token),
-            )
-            assert resp.status_code == 401, resp.text
+        resp = client.post(
+            "/account/delete",
+            json={
+                "mode": "leave",
+                "nonce": nonce,
+                "origin": TEST_ORIGIN,
+                "deployment": server_deployment(),
+                "signature": login_sig,
+                "redactions": [],
+            },
+            headers=auth_header(token),
+        )
+        assert resp.status_code == 401, resp.text
 
     @pytest.mark.real_signatures
     def test_a_redaction_signature_is_actually_verified(self, client, db_session):
         """Needs the marker to mean anything: conftest patches the verifier to
         True by default, so without it this endpoint would be tested with no
         verification at all — the exact hole the login challenge sat in."""
-        import oqs
+        signer = MLDSA44Signer()
+        address = signer.address
+        token = self._real_login(client, signer, address, "Redactor")
+        # The partner needs a real login too: under this marker nothing is
+        # stubbed, so a synthetic address could never sign its challenge.
+        other = MLDSA44Signer()
+        partner = other.address
+        self._real_login(client, other, partner, "Partner")
+        _send_dm(client, token, partner, _dm_content("sid-1"))
 
-        with oqs.Signature(auth.SIG_ALG) as signer:
-            address = signer.generate_keypair().hex()
-            token = self._real_login(client, signer, address, "Redactor")
-            # The partner needs a real login too: under this marker nothing is
-            # stubbed, so a synthetic address could never sign its challenge.
-            with oqs.Signature(auth.SIG_ALG) as other:
-                partner = other.generate_keypair().hex()
-                self._real_login(client, other, partner, "Partner")
-            _send_dm(client, token, partner, _dm_content("sid-1"))
+        manifest = _manifest(client, token)
+        assert len(manifest) == 1
+        row = manifest[0]
 
-            manifest = _manifest(client, token)
-            assert len(manifest) == 1
-            row = manifest[0]
+        nonce = get_nonce(client, address)
+        deletion_sig = self._sign(
+            auth.account_deletion_message(
+                nonce, "erase", [row["key"]], origin=TEST_ORIGIN, deployment=server_deployment()
+            ),
+            signer,
+        )
+        bad = client.post(
+            "/account/delete",
+            json={
+                "mode": "erase",
+                "nonce": nonce,
+                "origin": TEST_ORIGIN,
+                "deployment": server_deployment(),
+                "signature": deletion_sig,
+                "redactions": [{"key": row["key"], "signature": DUMMY_SIG}],
+            },
+            headers=auth_header(token),
+        )
+        assert bad.status_code == 400, bad.text
+        db_session.expire_all()
+        assert db_session.query(models.User).filter_by(address=address).one().deleted_at is None
 
-            nonce = get_nonce(client, address)
-            deletion_sig = self._sign(
-                auth.account_deletion_message(
-                    nonce, "erase", [row["key"]], origin=TEST_ORIGIN, deployment=server_deployment()
-                ),
-                signer,
-            )
-            bad = client.post(
-                "/account/delete",
-                json={
-                    "mode": "erase",
-                    "nonce": nonce,
-                    "origin": TEST_ORIGIN,
-                    "deployment": server_deployment(),
-                    "signature": deletion_sig,
-                    "redactions": [{"key": row["key"], "signature": DUMMY_SIG}],
-                },
-                headers=auth_header(token),
-            )
-            assert bad.status_code == 400, bad.text
-            db_session.expire_all()
-            assert db_session.query(models.User).filter_by(address=address).one().deleted_at is None
-
-            nonce = get_nonce(client, address)
-            body = auth.message_signing_body(
-                from_=address,
-                conv=row["conv"],
-                gid="",
-                sid=row["sid"],
-                ts=row["ts"],
-                seq=row["seq"],
-                ct=None,
-                keys=row["keys"],
-            )
-            resp = client.post(
-                "/account/delete",
-                json={
-                    "mode": "erase",
-                    "nonce": nonce,
-                    "origin": TEST_ORIGIN,
-                    "deployment": server_deployment(),
-                    "signature": self._sign(
-                        auth.account_deletion_message(
-                            nonce,
-                            "erase",
-                            [row["key"]],
-                            origin=TEST_ORIGIN,
-                            deployment=server_deployment(),
-                        ),
-                        signer,
+        nonce = get_nonce(client, address)
+        body = auth.message_signing_body(
+            from_=address,
+            conv=row["conv"],
+            gid="",
+            sid=row["sid"],
+            ts=row["ts"],
+            seq=row["seq"],
+            ct=None,
+            keys=row["keys"],
+        )
+        resp = client.post(
+            "/account/delete",
+            json={
+                "mode": "erase",
+                "nonce": nonce,
+                "origin": TEST_ORIGIN,
+                "deployment": server_deployment(),
+                "signature": self._sign(
+                    auth.account_deletion_message(
+                        nonce,
+                        "erase",
+                        [row["key"]],
+                        origin=TEST_ORIGIN,
+                        deployment=server_deployment(),
                     ),
-                    "redactions": [{"key": row["key"], "signature": self._sign(body, signer)}],
-                },
-                headers=auth_header(token),
-            )
-            assert resp.status_code == 200, resp.text
+                    signer,
+                ),
+                "redactions": [{"key": row["key"], "signature": self._sign(body, signer)}],
+            },
+            headers=auth_header(token),
+        )
+        assert resp.status_code == 200, resp.text
 
     def test_a_replayed_nonce_is_refused(self, client, user1):
         token, u1 = user1

@@ -7,11 +7,14 @@
  *     helpers (the KEM is browser-internal; the server never touches it, so
  *     only the clients need to agree — and both clients use this same lib).
  *   - ML-DSA-44 sign -> verify round-trip + tamper rejection.
- *   - Cross-library interop: a signature produced by liboqs on the SERVER must
- *     verify here under noble (committed fixture). The mirror direction
- *     (noble -> liboqs) is asserted in backend/tests/test_pqc.py.
+ *   - Cross-library interop: a signature produced by OpenSSL (the server's
+ *     pyca/cryptography) must verify here under noble (committed fixture). The
+ *     mirror direction (noble -> OpenSSL) is asserted in
+ *     backend/tests/test_pqc.py.
  *   - Deterministic seeded-keygen byte-pin: regression anchor against any
- *     future lib bump that would silently change the key encoding.
+ *     future lib bump that would silently change the key encoding. The server
+ *     derives the SAME ML-DSA public key from the same seed, which
+ *     backend/tests/test_pqc.py pins too.
  */
 import { describe, it, expect } from 'vitest';
 import vec from '../../../tests/fixtures/pqc_interop.json';
@@ -65,13 +68,13 @@ describe('ML-DSA-44 sign/verify', () => {
     expect(await verifySignaturePQC(msg + ' ', sig, publicKey)).toBe(false);
   });
 
-  it('verifies a liboqs-produced signature (server -> client interop)', async () => {
-    const ok = await verifySignaturePQC(
-      Buffer.from(vec.message, 'hex').toString('utf8'),
-      hexToB64(vec.liboqs_dsa_signature),
-      vec.liboqs_dsa_publicKey
-    );
-    expect(ok).toBe(true);
+  it('verifies an OpenSSL-produced signature (server -> client interop)', async () => {
+    // Signed by OpenSSL with the key it derived from ml_dsa_seed, which is
+    // noble's key for that seed — so it verifies under noble's public key.
+    const message = Buffer.from(vec.message, 'hex').toString('utf8');
+    const signature = hexToB64(vec.openssl_dsa_signature);
+    expect(await verifySignaturePQC(message, signature, vec.noble_dsa_publicKey)).toBe(true);
+    expect(await verifySignaturePQC(message + '!', signature, vec.noble_dsa_publicKey)).toBe(false);
   });
 
   it('verifySignaturePQC returns false on malformed input instead of throwing', async () => {

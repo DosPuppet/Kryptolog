@@ -15,7 +15,7 @@ Monorepo, four parts:
 | `trustkeys/` | MV3 browser extension — the key custodian. Service worker under `src/background/`. |
 | `packages/crypto-core/` | `@kryptolog/crypto-core`: one copy of every crypto primitive, consumed by **both** clients via a `file:` dependency. Split into `encoding`/`signing`/`pqc`/`aead`/`vault`/`webauthn`, all re-exported from `src/index.js` — import the package root, never a submodule. |
 | `e2e/` | Playwright suite: the real SPA, backend and TrustKeys (unpacked) in Chromium, on its own database. |
-| `scripts/` | `init_env.sh` (generates `backend/.env`), `build_liboqs.sh` (pinned liboqs), `backup.sh` / `restore.sh`, `load_env.sh`. |
+| `scripts/` | `init_env.sh` (generates `backend/.env`), `backup.sh` / `restore.sh`, `load_env.sh`. |
 
 Reader-facing documentation: `README.md`, `ARCHITECTURE.md`, `THREAT_MODEL.md`,
 `DEPLOYMENT.md`, `E2E-RECIPE.md` (the manual pass), `trustkeys/README.md`. This file
@@ -1760,3 +1760,75 @@ commit).
 - **Three migrations deploy with it** (`d0e1f2a3b4c5`, `e1f2a3b4c5d6`,
   `f2a3b4c5d6e7`), and `backend/.env` needs the lot 2/4 keys (`init_env.sh`
   generates them; production refuses to start without them).
+
+## liboqs -> pyca/cryptography — 2026-10-13
+
+Neither PQC library was meant for production: liboqs says so itself, and
+`@noble/post-quantum` is "not independently audited yet" (self-audited at 0.6.1)
+and "does not claim constant-time execution". The question was whether either
+had a better replacement. **The server's did; the clients' does not yet.**
+
+**The backend verifies ML-DSA-44 with pyca/cryptography now.** ML-DSA landed in
+48.0.0 on OpenSSL >= 3.5, which the wheels bundle, and 50.0.2 was already in the
+lock through pywebpush — so this removed a dependency rather than adding one,
+and with it the whole liboqs chain: `scripts/build_liboqs.sh`, `~/_oqs`, the
+checks in `serve.sh` / `run_dev.sh` / `start_all.sh` / `e2e/serve-backend.sh`,
+and both CI build-and-cache step pairs. No `CRYPTO_CORE_VERSION` bump and no
+migration: nothing on the wire changed. Lot 11 gains from it too — the same
+library already has X25519/Ed25519, ML-KEM and HPKE.
+
+- **One verifier, `auth._verify_ml_dsa44`, with the EMPTY FIPS 204 context** —
+  what noble signs with by default and what liboqs verified, so no signature
+  changed meaning. `test_a_signature_under_a_context_is_not_a_signature_without_one`
+  pins that the context is verified at all.
+- **`auth.py` refuses to import without ML-DSA-44** (cryptography < 48, or a
+  source build against OpenSSL < 3.5). It replaces `build_liboqs.sh --check`: a
+  server that cannot verify cannot authenticate anybody, so it must not start.
+  `test_the_server_refuses_to_start_without_ml_dsa` runs it in a subprocess.
+- **Same seed, same key, in both languages.** OpenSSL and noble both implement
+  FIPS 204 KeyGen(xi) directly, so `from_seed_bytes(ml_dsa_seed)` gives exactly
+  `noble_dsa_publicKey`, and crypto-core's golden `fill(7)` key hashes the same
+  under OpenSSL. liboqs derived its key from the seed differently, which is why
+  the old fixture held two keys for one seed; it holds one now. The fixture's
+  `openssl_dsa_signature` was regenerated once, deliberately, never by a script
+  in the repo.
+- **Tests sign through `conftest.MLDSA44Signer`**, the one place the suite
+  names the library — the move touched a dozen `oqs.Signature` call sites.
+
+**Watch out on an Intel Mac:** cryptography 50 ships macOS wheels for arm64
+only, so the hashed lock falls back to a source build there (Rust + an OpenSSL
+>= 3.5 — Homebrew's `openssl@3` on this box is 3.1, and the import guard refuses
+what that builds). This predates the change, since 50.0.2 was already pinned;
+it just matters more now. Linux, CI and production are unaffected. This pass was
+verified on such a Mac by running the backend in a `python:3.12-slim` container
+next to a throwaway Postgres/Redis, the browser e2e included (the stock
+`e2e/serve-backend.sh` expects a host venv).
+
+**The clients keep noble — the decision and why:**
+- **Native WebCrypto ML-KEM/ML-DSA** (WICG "Modern Algorithms") is in Chrome 155
+  (beta from 2026-09-16) and Node 26, not in Firefox or Safari. The SPA cannot
+  depend on it; **TrustKeys, Chromium-only, could** once 155 is stable.
+- **WASM of production-grade C** — mlkem-native is v1, mldsa-native still alpha;
+  the npm builds are third-party. Owning that build is a new supply-chain item
+  for no clear gain yet.
+- **The prerequisite for either: store SEEDS.** Vaults hold noble's EXPANDED
+  secret keys (2 560 bytes ML-DSA-44, 2 400 ML-KEM-768); WebCrypto and pyca
+  import a private key only as its 32/64-byte seed. That is a vault format
+  change, so it belongs in **lot 11's crypto-core 4.0.0 cutover**, which breaks
+  the format anyway. Do it there even if the library stays noble: it is what
+  keeps every other backend possible.
+
+`crypto-core/src/index.js` no longer calls noble "audited" (README fixed the
+same claim in K-19; this copy was missed). `crypto_validation.py`'s ML-KEM note
+was checked against OpenSSL rather than reworded blind: it refuses a key whose
+coefficients exceed q (the FIPS 203 modulus check) but encapsulates against
+1184 bytes of `AA`, so the structural check is still the ceiling.
+
+Suites: backend 668 -> **672**; frontend **270**, crypto-core **67** and e2e **1**
+unchanged in count, all green; ruff, format and `alembic check` green.
+`test_ssrf_guard.py::test_unresolvable_host_is_rejected` fails on a network
+whose DNS answers every name (a captive Wi-Fi portal did, here) — environmental,
+not this change. Mutation-tested: a verifier that accepts everything fails 20
+tests across five files; dropping the startup probe fails its gate.
+
+**Not committed yet** at the time of writing; record the SHA here when it is.

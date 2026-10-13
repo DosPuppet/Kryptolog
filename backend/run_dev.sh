@@ -22,16 +22,10 @@ fi
 
 # JWTs are HS256-signed (PyJWT). For a persistent dev secret, run
 # `python generate_server_keys.py` and set KRYPTOLOG_JWT_SECRET in .env.
-# (liboqs/ML-DSA-44 is still used in-process to verify client login challenges.)
+# (ML-DSA-44 is still used in-process, through pyca/cryptography, to verify
+# client login challenges.)
 if [ -z "$KRYPTOLOG_JWT_SECRET" ]; then
     echo "WARNING: KRYPTOLOG_JWT_SECRET not set — using an ephemeral JWT secret (tokens reset on restart)."
-fi
-
-# Pinned liboqs, built if missing (audit 2026-10-12 K-14) — the dev path may
-# build, unlike serve.sh, so a fresh clone still starts with one command.
-if ! ../scripts/build_liboqs.sh; then
-    echo "ERROR: failed to build liboqs — refusing to start."
-    exit 1
 fi
 
 # Apply migrations before serving. The app no longer migrates at import time

@@ -14,7 +14,14 @@ import hashlib
 import json
 
 import pytest
-from conftest import TEST_ENCRYPTION_KEY, TEST_ORIGIN, auth_header, get_nonce, server_deployment
+from conftest import (
+    TEST_ENCRYPTION_KEY,
+    TEST_ORIGIN,
+    MLDSA44Signer,
+    auth_header,
+    get_nonce,
+    server_deployment,
+)
 
 import auth
 
@@ -29,10 +36,8 @@ class Identity:
     """A real ML-DSA-44 key pair, logged in for real."""
 
     def __init__(self, client, username):
-        import oqs
-
-        self.signer = oqs.Signature(auth.SIG_ALG)
-        self.address = self.signer.generate_keypair().hex()
+        self.signer = MLDSA44Signer()
+        self.address = self.signer.address
         nonce = get_nonce(client, self.address)
         resp = client.post(
             "/auth/login",
@@ -69,10 +74,7 @@ class Identity:
 
 @pytest.fixture
 def people(client):
-    made = [Identity(client, "RealAlice"), Identity(client, "RealBob")]
-    yield made
-    for person in made:
-        person.signer.free()
+    return [Identity(client, "RealAlice"), Identity(client, "RealBob")]
 
 
 class TestMultisigApproval:
@@ -238,10 +240,7 @@ class TestConversationErase:
         alice, bob = people
         self._carrier(client, alice, bob)
         carol = Identity(client, "RealCarol")
-        try:
-            resp = self._round(client, alice, bob, erase_for=carol)
-        finally:
-            carol.signer.free()
+        resp = self._round(client, alice, bob, erase_for=carol)
         assert resp.status_code == 401, resp.text
 
     def test_a_redaction_signed_by_someone_else_is_refused(self, client, people):

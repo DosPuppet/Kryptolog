@@ -1,9 +1,13 @@
 // @kryptolog/crypto-core — the single source of truth for client-side crypto.
 //
-// NIST FIPS post-quantum primitives (audited, pure-TS, no WASM):
+// NIST FIPS post-quantum primitives (@noble/post-quantum: pure JS, no WASM):
 //   ML-KEM-768  (FIPS 203) — key encapsulation, replaces Kyber768
 //   ML-DSA-44   (FIPS 204) — signatures,        replaces Dilithium2
-// ML-DSA byte encoding is interop-verified against the server's liboqs.
+// noble is NOT independently audited (self-audited at 0.6.1) and does not claim
+// constant-time execution; it stays because no production-grade replacement runs
+// in all three browsers yet (see CLAUDE.md, "liboqs -> pyca/cryptography").
+// ML-DSA byte encoding is interop-verified against the server's OpenSSL, down to
+// the same public key from the same seed.
 //
 // This package is consumed by BOTH the SPA (frontend/) and the TrustKeys
 // extension (trustkeys/) via their respective Vite builds. There is exactly ONE

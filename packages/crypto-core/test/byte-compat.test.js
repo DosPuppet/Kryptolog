@@ -10,7 +10,7 @@
 //   1. Golden constants — the exact format strings / KDF params the wire depends on.
 //   2. Round-trips — every randomized envelope decodes back to its input.
 //   3. Server interop — ML-DSA (FIPS 204) keygen/sign/verify byte encoding, which
-//      the backend's liboqs must keep matching (see backend/tests/test_pqc.py).
+//      the backend's OpenSSL must keep matching (see backend/tests/test_pqc.py).
 //   4. Single-source guard — both apps resolve the SAME CRYPTO_CORE_VERSION.
 import { describe, it, expect } from 'vitest';
 import { ml_dsa44 } from '@noble/post-quantum/ml-dsa.js';
@@ -499,10 +499,12 @@ describe('encoding split: blobs base64, identifiers hex (v2.0.0, audit L-12)', (
 
 
 describe('ML-DSA server-interop guard (FIPS 204 byte encoding)', () => {
-    // The backend verifies client login/multisig signatures with liboqs ML-DSA-44.
-    // noble and liboqs both emit FIPS 204 encodings; this pins noble's so a silent
-    // upstream change can't break that cross-lib agreement. Seeded keygen is
-    // deterministic, so the public-key bytes are a stable golden vector.
+    // The backend verifies client login/multisig signatures with ML-DSA-44 from
+    // pyca/cryptography (OpenSSL). noble and OpenSSL both emit FIPS 204
+    // encodings; this pins noble's so a silent upstream change can't break that
+    // cross-lib agreement. Seeded keygen is deterministic, so the public-key
+    // bytes are a stable golden vector — and the SAME one on the server:
+    // backend/tests/test_pqc.py derives this hash from this seed under OpenSSL.
     const SEED = new Uint8Array(32).fill(7);
     const GOLDEN_PK_SHA256 = '86c769d3b468de487eb9a09f242f7fa0b997a07ef4ded49627e7bf9539f28b62';
 
@@ -683,7 +685,7 @@ describe('signed bodies match the server, byte for byte', () => {
 
     it('a login signature verifies against the body the server would rebuild', async () => {
         // End to end on this side: sign the shared body, verify it back. The
-        // server half needs liboqs, so it lives in backend/tests/test_pqc.py.
+        // server half needs OpenSSL, so it lives in backend/tests/test_pqc.py.
         const { publicKey, privateKey } = await core.generateMlDsaKeyPair();
         const sig = await core.signMessage(vectors.bodies.login_with_encryption_key, privateKey);
         expect(await core.verifySignature(login(vectors.mlkem_public_key), sig, publicKey)).toBe(true);

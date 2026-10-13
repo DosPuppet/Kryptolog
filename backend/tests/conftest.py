@@ -2,8 +2,9 @@
 Shared test fixtures for Kryptolog backend tests.
 
 Runs against a real PostgreSQL database (TEST_DATABASE_URL, defaulting to the
-`kryptolog_test` DB on the docker-compose Postgres). PQC signing runs
-in-process via liboqs (ML-DSA-44) — there is no sidecar to mock. Two client
+`kryptolog_test` DB on the docker-compose Postgres). PQC verification runs
+in-process via pyca/cryptography (ML-DSA-44) — there is no sidecar to mock, and
+tests that need a genuine signature get one from `MLDSA44Signer`. Two client
 signature checks are stubbed (see `_mock_pqc`) because the tests post
 placeholder signatures; JWT issuance and verification run for real against an
 ephemeral server key.
@@ -86,6 +87,26 @@ def synthetic_address(tag: str) -> str:
     return (digest * (ML_DSA_44_PUBLIC_KEY_HEX_LEN // len(digest) + 1))[
         :ML_DSA_44_PUBLIC_KEY_HEX_LEN
     ]
+
+
+class MLDSA44Signer:
+    """A REAL ML-DSA-44 client identity, for the tests that must not trust the
+    stubbed verifier: `address` is its public key in hex, `sign` returns raw
+    signature bytes (callers base64 them, as the clients do).
+
+    The one place the suite names the PQC library, so swapping it is one class
+    rather than a dozen call sites — the liboqs -> pyca/cryptography move
+    touched all of them.
+    """
+
+    def __init__(self):
+        from cryptography.hazmat.primitives.asymmetric import mldsa
+
+        self._key = mldsa.MLDSA44PrivateKey.generate()
+        self.address = self._key.public_key().public_bytes_raw().hex()
+
+    def sign(self, message: bytes) -> bytes:
+        return self._key.sign(message)
 
 
 TEST_USER_ADDRESS = synthetic_address("user-1")

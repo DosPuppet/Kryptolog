@@ -22,7 +22,11 @@ uvicorn[standard]>=0.52.4  # [standard] bundles websockets/uvloop — WS endpoin
 sqlalchemy>=2.0.52
 pyjwt>=2.15.0        # >=2.15.0 for the advisories open on 2.13.0 (audit 2026-10-12 K-11)
 pydantic>=2.13.5
-liboqs-python>=0.16.0   # ML-DSA-44 (FIPS 204) in-process; links the liboqs C library built by scripts/build_liboqs.sh
+# ML-DSA-44 (FIPS 204) verification. 48.0.0 is the first release with ML-DSA on
+# OpenSSL >= 3.5, which the PyPI wheels bundle; auth.py refuses to import on a
+# build without it. Replaces liboqs-python, whose upstream disclaims production
+# use and which needed a C library built from source beside it.
+cryptography>=50.0.2
 python-multipart>=0.0.32
 httpx>=0.28.1
 slowapi==0.1.10

@@ -96,7 +96,7 @@ were two unrelated copies of one string. They are now pinned against a shared
 fixture from both languages (`tests/fixtures/signed_bodies.json`) and a real
 ML-DSA login runs through `POST /auth/login` in
 `backend/tests/test_signed_bodies.py` — but this is the first time the *browser*
-builds it, signs with the *extension*, and the server verifies with liboqs.
+builds it, signs with the *extension*, and the server verifies with OpenSSL.
 Everything below depends on it.
 
 Watch for: a 401 on login means the two sides disagree about the challenge
