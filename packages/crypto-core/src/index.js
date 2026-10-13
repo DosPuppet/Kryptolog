@@ -9,6 +9,11 @@
 // ML-DSA byte encoding is interop-verified against the server's OpenSSL, down to
 // the same public key from the same seed.
 //
+// Hybrid primitives (3.2.0, additive — audit 2026-10-12 K-10), which 4.0.0
+// switches every format to:
+//   composite ML-DSA-65 + Ed25519 (draft-ietf-lamps-pq-composite-sigs) — composite.js
+//   X-Wing, ML-KEM-768 + X25519   (draft-connolly-cfrg-xwing-kem)     — kem.js
+//
 // This package is consumed by BOTH the SPA (frontend/) and the TrustKeys
 // extension (trustkeys/) via their respective Vite builds. There is exactly ONE
 // copy of every wire/storage primitive here, so the "produced here, consumed
@@ -28,11 +33,13 @@
 
 // Bumped whenever a wire/storage format or shared primitive changes; the
 // per-version history is in CHANGELOG.md next to this file.
-export const CRYPTO_CORE_VERSION = '3.1.0';
+export const CRYPTO_CORE_VERSION = '3.2.0';
 
 export * from './encoding.js';
 export * from './signing.js';
 export * from './pqc.js';
+export * from './composite.js';
+export * from './kem.js';
 export * from './aead.js';
 export * from './vault.js';
 export * from './webauthn.js';

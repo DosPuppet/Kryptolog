@@ -153,3 +153,31 @@ a cutover.
   for erasing one's own messages in one conversation (audit 2026-09-11 M-6).
   Separate from `message` so the extension never signs it silently, and naming
   the conversation in full so an approval cannot be carried to another one.
+
+## 3.2.0
+
+ADDITIVE — nothing stored or signed before it changes, and nothing uses the new
+primitives yet. Every 3.x vector is unchanged. The hybrid primitives that 4.0.0
+moves every format to (audit 2026-10-12 K-10), landed first so the cutover
+itself only switches callers:
+
+- **`composite.js`: composite ML-DSA-65 + Ed25519**, the IETF
+  `id-MLDSA65-Ed25519-SHA512` (draft-ietf-lamps-pq-composite-sigs-19) —
+  `compositeKeygen`, `compositePublicKey`, `compositeSign`, `compositeVerify`,
+  `compositeMessage`. Valid only if BOTH halves verify. The secret key is the
+  draft's 64-byte seed pair, drawn as two independent halves. ML-DSA-65 is NIST
+  category 3, the level ANSSI asks for; 3.x signs with ML-DSA-44 (category 2).
+- **`kem.js`: X-Wing**, ML-KEM-768 + X25519 (draft-connolly-cfrg-xwing-kem-10) —
+  `xwingKeygen`, `xwingPublicKey`, `xwingEncapsulate`, `xwingDecapsulate`, over
+  noble's `ml_kem768_x25519`. The secret key is the 32-byte seed.
+- **Ed25519 is verified no more leniently than OpenSSL.** noble's strict mode
+  still checks the cofactored equation where OpenSSL checks the cofactorless
+  one, so it accepted a hand-built signature with a torsion component that the
+  server refuses. `compositeVerify` also requires R and A to be torsion-free,
+  which makes the two coincide.
+- **`@noble/curves` is a direct dependency** (of the two apps too, which
+  resolve this package's imports from their own `node_modules`), at `~2.2.0`:
+  the range `@noble/post-quantum` 0.6.1 pins, so one copy serves both.
+- Pinned by the specifications' own vectors, copied verbatim with their
+  provenance into `tests/fixtures/composite_mldsa65_ed25519_vectors.json` and
+  `tests/fixtures/xwing_vectors.json` (`test/hybrid.test.js`).
