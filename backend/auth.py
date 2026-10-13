@@ -24,20 +24,28 @@ logger = logging.getLogger("kryptolog.auth")
 # key from the same seed (see tests/test_pqc.py).
 SIG_ALG = "ML-DSA-44"
 
+# Refuse to import rather than fail every login at runtime: a server that
+# cannot verify its signature algorithms cannot authenticate anybody. This is
+# reachable only off the hashed lock — cryptography < 48 (no `mldsa` module at
+# all), or a source build linked against an OpenSSL older than 3.5 — and is
+# the check `serve.sh` used to run against the liboqs build. ML-DSA-65 and
+# Ed25519 are the two halves of the composite signature crypto-core 4 moves to
+# (audit 2026-10-12 K-10); each is probed on its own so the message names the
+# one that is missing.
+_REQUIREMENT = "install backend/requirements.txt (cryptography >= 48 built against OpenSSL >= 3.5)"
 try:
-    from cryptography.hazmat.primitives.asymmetric import mldsa
-
-    mldsa.MLDSA44PrivateKey.generate()
-except (ImportError, UnsupportedAlgorithm) as e:
-    # Refuse to import rather than fail every login at runtime: a server that
-    # cannot verify ML-DSA-44 cannot authenticate anybody. This is reachable
-    # only off the hashed lock — cryptography < 48, or a source build linked
-    # against an OpenSSL older than 3.5 — and is the check `serve.sh` used to
-    # run against the liboqs build.
-    raise RuntimeError(
-        "cryptography lacks ML-DSA-44: install backend/requirements.txt "
-        "(cryptography >= 48 built against OpenSSL >= 3.5)"
-    ) from e
+    from cryptography.hazmat.primitives.asymmetric import ed25519, mldsa
+except ImportError as e:
+    raise RuntimeError(f"cryptography lacks ML-DSA: {_REQUIREMENT}") from e
+for _name, _key in (
+    ("ML-DSA-44", mldsa.MLDSA44PrivateKey),
+    ("ML-DSA-65", mldsa.MLDSA65PrivateKey),
+    ("Ed25519", ed25519.Ed25519PrivateKey),
+):
+    try:
+        _key.generate()
+    except UnsupportedAlgorithm as e:
+        raise RuntimeError(f"cryptography lacks {_name}: {_REQUIREMENT}") from e
 
 # --- JWT signing (classical) ---
 # Access tokens are server-issued and server-verified only (no JWKS, clients
@@ -420,6 +428,66 @@ def _verify_ml_dsa44(public_key: bytes, message: bytes, signature: bytes) -> boo
     """
     try:
         mldsa.MLDSA44PublicKey.from_public_bytes(public_key).verify(signature, message)
+    except InvalidSignature:
+        return False
+    return True
+
+
+# --- Composite ML-DSA-65 + Ed25519 (crypto-core 4, audit 2026-10-12 K-10) ---
+# id-MLDSA65-Ed25519-SHA512 (draft-ietf-lamps-pq-composite-sigs-19), the same
+# construction as packages/crypto-core/src/composite.js, both pinned to the
+# draft's own vectors (tests/test_hybrid_primitives.py). Added ahead of the
+# 4.0.0 cutover, which moves every verification here; nothing calls it yet.
+#
+# Ed25519 is OpenSSL's: strict RFC 8032, cofactorless. The clients' noble
+# checks the cofactored equation and so additionally requires R and A to be
+# torsion-free; with an identity key whose Ed25519 half lies in the prime-order
+# subgroup the two rules accept exactly the same signatures. That is why the
+# server checks the KEY once, where it enters
+# (security.crypto_validation.is_valid_composite_identity_key), rather than
+# every point on every verification.
+_COMPOSITE_PREFIX = b"CompositeAlgorithmSignatures2025"
+_COMPOSITE_LABEL = b"COMPSIG-MLDSA65-Ed25519-SHA512"
+_ML_DSA_65_PUBLIC_KEY_BYTES = 1952
+_ML_DSA_65_SIGNATURE_BYTES = 3309
+COMPOSITE_PUBLIC_KEY_BYTES = _ML_DSA_65_PUBLIC_KEY_BYTES + 32
+COMPOSITE_SIGNATURE_BYTES = _ML_DSA_65_SIGNATURE_BYTES + 64
+
+
+def _composite_message(message: bytes, ctx: bytes = b"") -> bytes:
+    """M' = Prefix || Label || len(ctx) || ctx || SHA-512(M): what both halves sign."""
+    if len(ctx) > 255:
+        raise ValueError("composite context longer than 255 bytes")
+    return (
+        _COMPOSITE_PREFIX
+        + _COMPOSITE_LABEL
+        + bytes([len(ctx)])
+        + ctx
+        + hashlib.sha512(message).digest()
+    )
+
+
+def _verify_composite(
+    public_key: bytes, message: bytes, signature: bytes, ctx: bytes = b""
+) -> bool:
+    """True only if BOTH halves verify over M'. Lengths are checked before any
+    split, so a short input cannot move where one half ends. A malformed key
+    raises ValueError, which each caller turns into False, as for ML-DSA-44."""
+    if len(public_key) != COMPOSITE_PUBLIC_KEY_BYTES or len(signature) != COMPOSITE_SIGNATURE_BYTES:
+        return False
+    m = _composite_message(message, ctx)
+    ml_pk, ed_pk = (
+        public_key[:_ML_DSA_65_PUBLIC_KEY_BYTES],
+        public_key[_ML_DSA_65_PUBLIC_KEY_BYTES:],
+    )
+    ml_sig, ed_sig = (
+        signature[:_ML_DSA_65_SIGNATURE_BYTES],
+        signature[_ML_DSA_65_SIGNATURE_BYTES:],
+    )
+    try:
+        # The label is ML-DSA's FIPS 204 context here, as the draft specifies.
+        mldsa.MLDSA65PublicKey.from_public_bytes(ml_pk).verify(ml_sig, m, _COMPOSITE_LABEL)
+        ed25519.Ed25519PublicKey.from_public_bytes(ed_pk).verify(ed_sig, m)
     except InvalidSignature:
         return False
     return True

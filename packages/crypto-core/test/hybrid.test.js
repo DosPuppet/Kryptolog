@@ -191,3 +191,47 @@ describe('X-Wing (draft-connolly-cfrg-xwing-kem-10)', () => {
         expect(() => core.xwingDecapsulate(new Uint8Array(1120), secretKey.subarray(1))).toThrow(/secret key must be 32/);
     });
 });
+
+// The other half of backend/tests/test_hybrid_primitives.py, over the same
+// file: what OpenSSL produced must open here, as what noble produced opens
+// there. Generated once by hand, never by a script in the repo.
+describe('noble <-> OpenSSL interop (tests/fixtures/hybrid_interop.json)', () => {
+    const V = fixture('hybrid_interop.json');
+    const message = new TextEncoder().encode(V.message);
+    const pk = hex(V.composite_public_key);
+
+    it('derives the same composite and X-Wing keys from the same seeds', () => {
+        expect(core.compositePublicKey(hex(V.composite_secret_key))).toEqual(pk);
+        expect(core.xwingPublicKey(hex(V.xwing_secret_key))).toEqual(hex(V.xwing_public_key));
+    });
+
+    it.each(['noble', 'openssl'])('verifies the %s composite signature', (who) => {
+        const sig = b64(V[`${who}_composite_signature`]);
+        expect(core.compositeVerify(sig, message, pk)).toBe(true);
+        expect(core.compositeVerify(sig, new TextEncoder().encode('another message'), pk)).toBe(false);
+    });
+
+    it('decapsulates what OpenSSL encapsulated', () => {
+        const ss = core.xwingDecapsulate(b64(V.openssl_xwing_cipher_text), hex(V.xwing_secret_key));
+        expect(ss).toEqual(b64(V.openssl_xwing_shared_secret));
+    });
+
+    // OpenSSL accepts mixed_order_A_even_k's signature; the server refuses its
+    // KEY where it enters. The clients refuse all four on the signature alone.
+    it.each(Object.keys(V.ed25519_edges))('refuses the %s edge', (edge) => {
+        const e = V.ed25519_edges[edge];
+        expect(core.compositeVerify(b64(e.signature), message, hex(e.public_key))).toBe(false);
+    });
+
+    it.each(Object.keys(V.prime_order_points))('agrees on whether %s has order L', (name) => {
+        const { point, in_prime_order_subgroup: expected } = V.prime_order_points[name];
+        let actual;
+        try {
+            const p = ed25519.Point.fromBytes(hex(point));
+            actual = !p.is0() && p.isTorsionFree();
+        } catch {
+            actual = false;
+        }
+        expect(actual).toBe(expected);
+    });
+});

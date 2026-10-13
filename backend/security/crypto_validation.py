@@ -22,6 +22,8 @@ base64 with the rest of them.
 import base64
 import re
 
+from security.ed25519_subgroup import in_prime_order_subgroup
+
 # Byte lengths (FIPS 203/204).
 ML_KEM_768_PUBLIC_KEY_BYTES = 1184
 ML_DSA_44_PUBLIC_KEY_BYTES = 1312
@@ -110,6 +112,34 @@ def is_valid_ml_dsa_public_key(value: str | None) -> bool:
 def is_valid_ml_dsa_signature(value: str | None) -> bool:
     """True if `value` is a well-formed base64 ML-DSA-44 signature."""
     return is_valid_b64_of_length(value, ML_DSA_44_SIGNATURE_B64_LEN)
+
+
+# --- Composite identity key (crypto-core 4, audit 2026-10-12 K-10) -----------
+#
+# mldsa65PK (1952 bytes) || ed25519PK (32 bytes). Not used yet: the 4.0.0
+# cutover makes it the identity key, checked here where a key enters (login).
+COMPOSITE_IDENTITY_KEY_BYTES = 1952 + 32
+COMPOSITE_IDENTITY_KEY_HEX_LEN = COMPOSITE_IDENTITY_KEY_BYTES * 2
+# One spelling only: lowercase, no whitespace (which `bytes.fromhex` skips).
+# The key is hashed into the address, and an identifier with two spellings is
+# the L-12 defect again.
+_COMPOSITE_IDENTITY_KEY_RE = re.compile(rf"^[0-9a-f]{{{COMPOSITE_IDENTITY_KEY_HEX_LEN}}}$")
+
+
+def is_valid_composite_identity_key(value: str | None) -> bool:
+    """True if `value` is a lowercase-hex composite key whose Ed25519 half is
+    a point of order exactly L.
+
+    The second condition is what lets the server verify with OpenSSL alone:
+    with such a key, OpenSSL's cofactorless Ed25519 rule and the clients'
+    stricter one accept the same signatures (see security/ed25519_subgroup.py).
+    """
+    if not isinstance(value, str) or not _COMPOSITE_IDENTITY_KEY_RE.match(value):
+        return False
+    # Nothing to check in the ML-DSA-65 half beyond its length: FIPS 204's
+    # pkDecode cannot fail on 1952 bytes (rho is any 32 bytes, t1 any packed
+    # 10-bit values), and OpenSSL accepts every such key.
+    return in_prime_order_subgroup(bytes.fromhex(value)[1952:])
 
 
 # --- Capability check -------------------------------------------------------

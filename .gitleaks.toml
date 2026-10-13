@@ -23,11 +23,12 @@ useDefault = true
 
 [allowlist]
 description = """
-Golden test vectors, not credentials. Each entry below is a SHA-256 digest of
-PUBLIC input — the data the digest is taken over sits in plaintext in the same
-fixture — and each is asserted byte-for-byte by the suites, which is the whole
-reason it is committed at all. High entropy over a 64-hex constant is what trips
-the generic-api-key rule.
+Golden test vectors, not credentials. Each entry below is either a SHA-256
+digest of PUBLIC input, or a patterned test seed and what it derives — in both
+cases the data it comes from sits in plaintext in the same fixture — and each is
+asserted byte-for-byte by the suites, which is the whole reason it is committed
+at all. High entropy, or a key named "secret", is what trips the generic-api-key
+rule.
 
 Scoped to the literal values, so a real key committed to those same files is
 still caught.
@@ -57,4 +58,20 @@ regexes = [
   # `message_keys` with backend/auth.py's _canonical_json. The 2.x value above
   # stays: the scan covers history, where it still lives.
   '''060aaf6e6409db5164f3f20e904b0a063d05e472992ddf3ee9f96e6c4d968acc''',
+
+  # tests/fixtures/hybrid_interop.json (lot 11b, crypto-core 4 hybrids), three
+  # values the generic-api-key rule flags for the word "secret" in their keys:
+  #
+  # composite_secret_key — the bytes 00..3f in order, a patterned TEST seed
+  # chosen so that it is visibly not a key anyone uses. It is committed because
+  # both languages must derive composite_public_key from it byte for byte.
+  '''000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f''',
+  #
+  # noble_xwing_shared_secret / openssl_xwing_shared_secret — what the X-Wing
+  # ciphertexts in the same file decapsulate to under its xwing_secret_key
+  # (40..5f, another patterned test seed). Anyone can recompute them from the
+  # file with backend/tests/xwing_ref.decapsulate, which is what the suites do.
+  # `+` is escaped: these are regexes.
+  '''qxSMynTH/LrQNh5GOR4IqVdu5AHovjtToduqdvOhdjs=''',
+  '''NT2g7HheWcXmCaX6meos3fHCt5SkP3jS\+PF/KQMvmO8=''',
 ]
