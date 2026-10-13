@@ -74,4 +74,15 @@ regexes = [
   # `+` is escaped: these are regexes.
   '''qxSMynTH/LrQNh5GOR4IqVdu5AHovjtToduqdvOhdjs=''',
   '''NT2g7HheWcXmCaX6meos3fHCt5SkP3jS\+PF/KQMvmO8=''',
+
+  # crypto-core 4.0.0: the same `keysh`, now SHA-384 over the v4 `message_keys`
+  # of tests/fixtures/signed_bodies.json (wrapped keys carry v 4 and the X-Wing
+  # alg). Recompute it from that file with backend/auth.py's _canonical_json.
+  '''91cebfba64ff669cb9f4eee7181c60a1e24954634731fa653108fb5d18436efb6043b068d6be208c91717c96e44b7f6d''',
+  #
+  # packages/crypto-core/test/golden-envelopes.json, wrapped.encKey: the
+  # patterned test session key (11 repeated) sealed once under the key X-Wing
+  # derives for the file's patterned seed (5a repeated) — which the suite
+  # unwraps. A ciphertext of public test data, flagged for its entropy.
+  '''FoTNffAfJsXZICUY6dSyQ7E81ZXKDOYtc2MvOxviRUdMnh3y1lvhosrDid5fyTwT''',
 ]

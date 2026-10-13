@@ -15,6 +15,7 @@ from conftest import (
     do_login,
     get_nonce,
     login_body,
+    synthetic_address,
 )
 
 from security.audit_log import ADDRESS_PREFIX, audit_event, audit_logger
@@ -68,9 +69,9 @@ class TestLogin:
         assert "nonce" in line["reason"].lower()
 
     def test_registration_and_a_key_change_are_their_own_kinds(self, client, trail):
-        address = "ab" * 1312
+        address = synthetic_address("audit-kinds")
         do_login(client, address, TEST_ENCRYPTION_KEY)
-        do_login(client, address, "cd" * 1184)
+        do_login(client, address, "cd" * 1216)
 
         kinds = [e["kind"] for e in _of(trail, "auth.login")]
         assert kinds == ["register", "key_changed"]
@@ -86,7 +87,7 @@ class TestRefusedRequests:
         assert line["request_id"] == resp.headers["x-request-id"]
 
     def test_throttling_is_recorded(self, client, trail):
-        address = "ef" * 1312
+        address = synthetic_address("audit-throttle")
         statuses = [client.get(f"/auth/nonce/{address}").status_code for _ in range(12)]
         assert 429 in statuses
         line = _of(trail, "http.denied")[-1]

@@ -1,5 +1,5 @@
 import {
-    deriveVaultKeyBits, importVaultKey, decryptVaultWithKey, normalizeAccount, vaultKdfOf,
+    deriveVaultKeyBits, importVaultKey, decryptVaultWithKey, parseAccount, FormatError, vaultKdfOf,
     vaultPasswordProblem,
 } from '../../utils/crypto.js';
 import { state } from '../state.js';
@@ -27,10 +27,11 @@ const openVault = async (vaultData, keyBytes, kdf) => {
     const key = await importVaultKey(keyBytes);
     const vault = await decryptVaultWithKey(vaultData, key); // throws on a wrong key
 
-    // Migration: map legacy kyber/dilithium account fields to mlkem/mldsa
-    // (compat, crypto-core v1.2.0) so older vaults keep opening.
+    // Every account re-derived from its seeds (crypto-core 4.0.0, parseAccount):
+    // a stored key or id that disagrees with them is refused, and so is an
+    // account an older TrustKeys wrote — by name, as a FormatError.
     if (Array.isArray(vault.accounts)) {
-        vault.accounts = vault.accounts.map(normalizeAccount);
+        vault.accounts = vault.accounts.map(parseAccount);
     }
     // Migration: Ensure permissions + per-site capability objects exist
     if (!vault.permissions) vault.permissions = {};
@@ -58,6 +59,9 @@ export const unlock = async (password) => {
         const keyBytes = await deriveVaultKeyBits(password, kdf);
         return await openVault(vaultData, keyBytes, kdf);
     } catch (e) {
+        // An older TrustKeys' vault is not a wrong password: say what it is
+        // (crypto-core 4.0.0). The message reaches the unlock screen.
+        if (e instanceof FormatError) throw e;
         console.error("Unlock failed", e);
         return false;
     }

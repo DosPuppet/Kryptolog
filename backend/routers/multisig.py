@@ -337,7 +337,7 @@ def _release_recipient_keys(db: Session, wf, supplied):
 def _verify_approval(db, wf, signer: models.User, signature: str) -> None:
     """Check that `signer` really approved this workflow's ciphertext.
 
-    The server is zero-knowledge, so a signer signs the SHA-256 of the STORED
+    The server is zero-knowledge, so a signer signs the SHA-384 of the STORED
     CIPHERTEXT bound to this workflow and secret (audit M1). The server can
     recompute that hash, which is what makes `has_signed` cryptographically
     meaningful: only the holder of the signing key can advance the workflow, not
@@ -347,7 +347,7 @@ def _verify_approval(db, wf, signer: models.User, signature: str) -> None:
     if not secret:
         raise HTTPException(status_code=404, detail="Workflow secret not found")
 
-    ct_hash = hashlib.sha256((secret.encrypted_data or "").encode("utf-8")).hexdigest()
+    ct_hash = hashlib.sha384((secret.encrypted_data or "").encode("utf-8")).hexdigest()
     approval_msg = auth.multisig_approval_message(wf.id, wf.secret_id, ct_hash)
     if not auth.verify_identity_signature(signer.identity_public_key, approval_msg, signature):
         raise HTTPException(status_code=400, detail="Invalid approval signature")
@@ -404,8 +404,8 @@ def sign_multisig_workflow(
     current_user: models.User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    """Approve a workflow with an ML-DSA signature over the workflow, its secret
-    and the SHA-256 of the stored ciphertext.
+    """Approve a workflow with a composite signature over the workflow, its
+    secret and the SHA-384 of the stored ciphertext.
 
     The signature that reaches the threshold completes the workflow and releases
     the recipients' keys, in the same transaction.

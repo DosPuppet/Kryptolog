@@ -1,14 +1,12 @@
 import { useState, useRef } from 'react';
 import { Upload, ShieldCheck, ShieldAlert, FileJson, User, Key, Clock, FileText, X, Loader2, FileCheck, FileWarning, Type } from 'lucide-react';
 
-// Proofs name their signature algorithm. Exports wrote the pre-standard name
-// 'DILITHIUM2' until crypto-core 3.0.0 and 'ML-DSA-44' since (audit 2026-09-11
-// Q-1). Both are the same FIPS 204 parameter set, and document signatures did
-// not change format, so proofs exported before still verify.
+// Proofs are format 2.0 since crypto-core 4.0.0: composite ML-DSA-65 + Ed25519
+// signatures, each signer named by address AND identity key. An older proof is
+// refused by name (multisig/proof.js assertProofVersion) rather than shown as a
+// column of failed signatures, which would read as forgeries.
 import { verifySignedDocument } from '../utils/secretContent';
-import { verifyMultisigProofSignatures, isMlDsaLabel } from './multisig/proof';
-// Ethereum/ECDSA proofs are no longer verifiable (the app is post-quantum only);
-// such legacy entries are reported as unsupported rather than verified.
+import { verifyMultisigProofSignatures, assertProofVersion, PROOF_ALGORITHM } from './multisig/proof';
 
 // Parse proof content to detect type: text, single file, or multi-file
 function parseProofContent(proofData) {
@@ -76,23 +74,23 @@ export default function ProofAudit() {
     };
 
     const verifySingleSignature = async (proofData) => {
+        assertProofVersion(proofData);
         const { document: doc, signer, signature } = proofData;
-        const isPQC = isMlDsaLabel(signer.algorithm);
 
-        // Verify against the `content`-domain-separated bytes the signer actually signed (H1).
-        // PQC (ML-DSA-44) only; legacy ECDSA proofs are unsupported.
-        // The proof carries the signer's identity KEY; the address it names is
-        // derived from it, so a valid result names the right identity (3.3.0).
-        const isValid = isPQC && (await verifySignedDocument({
-            content: doc.content, signature, signerPublicKey: signer.publicKey,
-        })).valid;
+        // Verify against the `content`-domain-separated bytes the signer
+        // actually signed (H1), with the identity KEY the proof carries — and
+        // the address it names must be the one the proof claims (4.0.0).
+        const { valid, signerAddress } = signer.algorithm === PROOF_ALGORITHM
+            ? await verifySignedDocument({ content: doc.content, signature, signerPublicKey: signer.identity_public_key })
+            : { valid: false, signerAddress: null };
+        const isValid = valid && signerAddress === signer.address;
 
         setResults({
             type: 'single',
             documentName: doc.name,
             exportedAt: proofData.exported_at,
             signers: [{
-                publicKey: signer.publicKey,
+                publicKey: signer.address,
                 algorithm: signer.algorithm,
                 valid: isValid,
                 username: signer.username || null,

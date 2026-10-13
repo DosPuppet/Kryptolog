@@ -637,11 +637,11 @@ def _erase_invite_codes(db: Session, address: str) -> None:
 def _strip_identity(user: models.User, mode: str) -> None:
     """Everything the row held about the person, gone; the address remains.
 
-    The address is an ML-DSA public key that is already embedded in every
+    The address names a public key and is already embedded in every
     message this identity ever signed, so keeping it discloses nothing new —
     and dropping it would break the signatures on the rows both modes retain.
     `identity_public_key` stays for the same reason: it is what a reader
-    verifies those signatures and redactions against (crypto-core 3.3.0).
+    verifies those signatures and redactions against.
 
     **The username survives a `leave`, and only a `leave`.** Freeing it the
     moment someone stepped away made the reversibility this mode promises

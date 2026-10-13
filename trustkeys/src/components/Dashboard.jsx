@@ -230,9 +230,19 @@ const Dashboard = () => {
 
           <div className="key-section">
             <div className="key-header">
-              <span>ML-KEM (Kyber)</span>
-              <button onClick={() => copyToClipboard(activeAccount.encryptionPublicKey, 'mlkem')} className={copyFeedback === 'mlkem' ? 'copied' : ''}>
-                {copyFeedback === 'mlkem' ? 'COPIED' : 'COPY'}
+              <span>Address</span>
+              <button onClick={() => copyToClipboard(activeAccount.address, 'address')} className={copyFeedback === 'address' ? 'copied' : ''}>
+                {copyFeedback === 'address' ? 'COPIED' : 'COPY'}
+              </button>
+            </div>
+            <div className="key-box">{activeAccount.address}</div>
+          </div>
+
+          <div className="key-section">
+            <div className="key-header">
+              <span>Encryption key (X-Wing)</span>
+              <button onClick={() => copyToClipboard(activeAccount.encryptionPublicKey, 'encryption')} className={copyFeedback === 'encryption' ? 'copied' : ''}>
+                {copyFeedback === 'encryption' ? 'COPIED' : 'COPY'}
               </button>
             </div>
             <div className="key-box">{activeAccount.encryptionPublicKey}</div>
@@ -240,9 +250,9 @@ const Dashboard = () => {
 
           <div className="key-section">
             <div className="key-header">
-              <span>ML-DSA (Dilithium)</span>
-              <button onClick={() => copyToClipboard(activeAccount.identityPublicKey, 'mldsa')} className={copyFeedback === 'mldsa' ? 'copied' : ''}>
-                {copyFeedback === 'mldsa' ? 'COPIED' : 'COPY'}
+              <span>Identity key (ML-DSA-65 + Ed25519)</span>
+              <button onClick={() => copyToClipboard(activeAccount.identityPublicKey, 'identity')} className={copyFeedback === 'identity' ? 'copied' : ''}>
+                {copyFeedback === 'identity' ? 'COPIED' : 'COPY'}
               </button>
             </div>
             <div className="key-box">{activeAccount.identityPublicKey}</div>

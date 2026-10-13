@@ -9,24 +9,23 @@
 // so an unfounded claim there is the one that travels.
 
 import { describe, it, expect, beforeAll, vi } from 'vitest';
-import {
-    generateMlDsaKeyPair, signMessagePQC, domainSeparate, SIGNING_CONTEXT,
-} from '../utils/crypto';
+import { signMessagePQC, domainSeparate, SIGNING_CONTEXT, multisigApprovalMessage, sha384Hex } from '../utils/crypto';
+import { makeSigner } from './identities';
 import { interpretDecryptedContent } from '../components/multisig/decryptWorkflow';
-import { downloadMultisigProof } from '../components/multisig/proof';
+import { downloadMultisigProof, verifyMultisigProofSignatures } from '../components/multisig/proof';
 
 let owner, impostor;
 
 beforeAll(async () => {
-    [owner, impostor] = await Promise.all([generateMlDsaKeyPair(), generateMlDsaKeyPair()]);
+    [owner, impostor] = [makeSigner('owner'), makeSigner('impostor')];
 }, 60000);
 
 const signedBlob = async (signer, content = 'the document') => {
     const body = domainSeparate(SIGNING_CONTEXT.CONTENT, content);
     return JSON.stringify({
         content,
-        signature: await signMessagePQC(body, signer.privateKey),
-        signerPublicKey: signer.publicKey,
+        signature: await signMessagePQC(body, signer.seed),
+        signerPublicKey: signer.identityPublicKey,
     });
 };
 
@@ -36,14 +35,14 @@ const interpret = (contentString, workflow) => interpretDecryptedContent({
 
 describe('creator signature attribution', () => {
     it('verifies when the signer IS the workflow owner', async () => {
-        const workflow = { owner_address: owner.publicKey.toLowerCase() };
+        const workflow = { owner_address: owner.address };
         const result = await interpret(await signedBlob(owner), workflow);
         expect(result.verificationStatus).toBe('verified');
         expect(result.signerMatchesOwner).toBe(true);
     });
 
     it('is case-insensitive about the address, as the directory is', async () => {
-        const workflow = { owner_address: owner.publicKey.toUpperCase() };
+        const workflow = { owner_address: owner.address.toUpperCase() };
         const result = await interpret(await signedBlob(owner), workflow);
         expect(result.verificationStatus).toBe('verified');
     });
@@ -51,7 +50,7 @@ describe('creator signature attribution', () => {
     it('reports mismatch — not verified — when another key signed it', async () => {
         // The blob is internally consistent: the signature DOES verify against
         // the key it carries. That is exactly why the old check passed it.
-        const workflow = { owner_address: owner.publicKey.toLowerCase() };
+        const workflow = { owner_address: owner.address };
         const result = await interpret(await signedBlob(impostor), workflow);
         expect(result.verificationStatus).toBe('mismatch');
         expect(result.signerMatchesOwner).toBe(false);
@@ -66,23 +65,59 @@ describe('creator signature attribution', () => {
         // 'failed' and 'mismatch' are different statements and must stay distinct.
         const blob = JSON.parse(await signedBlob(owner));
         blob.content = 'tampered after signing';
-        const workflow = { owner_address: owner.publicKey.toLowerCase() };
+        const workflow = { owner_address: owner.address };
         const result = await interpret(JSON.stringify(blob), workflow);
         expect(result.verificationStatus).toBe('failed');
     });
 
     it('leaves an unsigned payload alone', async () => {
         const result = await interpret(JSON.stringify({ hello: 'world' }), {
-            owner_address: owner.publicKey.toLowerCase(),
+            owner_address: owner.address,
         });
         expect(result.verificationStatus).toBe('unsigned');
+    });
+});
+
+describe('proof export and Proof Audit agree (4.0.0)', () => {
+    // An exported proof is only worth something if the auditor's side accepts
+    // what the exporting side wrote: the digest, the keys, the version.
+    it('a signer\'s approval in an exported proof verifies offline', async () => {
+        const signer = makeSigner('signer');
+        const ciphertext = 'the stored ciphertext';
+        const approval = multisigApprovalMessage(5, 6, await sha384Hex(ciphertext));
+        const workflow = {
+            id: 5, secret_id: 6, name: 'wf', status: 'completed', created_at: null,
+            owner_address: owner.address, owner: { identity_public_key: owner.identityPublicKey },
+            secret: { encrypted_data: ciphertext },
+            signers: [{
+                user_address: signer.address, user: { identity_public_key: signer.identityPublicKey },
+                has_signed: true, signature: await signMessagePQC(approval, signer.seed), signed_at: null,
+            }],
+        };
+        let written;
+        vi.stubGlobal('Blob', class { constructor(parts) { written = parts.join(''); } });
+        vi.spyOn(document, 'createElement').mockReturnValue({ href: '', download: '', click: vi.fn() });
+        globalThis.URL.createObjectURL = vi.fn(() => 'blob:x');
+        globalThis.URL.revokeObjectURL = vi.fn();
+
+        await downloadMultisigProof({
+            workflow, creatorSignature: null, creatorSignedContent: null,
+            rawDecryptedContent: 'doc', verificationStatus: 'unsigned',
+        });
+        vi.unstubAllGlobals();
+        vi.restoreAllMocks();
+
+        const proof = JSON.parse(written);
+        expect(proof.version).toBe('2.0');
+        const [result] = await verifyMultisigProofSignatures(proof);
+        expect(result.valid).toBe(true);
     });
 });
 
 describe('proof export', () => {
     const workflow = {
         id: 1, name: 'wf', status: 'completed', created_at: null, secret_id: 2,
-        owner_address: 'abc', signers: [], secret: {},
+        owner_address: 'ab'.repeat(48), signers: [], secret: {},
     };
 
     it('refuses to export a proof whose attribution does not hold', async () => {

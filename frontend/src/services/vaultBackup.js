@@ -1,4 +1,4 @@
-import { encryptVault, decryptVault, normalizeAccount, isEncryptedVaultBlob, vaultPasswordProblem } from '../utils/crypto';
+import { encryptVault, decryptVault, parseAccount, isEncryptedVaultBlob, vaultPasswordProblem } from '../utils/crypto';
 import { exportTrustStores, importTrustStores } from './trustedKeys';
 
 // One rule for every password that seals keys (crypto-core 3.0.0, audit
@@ -38,17 +38,10 @@ export const backupMethods = {
         // merges into the existing vault under its existing password, which the
         // registration still opens.
         this.disableBiometrics();
-        // Accept both the current (mlkem/mldsa) and legacy (kyber/dilithium)
-        // field names from exported backups, then normalize to the new shape.
-        const accounts = data.accounts.map(normalizeAccount);
-        for (const acc of accounts) {
-            if (!acc?.mldsa?.publicKey || !acc?.mldsa?.privateKey ||
-                !acc?.mlkem?.publicKey || !acc?.mlkem?.privateKey) {
-                throw new Error("Invalid vault file: accounts are missing key material");
-            }
-            // Normalize id to the ML-DSA public key (matches setup/import conventions).
-            acc.id = acc.mldsa.publicKey;
-        }
+        // Re-derived from their seeds (crypto-core 4.0.0): an account whose
+        // stored keys or id disagree with them is refused, and so is a backup
+        // an older Kryptolog wrote — by name. The id is the address.
+        const accounts = data.accounts.map(parseAccount);
 
         const activeAccountId = (data.activeAccountId &&
             accounts.some(a => a.id === data.activeAccountId))
@@ -145,12 +138,10 @@ export const backupMethods = {
 
             let addedCount = 0;
             for (const rawAcc of data.accounts) {
-                // Accept legacy kyber/dilithium backups, then normalize.
-                const acc = normalizeAccount(rawAcc);
-                // FORCE ID normalization
-                if (acc.mldsa && acc.mldsa.publicKey) {
-                    acc.id = acc.mldsa.publicKey;
-                }
+                // Re-derived from its seeds, the id included: an account is
+                // deduplicated by its ADDRESS, the same one whichever app
+                // exported it (crypto-core 4.0.0).
+                const acc = parseAccount(rawAcc);
 
                 const existingIndex = fullVault.accounts.findIndex(existing => existing.id === acc.id);
                 if (existingIndex >= 0) {

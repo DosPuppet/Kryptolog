@@ -1,5 +1,5 @@
 import {
-    signMessage, encryptMessage, decryptMessage, verifySignature, generateSessionKey, wrapSessionKey,
+    signMessage, encryptMessage, decryptMessage, generateSessionKey, wrapSessionKey,
     unwrapSessionKey, attestEncryptionKey, MESSAGE_SIGNING_PREFIX, SIGNING_CONTEXT, domainSeparate,
     loginChallengeBody, accountDeletionBody, conversationEraseBody, multisigApprovalMessage,
 } from '../../utils/crypto.js';
@@ -42,7 +42,7 @@ const requestSignature = async ({ sender, sendResponse, kind, details, body }) =
         onApprove: async () => {
             const active = activeAccount();
             if (!active) return sendResponse({ success: false, error: "No active account" });
-            const signature = await signMessage(body, active.mldsa.privateKey);
+            const signature = await signMessage(body, active.identity.seed);
             sendResponse({ success: true, signature });
         },
         onReject: (err) => sendResponse({ success: false, error: err }),
@@ -55,7 +55,7 @@ export const handleSignAsync = async (request, sender, sendResponse) => {
     if (isInternalSender(sender)) {
         const account = requireActiveAccount();
 
-        const signature = await signMessage(request.message, account.mldsa.privateKey);
+        const signature = await signMessage(request.message, account.identity.seed);
         sendResponse({ success: true, signature });
         return;
     }
@@ -88,7 +88,7 @@ export const handleSignLoginAsync = async (request, sender, sendResponse) => {
         nonce: request.nonce,
         origin: getSenderOrigin(sender),
         deployment: request.deployment,
-        encryptionKey: account.mlkem.publicKey,
+        encryptionKey: account.encryption.publicKey,
     });
     await requestSignature({
         sender, sendResponse, kind: 'login', details: { deployment: request.deployment }, body,
@@ -113,7 +113,12 @@ export const handleSignAccountDeletionAsync = async (request, sender, sendRespon
     });
     await requestSignature({
         sender, sendResponse, kind: 'account-deletion',
-        details: { mode: request.mode, redactions: keys.length, deployment: request.deployment },
+        // The address being deleted is shown (crypto-core 4.0.0): with several
+        // identities in the vault, "this account" alone does not say which.
+        details: {
+            mode: request.mode, redactions: keys.length, deployment: request.deployment,
+            address: requireActiveAccount().id,
+        },
         body,
     });
 };
@@ -141,9 +146,9 @@ export const handleSignConversationEraseAsync = async (request, sender, sendResp
         sender, sendResponse, kind: 'conversation-erase',
         details: {
             conversationKind: request.kind,
-            // A partner is named by a 2 624-character key; the window shows enough
-            // of it to compare with the safety number, not all of it.
-            conversation: request.kind === 'dm' ? `${request.conversation.slice(0, 16)}…` : request.conversation,
+            // A partner is named by a 96-character address since crypto-core
+            // 4.0.0 (it was a 2 624-character key): short enough to show whole.
+            conversation: request.conversation,
             redactions: keys.length,
             deployment: request.deployment,
         },
@@ -153,15 +158,15 @@ export const handleSignConversationEraseAsync = async (request, sender, sendResp
 
 export const handleSignMultisigApprovalAsync = async (request, sender, sendResponse) => {
     requireUnlocked();
-    const { workflowId, secretId, ciphertextSha256 } = request;
+    const { workflowId, secretId, ciphertextSha384 } = request;
     if (!Number.isSafeInteger(workflowId) || !Number.isSafeInteger(secretId) ||
-        typeof ciphertextSha256 !== 'string' || !/^[0-9a-f]{64}$/.test(ciphertextSha256)) {
+        typeof ciphertextSha384 !== 'string' || !/^[0-9a-f]{96}$/.test(ciphertextSha384)) {
         throw new Error("Invalid workflow approval request");
     }
     await requestSignature({
         sender, sendResponse, kind: 'multisig-approval',
-        details: { workflowId, secretId, ciphertextSha256 },
-        body: multisigApprovalMessage(workflowId, secretId, ciphertextSha256),
+        details: { workflowId, secretId, ciphertextSha384 },
+        body: multisigApprovalMessage(workflowId, secretId, ciphertextSha384),
     });
 };
 
@@ -200,12 +205,12 @@ export const handleSignMessage = async (request, sender, sendResponse) => {
     const account = activeAccount();
     if (!account) return sendResponse({ success: false, error: "No active account" });
 
-    const signature = await signMessage(message, account.mldsa.privateKey);
+    const signature = await signMessage(message, account.identity.seed);
     sendResponse({ success: true, signature });
 };
 
 // Encryption-key attestation (audit M-1): the active account self-signs its
-// OWN ML-KEM public key so peers (and the server) can verify the directory's
+// OWN encryption key, naming its own address (crypto-core 4.0.0) so peers (and the server) can verify the directory's
 // key binding against the account's identity. No approval popup: the message
 // is fixed and built entirely here — the site supplies nothing — and it can
 // only ever bind this account's own keys together. Requires unlock + (for
@@ -216,25 +221,19 @@ export const handleGetKeyAttestation = async (request, sender, isInternal, sende
 
     const account = requireActiveAccount();
 
-    const attestation = await attestEncryptionKey(account.mlkem.publicKey, account.mldsa.privateKey);
+    const attestation = await attestEncryptionKey(
+        { address: account.id, encryptionPublicKey: account.encryption.publicKey }, account.identity.seed
+    );
     return { success: true, attestation };
 };
 
-export const handleVerify = async (request) => {
-    // Pure ML-DSA-44 signature check — no private key, no user approval needed.
-    if (!request.message || !request.signature || !request.publicKey) {
-        return { success: true, isValid: false };
-    }
-    const isValid = await verifySignature(request.message, request.signature, request.publicKey);
-    return { success: true, isValid };
-};
 
 export const handleEncrypt = async (request) => {
     let pubKey = request.publicKey;
     if (!pubKey) {
         requireUnlocked();
         const account = requireActiveAccount();
-        pubKey = account.mlkem.publicKey;
+        pubKey = account.encryption.publicKey;
     }
     const result = await encryptMessage(request.message, pubKey);
     return { success: true, result };
@@ -266,7 +265,7 @@ export const handleDecryptAsync = async (request, sender, sendResponse) => {
         onApprove: async () => {
             const account = activeAccount();
             if (!account) return sendResponse({ success: false, error: "No active account" });
-            const decrypted = await decryptMessage(request.data, account.mlkem.privateKey);
+            const decrypted = await decryptMessage(request.data, account.encryption.seed);
             sendResponse({ success: true, decrypted });
         },
         onReject: (err) => sendResponse({ success: false, error: err }),
@@ -288,7 +287,7 @@ export const handleUnwrapSessionKeyAsync = async (request, sender, sendResponse)
             if (!account) return sendResponse({ success: false, error: "No active account" });
 
             try {
-                const sessionKey = await unwrapSessionKey(request.wrappedKey, account.mlkem.privateKey);
+                const sessionKey = await unwrapSessionKey(request.wrappedKey, account.encryption.seed);
                 sendResponse({ success: true, sessionKey });
             } catch (e) {
                 console.error("TrustKeys: Unwrap failed", e);
@@ -321,7 +320,7 @@ export const handleDecryptManyAsync = async (request, sender, sendResponse) => {
                 const items = request.items;
                 if (!Array.isArray(items)) throw new Error("Invalid input");
 
-                const privKey = account.mlkem.privateKey;
+                const privKey = account.encryption.seed;
                 const results = await Promise.all(items.map(async (blob) => {
                     try {
                         return await decryptMessage(blob, privKey);
@@ -356,7 +355,7 @@ export const handleUnwrapManySessionKeysAsync = async (request, sender, sendResp
                 const wrappedKeys = request.wrappedKeys;
                 if (!Array.isArray(wrappedKeys)) throw new Error("Invalid input");
 
-                const privKey = account.mlkem.privateKey;
+                const privKey = account.encryption.seed;
                 const results = await Promise.all(wrappedKeys.map(async (blob) => {
                     try {
                         return await unwrapSessionKey(blob, privKey);

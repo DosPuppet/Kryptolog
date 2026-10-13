@@ -10,7 +10,7 @@ from database import get_db
 from dependencies import get_current_user, limiter
 from security import authorization
 from security.audit_log import audit_event, short
-from security.crypto_validation import is_usable_encryption_key
+from security.crypto_validation import is_valid_encryption_key
 from utils.clock import to_wire_utc
 from utils.group_events import broadcast_removal
 from utils.push import display_name, schedule_pushes
@@ -92,10 +92,10 @@ def create_group(
 
     # Validate all members have PQC keys (Messenger requirement)
     for u in users:
-        if not is_usable_encryption_key(u.encryption_public_key):
+        if not is_valid_encryption_key(u.encryption_public_key):
             raise HTTPException(
                 status_code=400,
-                detail=f"User {u.address} is not Messenger-capable (Missing PQC key)",
+                detail=f"User {u.address} is not Messenger-capable (no encryption key)",
             )
 
     channel_id = str(uuid.uuid4())
@@ -383,9 +383,9 @@ def add_member(
     if not target_user:
         raise HTTPException(status_code=404, detail="User not found")
 
-    if not is_usable_encryption_key(target_user.encryption_public_key):
+    if not is_valid_encryption_key(target_user.encryption_public_key):
         raise HTTPException(
-            status_code=400, detail="User is not Messenger-capable (Missing PQC key)"
+            status_code=400, detail="User is not Messenger-capable (no encryption key)"
         )
 
     if len(channel.members) >= schemas.MAX_GROUP_MEMBERS:

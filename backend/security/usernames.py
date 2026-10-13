@@ -18,7 +18,7 @@ zero-width joiner, or a name carrying an RTL override that reverses how the
 rest of the line renders. The module's own docstring already named this as the
 risk it existed to address; it only ever handled case.
 
-The address (an ML-DSA public key) remains the real identity and the safety
+The address (the hash of a public key) remains the real identity and the safety
 number is the actual defence against impersonation. This makes the directory
 behave the way the code already claimed it did.
 

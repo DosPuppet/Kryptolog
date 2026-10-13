@@ -16,6 +16,7 @@ clients and runs here through the test-only xwing_ref.py.
 """
 
 import base64
+import hashlib
 import json
 import os
 import pathlib
@@ -28,8 +29,9 @@ from cryptography.hazmat.primitives.asymmetric import ed25519, mldsa
 
 import auth
 from security.crypto_validation import (
-    COMPOSITE_IDENTITY_KEY_HEX_LEN,
-    is_valid_composite_identity_key,
+    IDENTITY_KEY_HEX_LEN,
+    address_of,
+    is_valid_identity_key,
 )
 from security.ed25519_subgroup import in_prime_order_subgroup
 
@@ -57,7 +59,7 @@ class TestCompositeDraftVector:
         assert (len(self.pk), len(self.sk), len(self.s)) == (1984, 64, 3373)
         assert auth.COMPOSITE_PUBLIC_KEY_BYTES == 1984
         assert auth.COMPOSITE_SIGNATURE_BYTES == 3373
-        assert COMPOSITE_IDENTITY_KEY_HEX_LEN == 3968
+        assert IDENTITY_KEY_HEX_LEN == 3968
 
     def test_openssl_derives_the_published_key_from_the_published_seeds(self):
         ml = mldsa.MLDSA65PrivateKey.from_seed_bytes(self.sk[:32]).public_key()
@@ -94,6 +96,21 @@ class TestCompositeDraftVector:
         assert auth._verify_composite(self.pk + b"\x00", self.m, self.s) is False
         with pytest.raises(ValueError, match="255"):
             auth._composite_message(self.m, bytes(256))
+
+
+class TestSeededKeyPin:
+    """One 64-byte seed is one composite key in both libraries. The digest was
+    computed here, by OpenSSL, and crypto-core's byte-compat suite pins the
+    same literal under noble — so either library drifting fails a test."""
+
+    def test_fill_7_names_the_pinned_key(self):
+        seed = bytes([7] * 64)
+        ml = mldsa.MLDSA65PrivateKey.from_seed_bytes(seed[:32]).public_key().public_bytes_raw()
+        ed = ed25519.Ed25519PrivateKey.from_private_bytes(seed[32:]).public_key().public_bytes_raw()
+        assert hashlib.sha384(ml + ed).hexdigest() == (
+            "96a33b461c1decb225cef1504b886bfb752de6bc7620a8a1"
+            "f94d493278c91ad2fe0374c97882b3bbc913b8d760482fec"
+        )
 
 
 class TestXWingDraftVectors:
@@ -138,8 +155,13 @@ class TestNobleOpenSSLInterop:
         ss = xwing_ref.decapsulate(ct, sk)
         assert ss == base64.b64decode(self.V["noble_xwing_shared_secret"])
 
+    def test_the_golden_address(self):
+        """The address both languages give the same composite key — the one
+        identifier every row, URL and signed body carries (crypto-core 4.0.0)."""
+        assert address_of(self.V["composite_public_key"]) == self.V["composite_address"]
+
     def test_the_identity_key_passes_the_entry_check(self):
-        assert is_valid_composite_identity_key(self.V["composite_public_key"]) is True
+        assert is_valid_identity_key(self.V["composite_public_key"]) is True
 
 
 class TestEd25519Edges:
@@ -170,7 +192,7 @@ class TestEd25519Edges:
     @pytest.mark.parametrize("edge", sorted(OPENSSL_ACCEPTS))
     def test_the_servers_rule_refuses_every_one(self, edge):
         e = self.V["ed25519_edges"][edge]
-        accepted = is_valid_composite_identity_key(e["public_key"]) and auth._verify_composite(
+        accepted = is_valid_identity_key(e["public_key"]) and auth._verify_composite(
             bytes.fromhex(e["public_key"]),
             self.V["message"].encode(),
             base64.b64decode(e["signature"]),
@@ -180,9 +202,9 @@ class TestEd25519Edges:
     def test_only_keys_with_a_torsion_component_fail_the_entry_check(self):
         edges = self.V["ed25519_edges"]
         # mixed_order_R carries its torsion in the SIGNATURE, under an honest key.
-        assert is_valid_composite_identity_key(edges["mixed_order_R"]["public_key"]) is True
+        assert is_valid_identity_key(edges["mixed_order_R"]["public_key"]) is True
         for edge in ("mixed_order_A_odd_k", "mixed_order_A_even_k", "small_order_A"):
-            assert is_valid_composite_identity_key(edges[edge]["public_key"]) is False
+            assert is_valid_identity_key(edges[edge]["public_key"]) is False
 
     @pytest.mark.parametrize(
         "name", ["honest", "mixed_order", "small_order", "identity", "non_canonical", "off_curve"]
@@ -196,10 +218,10 @@ class TestEd25519Edges:
 
     def test_the_entry_check_refuses_malformed_keys(self):
         key = self.V["composite_public_key"]
-        assert is_valid_composite_identity_key(None) is False
-        assert is_valid_composite_identity_key(key[:-2]) is False
-        assert is_valid_composite_identity_key(key.upper()) is False  # identifiers are lowercase
-        assert is_valid_composite_identity_key("zz" + key[2:]) is False
+        assert is_valid_identity_key(None) is False
+        assert is_valid_identity_key(key[:-2]) is False
+        assert is_valid_identity_key(key.upper()) is False  # identifiers are lowercase
+        assert is_valid_identity_key("zz" + key[2:]) is False
 
 
 IMPORT = "from cryptography.hazmat.primitives.asymmetric import ed25519, mldsa\n"

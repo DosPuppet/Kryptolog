@@ -6,6 +6,8 @@ import API_ENDPOINTS from '../../config';
 import { toast } from '../../utils/toast';
 import { apiFetch } from '../../services/api';
 import { unwrapSignedDocument, readFileDescriptor, verifySignedDocument } from '../../utils/secretContent';
+import { addressOf } from '../../utils/crypto';
+import { PROOF_VERSION, PROOF_ALGORITHM } from '../multisig/proof';
 import SecretContentPane from './SecretContentPane';
 
 const SecretItem = ({ secret, decryptedContent, onDecrypt, onLock, onDelete, onShare, onViewDetails, viewMode = 'grid', isSharedView }) => {
@@ -57,15 +59,18 @@ const SecretItem = ({ secret, decryptedContent, onDecrypt, onLock, onDelete, onS
     const handleDownloadProof = (secretName, docData) => {
         const proof = {
             type: 'kryptolog_signed_document_proof',
-            version: '1.0',
+            version: PROOF_VERSION,
             exported_at: new Date().toISOString(),
             document: {
                 name: secretName,
                 content: docData.content,
             },
+            // Address and identity key both (crypto-core 4.0.0): an auditor
+            // checks the one names the other, then the signature, offline.
             signer: {
-                publicKey: docData.signerPublicKey,
-                algorithm: 'ML-DSA-44',
+                address: addressOf(docData.signerPublicKey),
+                identity_public_key: docData.signerPublicKey,
+                algorithm: PROOF_ALGORITHM,
             },
             signature: docData.signature,
         };

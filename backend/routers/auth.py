@@ -15,7 +15,8 @@ from security.audit_log import audit_event
 from security.crypto_validation import (
     identity_binds_address,
     is_valid_address,
-    is_valid_ml_kem_public_key,
+    is_valid_encryption_key,
+    is_valid_identity_key,
 )
 from security.usernames import InvalidUsername, normalize_username, username_taken
 from utils.clock import utcnow_naive
@@ -35,8 +36,11 @@ def get_nonce(request: Request, address: str, db: Session = Depends(get_db)):
     else's login by asking for a new one (audit H-1).
     """
     # Anything not shaped like an address names no key that could produce a
-    # verifying signature, so it can never complete a login (audit L-5). Checking the shape here stops an unauthenticated endpoint
-    # from writing a row for every distinct string it is handed.
+    # verifying signature, so it can never complete a login (audit L-5).
+    # Checking the shape here stops an unauthenticated endpoint from writing a
+    # row for every distinct string it is handed. Lowercased first: addresses
+    # are lowercase everywhere, normalized at the boundary.
+    address = address.lower()
     if not is_valid_address(address):
         raise HTTPException(status_code=400, detail="Invalid address")
 
@@ -56,7 +60,7 @@ def get_nonce(request: Request, address: str, db: Session = Depends(get_db)):
     # with one request, repeatedly. Several challenges may now be live at once;
     # `_claim_nonce` still consumes exactly one. See models.Nonce for why there
     # is no per-address cap.
-    db.add(models.Nonce(nonce=nonce_val, address=address.lower(), expires_at=expires))
+    db.add(models.Nonce(nonce=nonce_val, address=address, expires_at=expires))
     db.commit()
 
     # The deployment id goes into the signed body (crypto-core 3.0.0, K-02).
@@ -131,6 +135,11 @@ def _verify_login_payload(login_req: schemas.LoginRequest, address: str) -> None
         raise HTTPException(
             status_code=400, detail="This identity key is not the one the address names."
         )
+    # Where a key enters, and only here: its Ed25519 half must have order L,
+    # which is what makes OpenSSL's verification on every later request agree
+    # with the clients' (crypto-core 4.0.0, security/ed25519_subgroup.py).
+    if not is_valid_identity_key(login_req.identity_public_key):
+        raise HTTPException(status_code=400, detail="This identity key is malformed.")
 
     if not auth.verify_signature(
         login_req.identity_public_key,
@@ -146,16 +155,16 @@ def _verify_login_payload(login_req: schemas.LoginRequest, address: str) -> None
     # Enforced only on keys being *submitted*, so accounts whose stored key
     # predates this check keep working until their client sends a new one —
     # existing users are not locked out by a validation tightening.
-    if login_req.encryption_public_key and not is_valid_ml_kem_public_key(
+    if login_req.encryption_public_key and not is_valid_encryption_key(
         login_req.encryption_public_key
     ):
         raise HTTPException(
             status_code=400,
-            detail="encryption_public_key must be a hex-encoded ML-KEM-768 public key",
+            detail="encryption_public_key must be a lowercase-hex X-Wing public key",
         )
 
     # Key attestation (audit M-1): a self-signature by `address` over its own
-    # ML-KEM key. Peers verify it client-side; the server checks it here too so
+    # encryption key, naming both (crypto-core 4.0.0). Peers verify it client-side; the server checks it here too so
     # an invalid one is never stored.
     #
     # REQUIRED whenever a key is submitted (audit 2026-10-12 K-04). It was
@@ -172,7 +181,12 @@ def _verify_login_payload(login_req: schemas.LoginRequest, address: str) -> None
     if attestation:
         if not login_req.encryption_public_key:
             raise HTTPException(status_code=400, detail="Attestation without an encryption key")
-        att_msg = auth.encryption_key_attestation_message(login_req.encryption_public_key)
+        try:
+            att_msg = auth.encryption_key_attestation_message(
+                address, login_req.encryption_public_key
+            )
+        except auth.NonCanonicalSignedBody as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
         if not auth.verify_identity_signature(login_req.identity_public_key, att_msg, attestation):
             raise HTTPException(status_code=400, detail="Invalid encryption key attestation")
 

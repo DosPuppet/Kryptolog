@@ -45,7 +45,11 @@ const concat = (...parts) => {
     return out;
 };
 
-const isBytes = (b, length) => b instanceof Uint8Array && (length === undefined || b.length === length);
+// Realm-independent, as noble's own check is: a Uint8Array made in another
+// realm (jsdom's TextEncoder, an iframe) fails `instanceof` while being bytes.
+export const isUint8Array = (b) =>
+    b instanceof Uint8Array || (ArrayBuffer.isView(b) && b.constructor?.name === 'Uint8Array');
+const isBytes = (b, length) => isUint8Array(b) && (length === undefined || b.length === length);
 
 /**
  * M' = Prefix || Label || len(ctx) || ctx || SHA-512(M): what both halves sign.

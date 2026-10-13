@@ -1,11 +1,11 @@
 import API_ENDPOINTS from '../../config';
 import { fetchAllPages, pageUrl } from '../../utils/paging';
-import { sha256Hex, decryptSymmetric } from '../../utils/crypto';
+import { sha384Hex, decryptSymmetric } from '../../utils/crypto';
 import { assertSafeRecipient } from '../../services/trustedKeys';
 import { apiFetch } from '../../services/api';
 
 // The signer-side approval pipeline (M1): decrypt the secret so the signer can
-// review what they're approving, then sign sha256(stored ciphertext) bound to
+// review what they're approving, then sign sha384(stored ciphertext) bound to
 // this workflow — a server-verifiable approval. The creator's own signature
 // over the plaintext lives inside the secret (created in MultisigCreateModal)
 // and is verified separately. Returns the updated workflow from the server.
@@ -68,7 +68,7 @@ export const signMultisigWorkflow = async ({ workflow, user, token, decryptPQC, 
     onProgress(50, "Signing...");
 
     // Server-verifiable approval (M1): we decrypted and reviewed the content
-    // above, but we SIGN the SHA-256 of the stored ciphertext, bound to this
+    // above, but we SIGN the SHA-384 of the stored ciphertext, bound to this
     // workflow + secret, under the `multisig-approval` domain (H1). The server
     // is zero-knowledge — it can't see the plaintext — but it can hash the
     // ciphertext it holds and verify this signature, so it can gate completion
@@ -76,9 +76,9 @@ export const signMultisigWorkflow = async ({ workflow, user, token, decryptPQC, 
     // no extra prompt.
     // Structured, not a pre-built string: the extension builds the body itself
     // and shows the workflow it is approving (audit 2026-10-12 K-03).
-    const ctHash = await sha256Hex(workflow.secret.encrypted_data);
+    const ctHash = await sha384Hex(workflow.secret.encrypted_data);
     const signature = await signApproval({
-        workflowId: workflow.id, secretId: workflow.secret_id, ciphertextSha256: ctHash,
+        workflowId: workflow.id, secretId: workflow.secret_id, ciphertextSha384: ctHash,
     });
 
     // Completing Signer Logic: Release Recipient Keys.

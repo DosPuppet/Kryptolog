@@ -64,9 +64,9 @@ describe('signLogin', () => {
         expect(res.success).toBe(true);
         expect(shown.data).toMatchObject({ kind: 'login', origin: SITE, details: { deployment: 'dep-1' } });
         const expected = loginChallengeBody({
-            nonce: 'ab12', origin: SITE, deployment: 'dep-1', encryptionKey: account(h).mlkem.publicKey,
+            nonce: 'ab12', origin: SITE, deployment: 'dep-1', encryptionKey: account(h).encryption.publicKey,
         });
-        expect(await verifySignature(expected, res.signature, account(h).mldsa.publicKey)).toBe(true);
+        expect(await verifySignature(expected, res.signature, account(h).identity.publicKey)).toBe(true);
     });
 
     it('ignores an origin the page names: it can only ever sign in to itself', async () => {
@@ -76,9 +76,9 @@ describe('signLogin', () => {
         });
         const forOther = loginChallengeBody({
             nonce: 'ab12', origin: 'https://bank.example', deployment: 'dep-1',
-            encryptionKey: account(h).mlkem.publicKey,
+            encryptionKey: account(h).encryption.publicKey,
         });
-        expect(await verifySignature(forOther, res.signature, account(h).mldsa.publicKey)).toBe(false);
+        expect(await verifySignature(forOther, res.signature, account(h).identity.publicKey)).toBe(false);
     });
 
     it('refuses a site that is not connected', async () => {
@@ -103,10 +103,12 @@ describe('signAccountDeletion', () => {
         const { res, shown } = await approve(h, { type: 'SIGN_ACCOUNT_DELETION', ...fields });
 
         expect(shown.data).toMatchObject({
-            kind: 'account-deletion', details: { mode: 'erase', redactions: 2 },
+            kind: 'account-deletion',
+            // Which identity, too (4.0.0): a vault can hold several.
+            details: { mode: 'erase', redactions: 2, address: account(h).id },
         });
         const body = await accountDeletionBody({ ...fields, origin: SITE });
-        expect(await verifySignature(body, res.signature, account(h).mldsa.publicKey)).toBe(true);
+        expect(await verifySignature(body, res.signature, account(h).identity.publicKey)).toBe(true);
     });
 
     it('refuses a redaction list that is not one', async () => {
@@ -122,12 +124,12 @@ describe('signAccountDeletion', () => {
 describe('signMultisigApproval', () => {
     it('names the workflow and signs the approval body', async () => {
         const h = await bootWithVault({ connect: [SITE] });
-        const fields = { workflowId: 7, secretId: 42, ciphertextSha256: 'ab'.repeat(32) };
+        const fields = { workflowId: 7, secretId: 42, ciphertextSha384: 'ab'.repeat(48) };
         const { res, shown } = await approve(h, { type: 'SIGN_MULTISIG_APPROVAL', ...fields });
 
         expect(shown.data).toMatchObject({ kind: 'multisig-approval', details: { workflowId: 7 } });
-        const body = multisigApprovalMessage(7, 42, 'ab'.repeat(32));
-        expect(await verifySignature(body, res.signature, account(h).mldsa.publicKey)).toBe(true);
+        const body = multisigApprovalMessage(7, 42, 'ab'.repeat(48));
+        expect(await verifySignature(body, res.signature, account(h).identity.publicKey)).toBe(true);
     });
 });
 
@@ -144,16 +146,16 @@ describe('signMessage without a silent-signing grant', () => {
 describe('signConversationErase (crypto-core 3.1.0)', () => {
     it('asks, names the conversation, and signs the body for the asking site', async () => {
         const h = await bootWithVault({ connect: [SITE] });
-        const partner = 'ab'.repeat(1312);
+        const partner = 'ab'.repeat(48); // an address: 96 hex (crypto-core 4.0.0)
         const fields = { nonce: 'ab12', kind: 'dm', conversation: partner, redactionKeys: ['dm:2'], deployment: 'dep-1' };
         const { res, shown } = await approve(h, { type: 'SIGN_CONVERSATION_ERASE', ...fields });
 
         expect(shown.data).toMatchObject({
             kind: 'conversation-erase',
-            details: { conversationKind: 'dm', conversation: `${partner.slice(0, 16)}…`, redactions: 1 },
+            details: { conversationKind: 'dm', conversation: partner, redactions: 1 },
         });
         const body = await conversationEraseBody({ ...fields, origin: SITE });
-        expect(await verifySignature(body, res.signature, account(h).mldsa.publicKey)).toBe(true);
+        expect(await verifySignature(body, res.signature, account(h).identity.publicKey)).toBe(true);
     });
 
     it('is never signed through the silent message path', async () => {

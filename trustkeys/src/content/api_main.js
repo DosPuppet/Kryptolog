@@ -52,9 +52,9 @@
                 type: 'TRUSTKEYS_SIGN_CONVERSATION_ERASE', nonce, kind, conversation, redactionKeys, deployment,
             });
         },
-        signMultisigApproval: async ({ workflowId, secretId, ciphertextSha256 }) => {
+        signMultisigApproval: async ({ workflowId, secretId, ciphertextSha384 }) => {
             return postMessagePromise({
-                type: 'TRUSTKEYS_SIGN_MULTISIG_APPROVAL', workflowId, secretId, ciphertextSha256,
+                type: 'TRUSTKEYS_SIGN_MULTISIG_APPROVAL', workflowId, secretId, ciphertextSha384,
             });
         },
         // Self-signed binding of the active account's ML-KEM key to its identity
@@ -67,9 +67,6 @@
         // payloads, so the dApp can authenticate messages without a popup per send.
         signMessage: async (message) => {
             return postMessagePromise({ type: 'TRUSTKEYS_SIGN_MESSAGE', message });
-        },
-        verify: async (message, signature, publicKey) => {
-            return postMessagePromise({ type: 'TRUSTKEYS_VERIFY', message, signature, publicKey });
         },
         encrypt: async (message, publicKey) => {
             return postMessagePromise({ type: 'TRUSTKEYS_ENCRYPT', message, publicKey });

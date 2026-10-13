@@ -37,7 +37,7 @@ from routers.account import MANIFEST_PAGE_DEFAULT, MANIFEST_PAGE_MAX
 from routers.auth import check_signed_for_this_server, claim_nonce
 from security import authorization
 from security.audit_log import audit_event, short
-from security.crypto_validation import ML_DSA_44_PUBLIC_KEY_HEX_LEN
+from security.crypto_validation import is_valid_address
 from utils.clock import utcnow_naive
 from utils.upsert import insert_for
 
@@ -57,7 +57,7 @@ def _scope(kind: str, conversation: str) -> tuple[str, str]:
     """
     if kind == "dm":
         partner = conversation.lower()
-        if len(partner) > ML_DSA_44_PUBLIC_KEY_HEX_LEN or not auth._is_hex(partner):
+        if not is_valid_address(partner):
             raise HTTPException(status_code=400, detail="Invalid conversation")
         return kind, partner
     if not auth.is_signed_identifier(conversation):

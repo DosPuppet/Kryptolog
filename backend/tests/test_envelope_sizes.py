@@ -1,4 +1,4 @@
-"""The size bounds on fields that hold PQC envelopes rather than user text.
+"""The size bounds on fields that hold crypto envelopes rather than user text.
 
 Three fields in this app look like they hold a name or a chat line and do not:
 
@@ -28,13 +28,13 @@ from conftest import (
 
 import schemas
 
-# Measured against crypto-core 2.0.0 with real key material. Deliberately
+# Measured against crypto-core 4.0.0 with real key material. Deliberately
 # literals rather than the schemas constants: asserting a bound against the
 # constant it is derived from would pass for any value, including the ones that
 # shipped broken.
-CHARS_PER_MEMBER = 4_192  # a 2 624-char hex ML-DSA address + its wrapped key
-SIGNED_ENVELOPE_CHARS = 3_500  # ML-DSA-44 signature (3 228) + ids + JSON
-DM_SESSION_WRAPS_CHARS = 3_200  # the recipient's and the sender's wrapped key
+CHARS_PER_MEMBER = 1_742  # a 96-char hex address + its X-Wing wrapped key (1 642)
+SIGNED_ENVELOPE_CHARS = 4_700  # composite signature (4 500) + ids + JSON
+DM_SESSION_WRAPS_CHARS = 3_304  # the recipient's and the sender's wrapped key
 # What the ciphertext of a full-length message costs on the wire. NOT
 # `2 * MAX_MESSAGE_TEXT_CHARS`: the cap counts UTF-16 units and a unit is worth
 # up to 3 bytes, which is the assumption that used to reject long non-ASCII

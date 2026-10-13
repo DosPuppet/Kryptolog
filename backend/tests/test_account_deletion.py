@@ -25,7 +25,7 @@ import pytest
 from conftest import (
     TEST_ENCRYPTION_KEY,
     TEST_ORIGIN,
-    MLDSA44Signer,
+    CompositeSigner,
     auth_header,
     do_login,
     get_nonce,
@@ -45,7 +45,7 @@ from utils.clock import utcnow_naive
 # Right shape, wrong content: the schema checks the exact base64 length of an
 # ML-DSA-44 signature, while conftest patches the verifier itself to True for
 # every test without the real_signatures marker.
-DUMMY_SIG = base64.b64encode(b"\x00" * 2420).decode()
+DUMMY_SIG = base64.b64encode(b"\x00" * 3373).decode()
 
 
 def _wrapped(tag):
@@ -722,7 +722,7 @@ class TestAuthorizingTheDeletion:
                 "deployment": server_deployment(),
                 "encryption_public_key": TEST_ENCRYPTION_KEY,
                 "encryption_key_attestation": cls._sign(
-                    auth.encryption_key_attestation_message(TEST_ENCRYPTION_KEY), signer
+                    auth.encryption_key_attestation_message(address, TEST_ENCRYPTION_KEY), signer
                 ),
                 "username": username,
             },
@@ -732,7 +732,7 @@ class TestAuthorizingTheDeletion:
 
     @pytest.mark.real_signatures
     def test_a_genuine_signature_deletes_and_a_forged_one_does_not(self, client, db_session):
-        signer = MLDSA44Signer()
+        signer = CompositeSigner()
         address = signer.address
         token = self._real_login(client, signer, address, "RealDelete")
 
@@ -777,7 +777,7 @@ class TestAuthorizingTheDeletion:
         """The mode is inside the signed body precisely so a relay cannot
         escalate a leave into an erase, destroying data the user asked to
         keep."""
-        signer = MLDSA44Signer()
+        signer = CompositeSigner()
         address = signer.address
         token = self._real_login(client, signer, address, "ModeBound")
         nonce = get_nonce(client, address)
@@ -808,7 +808,7 @@ class TestAuthorizingTheDeletion:
     def test_a_login_signature_over_the_same_nonce_is_refused(self, client):
         """H1: the contexts are disjoint, so a signature minted to log in
         cannot be spent to delete the account it logged into."""
-        signer = MLDSA44Signer()
+        signer = CompositeSigner()
         address = signer.address
         token = self._real_login(client, signer, address, "ContextBound")
         nonce = get_nonce(client, address)
@@ -841,12 +841,12 @@ class TestAuthorizingTheDeletion:
         """Needs the marker to mean anything: conftest patches the verifier to
         True by default, so without it this endpoint would be tested with no
         verification at all — the exact hole the login challenge sat in."""
-        signer = MLDSA44Signer()
+        signer = CompositeSigner()
         address = signer.address
         token = self._real_login(client, signer, address, "Redactor")
         # The partner needs a real login too: under this marker nothing is
         # stubbed, so a synthetic address could never sign its challenge.
-        other = MLDSA44Signer()
+        other = CompositeSigner()
         partner = other.address
         self._real_login(client, other, partner, "Partner")
         _send_dm(client, token, partner, _dm_content("sid-1"))

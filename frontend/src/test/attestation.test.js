@@ -3,26 +3,16 @@
 // covers the SPA policy layer: status classification and the fail-closed gate.
 
 import { describe, it, expect, beforeEach } from 'vitest';
-import {
-    generateMlKemKeyPair,
-    generateMlDsaKeyPair,
-    attestEncryptionKey,
-} from '../utils/crypto';
+import { generateEncryptionKeyPair, attestEncryptionKey } from '../utils/crypto';
+import { makeSigner, directoryRecord } from './identities';
 import { attestationStatus, assertSafeRecipient, attestationVerdict, wasEverAttested } from '../services/trustedKeys';
 import { safetyNumber } from '../utils/fingerprint';
 
+// The record the directory serves, plus the signer behind it for the tests
+// that rotate the key.
 const makeIdentity = async () => {
-    const mldsa = await generateMlDsaKeyPair();
-    const mlkem = await generateMlKemKeyPair();
-    const attestation = await attestEncryptionKey(mlkem.publicKey, mldsa.privateKey);
-    return {
-        address: mldsa.publicKey,
-        identity_public_key: mldsa.publicKey,
-        encryption_public_key: mlkem.publicKey,
-        encryption_key_attestation: attestation,
-        mldsa,
-        mlkem,
-    };
+    const signer = makeSigner();
+    return { ...(await directoryRecord(signer)), signer };
 };
 
 describe('attestationStatus', () => {
@@ -38,7 +28,7 @@ describe('attestationStatus', () => {
 
     it('classifies a substituted KEM key as invalid', async () => {
         const user = await makeIdentity();
-        const evil = await generateMlKemKeyPair();
+        const evil = generateEncryptionKeyPair();
         expect(await attestationStatus({ ...user, encryption_public_key: evil.publicKey })).toBe('invalid');
     });
 });
@@ -61,7 +51,7 @@ describe('assertSafeRecipient (fail-closed gate)', () => {
 
     it('throws on an invalid attestation', async () => {
         const user = await makeIdentity();
-        const evil = await generateMlKemKeyPair();
+        const evil = generateEncryptionKeyPair();
         await expect(
             assertSafeRecipient({ ...user, encryption_public_key: evil.publicKey })
         ).rejects.toThrow(/verification failed/i);
@@ -91,7 +81,7 @@ describe('attestation downgrade (TOFU-scoped unattested)', () => {
     it('refuses the full attack: attestation stripped AND the key substituted', async () => {
         const user = await makeIdentity();
         await assertSafeRecipient(user);
-        const evil = await generateMlKemKeyPair();
+        const evil = generateEncryptionKeyPair();
         await expect(assertSafeRecipient({
             ...user,
             encryption_public_key: evil.publicKey,
@@ -103,8 +93,10 @@ describe('attestation downgrade (TOFU-scoped unattested)', () => {
         const user = await makeIdentity();
         await assertSafeRecipient(user);
 
-        const rotated = await generateMlKemKeyPair();
-        const attestation = await attestEncryptionKey(rotated.publicKey, user.mldsa.privateKey);
+        const rotated = generateEncryptionKeyPair();
+        const attestation = await attestEncryptionKey(
+            { address: user.address, encryptionPublicKey: rotated.publicKey }, user.signer.seed
+        );
         expect(await assertSafeRecipient({
             ...user,
             encryption_public_key: rotated.publicKey,

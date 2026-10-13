@@ -2,7 +2,7 @@
 //
 // Three fields in this app hold envelopes rather than user text: a group name
 // (a per-member key-wrap map, audit M-3), a DM's content, and a group
-// message's content. Their size is set by ML-DSA signatures, ML-KEM-wrapped
+// message's content. Their size is set by composite signatures, X-Wing-wrapped
 // session keys and the member count — not by what anyone typed.
 //
 // `backend/schemas.py` budgets for each of them using costs measured HERE. The
@@ -19,8 +19,9 @@ import {
     generateSessionKey,
     encryptWithSessionKey,
     wrapSessionKey,
-    generateMlKemKeyPair,
-    generateMlDsaKeyPair,
+    generateEncryptionKeyPair,
+    generateIdentityKeyPair,
+    addressOf,
     signMessage,
     messageSigningBody,
 } from '../src/index.js';
@@ -28,21 +29,21 @@ import {
 // Must match backend/schemas.py. Raising one means raising the other.
 const SERVER = {
     MAX_GROUP_MEMBERS: 50,
-    KEY_WRAP_CHARS_PER_MEMBER: 4_324,
-    SIGNATURE_CHARS: 3_228,
+    KEY_WRAP_CHARS_PER_MEMBER: 1_796,
+    SIGNATURE_CHARS: 4_500,
     WRAPPED_KEY_CHARS: 1_700,
     MAX_MESSAGE_TEXT_CHARS: 10_000,
-    MAX_GROUP_NAME_LEN: 216_200,
-    MAX_DM_CONTENT_LEN: 47_652,
-    MAX_GROUP_MESSAGE_CONTENT_LEN: 260_452,
+    MAX_GROUP_NAME_LEN: 89_800,
+    MAX_DM_CONTENT_LEN: 48_924,
+    MAX_GROUP_MESSAGE_CONTENT_LEN: 135_324,
 };
 
 // One identity's worth of real key material, generated once — keygen is the
 // slow part and only the LENGTHS matter here.
 let kem, dsa;
 const identity = async () => {
-    kem ??= await generateMlKemKeyPair();
-    dsa ??= await generateMlDsaKeyPair();
+    kem ??= generateEncryptionKeyPair();
+    dsa ??= generateIdentityKeyPair();
     return { kem, dsa };
 };
 
@@ -51,10 +52,10 @@ const identity = async () => {
 const LONGEST_NAME = 'T'.repeat(100);
 
 // Distinct member addresses of the correct length, without paying for 50
-// keygens: every ML-DSA address is the same size.
+// keygens: every address is the same size (a SHA-384, 96 hex).
 const membersOfSize = (n, dsa, kem) =>
     Array.from({ length: n }, (_, i) => ({
-        address: (dsa.publicKey.slice(0, -4) + String(i).padStart(4, '0')).toLowerCase(),
+        address: addressOf(dsa.publicKey).slice(0, -4) + String(i).padStart(4, '0'),
         encryptionPublicKey: kem.publicKey,
     }));
 
@@ -114,8 +115,8 @@ describe('signed message envelope size', () => {
     // mints a session and carries two wraps; later ones carry keys: null.
     const buildDm = async (text, { rekey }) => {
         const { kem, dsa } = await identity();
-        const from = dsa.publicKey.toLowerCase();
-        const conv = (dsa.publicKey.slice(0, -4) + 'beef').toLowerCase();
+        const from = addressOf(dsa.publicKey);
+        const conv = from.slice(0, -4) + 'beef';
         const sid = crypto.randomUUID();
         const sKey = await generateSessionKey();
         const keys = rekey
@@ -127,7 +128,7 @@ describe('signed message envelope size', () => {
         const ct = await encryptWithSessionKey(text, sKey);
         const sig = await signMessage(
             await messageSigningBody({ from, conv, sid, keys, ct, ts: TS, seq: SEQ }),
-            dsa.privateKey
+            dsa.seed
         );
         return JSON.stringify({ v: 1, sid, ts: TS, seq: SEQ, keys, ct, sig });
     };
@@ -156,8 +157,8 @@ describe('signed message envelope size', () => {
     }, 30_000);
 
     it('spends most of a short first message on the signature and wraps', async () => {
-        // The point of the bound: an empty-ish message is already ~9 700 chars,
-        // which is why a 10 000 cap left almost no room for text at all.
+        // The point of the bound: an empty-ish first message is already ~8 000
+        // chars, which is why a 10 000 cap once left almost no room for text.
         const wire = await buildDm('hi', { rekey: true });
         expect(wire.length).toBeGreaterThan(SERVER.SIGNATURE_CHARS);
         expect(wire.length).toBeLessThanOrEqual(SERVER.MAX_DM_CONTENT_LEN);
@@ -176,7 +177,7 @@ describe('signed message envelope size', () => {
         const ct = await encryptWithSessionKey('x'.repeat(SERVER.MAX_MESSAGE_TEXT_CHARS), sKey);
         const sig = await signMessage(
             await messageSigningBody({ from: members[0].address, conv: gid, gid, sid, keys, ct, ts: TS, seq: SEQ }),
-            dsa.privateKey
+            dsa.seed
         );
         const wire = JSON.stringify({ v: 2, sid, gid, ts: TS, seq: SEQ, keys, ct, sig });
 

@@ -11,34 +11,33 @@ import jwt
 from cryptography.exceptions import InvalidSignature, UnsupportedAlgorithm
 
 import config
+from security.crypto_validation import is_valid_address
 
 logger = logging.getLogger("kryptolog.auth")
 
-# --- Post-quantum signature config (NIST FIPS 204) ---
-# pyca/cryptography (ML-DSA-44, on the OpenSSL >= 3.5 its wheels bundle) is used
-# in-process to verify CLIENT login challenges, multisig approvals and the other
-# signed bodies — the only place server-side PQC is genuinely needed (the old
-# Node `pqc_service.js` sidecar, audit A1/M1, is gone). It replaced liboqs,
-# whose upstream disclaims production use. Byte encodings are interop-verified
-# against the browser/extension's @noble/post-quantum, down to the same public
-# key from the same seed (see tests/test_pqc.py).
-SIG_ALG = "ML-DSA-44"
+# --- Hybrid signatures (crypto-core 4, audit 2026-10-12 K-10) ---
+# pyca/cryptography (ML-DSA-65 and Ed25519, on the OpenSSL >= 3.5 its wheels
+# bundle) verifies CLIENT login challenges, multisig approvals and the other
+# signed bodies in-process — the only place the server needs these at all (the
+# old Node `pqc_service.js` sidecar, audit A1/M1, is gone). Every signature is
+# a composite: both halves must verify. Byte encodings are pinned to the IETF
+# draft's vectors and interop-checked against the clients' noble in both
+# directions (tests/test_hybrid_primitives.py).
+SIG_ALG = "MLDSA65-Ed25519-SHA512"
 
 # Refuse to import rather than fail every login at runtime: a server that
 # cannot verify its signature algorithms cannot authenticate anybody. This is
 # reachable only off the hashed lock — cryptography < 48 (no `mldsa` module at
 # all), or a source build linked against an OpenSSL older than 3.5 — and is
 # the check `serve.sh` used to run against the liboqs build. ML-DSA-65 and
-# Ed25519 are the two halves of the composite signature crypto-core 4 moves to
-# (audit 2026-10-12 K-10); each is probed on its own so the message names the
-# one that is missing.
+# Ed25519 are the two halves of the composite signature; each is probed on its
+# own so the message names the one that is missing.
 _REQUIREMENT = "install backend/requirements.txt (cryptography >= 48 built against OpenSSL >= 3.5)"
 try:
     from cryptography.hazmat.primitives.asymmetric import ed25519, mldsa
 except ImportError as e:
     raise RuntimeError(f"cryptography lacks ML-DSA: {_REQUIREMENT}") from e
 for _name, _key in (
-    ("ML-DSA-44", mldsa.MLDSA44PrivateKey),
     ("ML-DSA-65", mldsa.MLDSA65PrivateKey),
     ("Ed25519", ed25519.Ed25519PrivateKey),
 ):
@@ -149,7 +148,7 @@ def _login_message(
     from this server and open a session here. The login route refuses an origin
     it does not serve and a deployment that is not its own.
 
-    The ML-KEM key is folded in so the identity's signature authorizes it (M-2);
+    The encryption key is folded in so the identity's signature authorizes it (M-2);
     the line is always present, empty without a key, so the body has one shape.
     Domain-separated under `login` (H1). Must be byte-identical to the clients'.
     """
@@ -169,27 +168,34 @@ def _login_message(
 _CTX_KEY_ATTESTATION = "key-attestation"
 
 
-def encryption_key_attestation_message(mlkem_public_key_hex: str) -> str:
-    """The self-attestation a user signs over their own ML-KEM key (audit M-1).
-    Peers verify it against the user's address (= ML-DSA public key) before
-    encrypting to that key, so the directory can't substitute a key it controls.
-    The server verifies it at login too (hygiene: never store a bad attestation).
+def encryption_key_attestation_message(address: str, encryption_public_key: str) -> str:
+    """The self-attestation an identity signs over its own encryption key
+    (audit M-1). Peers verify it, with the key the address names, before
+    encrypting to that key, so the directory can't substitute a key it
+    controls. The server verifies it at login too (never store a bad one).
+
+    Names the ADDRESS too since crypto-core 4.0.0: the statement is "this key
+    is <address>'s", so it cannot be lifted onto another identity's record.
     Must be byte-identical to crypto-core's encryptionKeyAttestationBody()."""
-    return _domain_separate(_CTX_KEY_ATTESTATION, f"mlkem={mlkem_public_key_hex}")
+    if not is_valid_address(address) or not _is_hex(encryption_public_key):
+        raise NonCanonicalSignedBody("key attestation: invalid address or encryption key")
+    return _domain_separate(
+        _CTX_KEY_ATTESTATION, f"address={address}\nencryption={encryption_public_key}"
+    )
 
 
 _CTX_MULTISIG = "multisig-approval"
 
 
-def multisig_approval_message(workflow_id, secret_id, ciphertext_sha256_hex: str) -> str:
+def multisig_approval_message(workflow_id, secret_id, ciphertext_sha384_hex: str) -> str:
     """Server-verifiable multisig approval (audit M1). The server is
     zero-knowledge — it can't see the plaintext a signer approved — but it *can*
-    hash the ciphertext it stores. A signer therefore signs the SHA-256 of the
+    hash the ciphertext it stores. A signer therefore signs the SHA-384 (4.0.0) of the
     workflow's stored ciphertext, bound to the workflow + secret id. Domain-
     separated under `multisig-approval` (H1) so it can't be replayed as a login
     challenge. Clients build the byte-identical string
     (frontend `multisigApprovalMessage`)."""
-    body = f"workflow={workflow_id}\nsecret={secret_id}\nct={ciphertext_sha256_hex}"
+    body = f"workflow={workflow_id}\nsecret={secret_id}\nct={ciphertext_sha384_hex}"
     return _domain_separate(_CTX_MULTISIG, body)
 
 
@@ -316,7 +322,9 @@ def message_signing_body(
         raise NonCanonicalSignedBody("a signed message body needs a valid session id")
     # Same alphabets as crypto-core (audit 2026-09-23 Q-6), and `ts`/`seq` as
     # non-negative integers (K-06) — a bool is an int to Python and not to JS.
-    if not _is_hex(from_) or not (_is_hex(conv) or is_signed_identifier(conv)):
+    # An address, or a channel id (crypto-core 4.0.0): the two alphabets are
+    # disjoint — 96 hex characters against at most 64.
+    if not is_valid_address(from_) or not (is_valid_address(conv) or is_signed_identifier(conv)):
         raise NonCanonicalSignedBody("a signed message body needs a valid sender and conversation")
     if gid and not is_signed_identifier(gid):
         raise NonCanonicalSignedBody("a signed message body needs a valid group id")
@@ -324,7 +332,7 @@ def message_signing_body(
         if not isinstance(value, int) or isinstance(value, bool) or not 0 <= value < 2**53:
             raise NonCanonicalSignedBody("a signed message body needs integer ts and seq")
     tail = "\nredacted=1" if ct is None else f"\nct={_canonical_ciphertext(ct)}"
-    keysh = hashlib.sha256(_canonical_json(keys).encode("utf-8")).hexdigest()
+    keysh = hashlib.sha384(_canonical_json(keys).encode("utf-8")).hexdigest()
     body = (
         f"from={from_}\nconv={conv}\ngid={gid or ''}\nsid={sid}\nts={ts}\nseq={seq}"
         f"\nkeysh={keysh}" + tail
@@ -364,7 +372,7 @@ def account_deletion_message(
         raise NonCanonicalSignedBody("account deletion: invalid nonce or mode")
     if not is_canonical_origin(origin) or not is_signed_identifier(deployment):
         raise NonCanonicalSignedBody("account deletion: invalid origin or deployment")
-    digest = hashlib.sha256(_canonical_json(sorted(redaction_keys)).encode("utf-8")).hexdigest()
+    digest = hashlib.sha384(_canonical_json(sorted(redaction_keys)).encode("utf-8")).hexdigest()
     return _domain_separate(
         _CTX_ACCOUNT_DELETION,
         f"origin={origin}\ndeployment={deployment}\nnonce={nonce}\nmode={mode}"
@@ -389,13 +397,13 @@ def conversation_erase_message(
     if not _is_hex(nonce):
         raise NonCanonicalSignedBody("conversation erase: invalid nonce")
     if not (
-        (kind == "dm" and _is_hex(conversation))
+        (kind == "dm" and is_valid_address(conversation))
         or (kind == "group" and is_signed_identifier(conversation))
     ):
         raise NonCanonicalSignedBody("conversation erase: invalid conversation")
     if not is_canonical_origin(origin) or not is_signed_identifier(deployment):
         raise NonCanonicalSignedBody("conversation erase: invalid origin or deployment")
-    digest = hashlib.sha256(_canonical_json(sorted(redaction_keys)).encode("utf-8")).hexdigest()
+    digest = hashlib.sha384(_canonical_json(sorted(redaction_keys)).encode("utf-8")).hexdigest()
     return _domain_separate(
         _CTX_CONVERSATION_ERASE,
         f"origin={origin}\ndeployment={deployment}\nnonce={nonce}"
@@ -404,7 +412,7 @@ def conversation_erase_message(
 
 
 def _sig_bytes(signature: str) -> bytes:
-    """Decode a base64 ML-DSA signature, refusing a non-canonical spelling.
+    """Decode a base64 signature, refusing a non-canonical spelling.
 
     Strict for the same reason crypto-core's fromB64 is: a signature commits to
     a ciphertext in its string form, so accepting two spellings of one value
@@ -417,27 +425,11 @@ def _sig_bytes(signature: str) -> bytes:
     return decoded
 
 
-def _verify_ml_dsa44(public_key: bytes, message: bytes, signature: bytes) -> bool:
-    """Pure ML-DSA-44 verification with the EMPTY context string — what noble's
-    `ml_dsa44.sign` produces by default and what liboqs verified before, so no
-    signature changed meaning in the swap. A context would be domain separation
-    at the FIPS 204 layer; ours lives in the signed body (`_domain_separate`).
-
-    False for a signature that does not verify. A malformed key or signature
-    raises ValueError, which each caller already turns into False.
-    """
-    try:
-        mldsa.MLDSA44PublicKey.from_public_bytes(public_key).verify(signature, message)
-    except InvalidSignature:
-        return False
-    return True
-
-
 # --- Composite ML-DSA-65 + Ed25519 (crypto-core 4, audit 2026-10-12 K-10) ---
 # id-MLDSA65-Ed25519-SHA512 (draft-ietf-lamps-pq-composite-sigs-19), the same
 # construction as packages/crypto-core/src/composite.js, both pinned to the
-# draft's own vectors (tests/test_hybrid_primitives.py). Added ahead of the
-# 4.0.0 cutover, which moves every verification here; nothing calls it yet.
+# draft's own vectors (tests/test_hybrid_primitives.py). Every signature the
+# server verifies goes through it.
 #
 # Ed25519 is OpenSSL's: strict RFC 8032, cofactorless. The clients' noble
 # checks the cofactored equation and so additionally requires R and A to be
@@ -472,7 +464,7 @@ def _verify_composite(
 ) -> bool:
     """True only if BOTH halves verify over M'. Lengths are checked before any
     split, so a short input cannot move where one half ends. A malformed key
-    raises ValueError, which each caller turns into False, as for ML-DSA-44."""
+    raises ValueError, which each caller turns into False."""
     if len(public_key) != COMPOSITE_PUBLIC_KEY_BYTES or len(signature) != COMPOSITE_SIGNATURE_BYTES:
         return False
     m = _composite_message(message, ctx)
@@ -502,7 +494,7 @@ def verify_identity_signature(identity_public_key: str, message: str, signature:
     the exact UTF-8 string signed.
     """
     try:
-        return _verify_ml_dsa44(
+        return _verify_composite(
             bytes.fromhex(identity_public_key), message.encode("utf-8"), _sig_bytes(signature)
         )
     except Exception as e:
@@ -520,9 +512,9 @@ def verify_pqc_signature(
     deployment: str,
     encryption_public_key: str | None = None,
 ) -> bool:
-    """Verify a client login challenge: ML-DSA-44 over the (key- and server-bound)
-    login message. `public_key` is hex, `signature` is base64; the client signs
-    with @noble/post-quantum."""
+    """Verify a client login challenge: a composite signature over the (key- and
+    server-bound) login message. `public_key` is the identity key in hex,
+    `signature` is base64; the client signs with crypto-core."""
     try:
         message = _login_message(
             nonce,
@@ -532,7 +524,7 @@ def verify_pqc_signature(
         ).encode("utf-8")
         sig_bytes = _sig_bytes(signature)
         pk_bytes = bytes.fromhex(public_key)
-        return _verify_ml_dsa44(pk_bytes, message, sig_bytes)
+        return _verify_composite(pk_bytes, message, sig_bytes)
     except Exception as e:
         logger.debug("PQC verification error: %s", e)
         return False

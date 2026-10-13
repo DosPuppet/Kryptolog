@@ -4,7 +4,7 @@ Shared test fixtures for Kryptolog backend tests.
 Runs against a real PostgreSQL database (TEST_DATABASE_URL, defaulting to the
 `kryptolog_test` DB on the docker-compose Postgres). PQC verification runs
 in-process via pyca/cryptography (ML-DSA-44) — there is no sidecar to mock, and
-tests that need a genuine signature get one from `MLDSA44Signer`. Two client
+tests that need a genuine signature get one from `CompositeSigner`. Two client
 signature checks are stubbed (see `_mock_pqc`) because the tests post
 placeholder signatures; JWT issuance and verification run for real against an
 ephemeral server key.
@@ -68,25 +68,21 @@ def override_get_db():
 app.dependency_overrides[get_db] = override_get_db
 
 
-from security.crypto_validation import ML_DSA_44_PUBLIC_KEY_HEX_LEN
-
 # ---------- Constants ----------
 
 
-# address -> identity public key, for every identity the suite makes up. In
-# crypto-core 3.x the two are the same string; the registry is what lets the
-# 4.0.0 cutover, which makes the address a hash of the key, change how an
-# identity is made up here without touching the tests that log one in.
+# address -> identity public key, for every identity the suite makes up. Since
+# crypto-core 4.0.0 an address is the SHA-384 of its key, so a test that logs
+# an identity in needs the key back from the address; the registry is how.
 _IDENTITY_KEYS: dict[str, str] = {}
 
 
 def identity_key_of(address: str) -> str:
-    """The identity public key behind an address the suite made up. Falls back
-    to the address itself, which is its key while the two are the same."""
-    return _IDENTITY_KEYS.get(address, address)
+    """The identity public key behind an address the suite made up."""
+    return _IDENTITY_KEYS[address]
 
 
-def _register_identity(identity_public_key: str) -> str:
+def register_identity(identity_public_key: str) -> str:
     from security.crypto_validation import address_of
 
     address = address_of(identity_public_key)
@@ -94,53 +90,69 @@ def _register_identity(identity_public_key: str) -> str:
     return address
 
 
-def synthetic_address(tag: str) -> str:
-    """The address of a structurally valid ML-DSA-44 identity key, for tests.
+def synthetic_identity_key(tag: str) -> str:
+    """A structurally valid composite identity key, deterministic per tag.
 
-    Deterministic per tag, and the right shape: 1312 bytes hex-encoded (2624
-    chars). These used to be readable strings like "pqc_test_user_aaa...",
-    which /auth/nonce now refuses — an address names an ML-DSA public key, so an
-    unauthenticated endpoint has no reason to write a row for anything that
-    isn't one (audit L-5). Not real keys: signature verification is patched out
-    in these tests, and the server can only check the format anyway.
+    Not a key anyone holds: signature verification is patched out in these
+    tests. But it must be the right SHAPE, all the way down, because the login
+    route checks it: 1952 bytes of ML-DSA-65 key (any bytes are one) and a real
+    Ed25519 public key, whose order the server verifies (crypto-core 4.0.0,
+    security/ed25519_subgroup.py) — random bytes would not be a point at all.
     """
-    digest = hashlib.sha256(tag.encode()).hexdigest()  # 64 chars
-    key = (digest * (ML_DSA_44_PUBLIC_KEY_HEX_LEN // len(digest) + 1))[
-        :ML_DSA_44_PUBLIC_KEY_HEX_LEN
-    ]
-    return _register_identity(key)
+    from cryptography.hazmat.primitives.asymmetric import ed25519
+
+    digest = hashlib.sha256(tag.encode()).digest()
+    ml = (digest * (1952 // len(digest) + 1))[:1952]
+    ed = ed25519.Ed25519PrivateKey.from_private_bytes(
+        hashlib.sha256(b"ed25519:" + tag.encode()).digest()
+    )
+    return (ml + ed.public_key().public_bytes_raw()).hex()
 
 
-class MLDSA44Signer:
-    """A REAL ML-DSA-44 client identity, for the tests that must not trust the
-    stubbed verifier: `identity_public_key` is its public key in hex, `address`
-    the address that key names, `sign` returns raw signature bytes (callers
-    base64 them, as the clients do).
+def synthetic_address(tag: str) -> str:
+    """The address of `synthetic_identity_key(tag)`, registered so a login can
+    send the key with it. These used to be readable strings like
+    "pqc_test_user_aaa...", which /auth/nonce refuses (audit L-5)."""
+    return register_identity(synthetic_identity_key(tag))
 
-    The one place the suite names the PQC library, so swapping it is one class
-    rather than a dozen call sites — the liboqs -> pyca/cryptography move
-    touched all of them.
+
+class CompositeSigner:
+    """A REAL composite ML-DSA-65 + Ed25519 client identity, for the tests that
+    must not trust the stubbed verifier: `identity_public_key` is its key in
+    hex, `address` the address that key names, `sign` returns raw signature
+    bytes (callers base64 them, as the clients do).
+
+    The one place the suite names the signature library, so swapping it is one
+    class rather than a dozen call sites — the liboqs -> pyca/cryptography move
+    touched all of them. Signs exactly as crypto-core's composite.js does, with
+    auth's own M' builder, which test_hybrid_primitives.py pins to the draft.
     """
 
     def __init__(self):
-        from cryptography.hazmat.primitives.asymmetric import mldsa
+        from cryptography.hazmat.primitives.asymmetric import ed25519, mldsa
 
-        self._key = mldsa.MLDSA44PrivateKey.generate()
-        self.identity_public_key = self._key.public_key().public_bytes_raw().hex()
-        self.address = _register_identity(self.identity_public_key)
+        self._ml = mldsa.MLDSA65PrivateKey.generate()
+        self._ed = ed25519.Ed25519PrivateKey.generate()
+        self.identity_public_key = (
+            self._ml.public_key().public_bytes_raw() + self._ed.public_key().public_bytes_raw()
+        ).hex()
+        self.address = register_identity(self.identity_public_key)
 
     def sign(self, message: bytes) -> bytes:
-        return self._key.sign(message)
+        import auth
+
+        m = auth._composite_message(message)
+        return self._ml.sign(m, auth._COMPOSITE_LABEL) + self._ed.sign(m)
 
 
 TEST_USER_ADDRESS = synthetic_address("user-1")
 TEST_USER_ADDRESS_2 = synthetic_address("user-2")
 TEST_USER_ADDRESS_3 = synthetic_address("user-3")
-# A structurally valid ML-KEM-768 public key: 1184 bytes, hex-encoded (2368
-# chars). Not a real key — ML-KEM has no cheap validity predicate, so the
+# A structurally valid X-Wing public key: 1216 bytes, hex-encoded (2432
+# chars). Not a real key — a KEM key has no cheap validity predicate, so the
 # server can only check the format — but it must *be* the right format, since
-# login now rejects malformed keys (KRY-011).
-TEST_ENCRYPTION_KEY = "ab" * 1184
+# login rejects malformed keys (KRY-011).
+TEST_ENCRYPTION_KEY = "ab" * 1216
 
 
 # ---------- Auth helpers ----------

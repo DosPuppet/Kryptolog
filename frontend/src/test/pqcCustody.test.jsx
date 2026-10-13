@@ -10,6 +10,7 @@
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, act } from '@testing-library/react';
+import { addressOf } from '../utils/crypto';
 
 const vault = {
     isLocked: true,
@@ -26,7 +27,7 @@ const vault = {
     decryptMany: vi.fn(async () => ['vault-plaintext']),
     unwrapManySessionKeys: vi.fn(async () => ['vault-unwrapped']),
     importEncryptedBlob: vi.fn(async () => ({
-        name: 'Moved', mldsa: { publicKey: 'aa'.repeat(16) }, mlkem: { publicKey: 'bb'.repeat(16) },
+        name: 'Moved', identity: { publicKey: 'aa'.repeat(1984) }, encryption: { publicKey: 'bb'.repeat(1216) },
     })),
 };
 
@@ -119,7 +120,7 @@ describe('with the extension present', () => {
         // workflow in its window (audit 2026-10-12 K-03).
         window.trustkeys.signMultisigApproval = vi.fn(async () => 'ext-approval');
         mount();
-        const fields = { workflowId: 7, secretId: 42, ciphertextSha256: 'ab'.repeat(32) };
+        const fields = { workflowId: 7, secretId: 42, ciphertextSha384: 'ab'.repeat(48) };
         await expect(api.signApproval(fields)).resolves.toBe('ext-approval');
         expect(window.trustkeys.signMultisigApproval).toHaveBeenCalledWith(fields);
         expect(window.trustkeys.sign).not.toHaveBeenCalled();
@@ -148,7 +149,7 @@ describe('receiving a vault from another device', () => {
                 return { ok: true, json: async () => ({ nonce: 'ab12', deployment: 'dev' }) };
             }
             posted.push(JSON.parse(init.body));
-            return { ok: true, json: async () => ({ access_token: 'tok', user: { address: 'aa'.repeat(16) } }) };
+            return { ok: true, json: async () => ({ access_token: 'tok', user: { address: addressOf('aa'.repeat(1984)) } }) };
         });
         await mount();
         await act(async () => { await api.receiveVault('{}', 'transfer-pass', 'new local password'); });
@@ -160,7 +161,7 @@ describe('receiving a vault from another device', () => {
         expect(posted[0]).toMatchObject({
             signature: 'vault-signature', encryption_key_attestation: 'vault-signature',
             // The key travels with the address it names (crypto-core 3.3.0).
-            address: 'aa'.repeat(16), identity_public_key: 'aa'.repeat(16),
+            address: addressOf('aa'.repeat(1984)), identity_public_key: 'aa'.repeat(1984),
         });
     });
 });

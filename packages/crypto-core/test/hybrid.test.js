@@ -200,6 +200,10 @@ describe('noble <-> OpenSSL interop (tests/fixtures/hybrid_interop.json)', () =>
     const message = new TextEncoder().encode(V.message);
     const pk = hex(V.composite_public_key);
 
+    it('gives the composite key the same address as the server (the golden address, 4.0.0)', () => {
+        expect(core.addressOf(V.composite_public_key)).toBe(V.composite_address);
+    });
+
     it('derives the same composite and X-Wing keys from the same seeds', () => {
         expect(core.compositePublicKey(hex(V.composite_secret_key))).toEqual(pk);
         expect(core.xwingPublicKey(hex(V.xwing_secret_key))).toEqual(hex(V.xwing_public_key));
@@ -236,30 +240,39 @@ describe('noble <-> OpenSSL interop (tests/fixtures/hybrid_interop.json)', () =>
     });
 });
 
-// The identity seam (3.3.0). In 3.x an address IS the identity key, so the
-// binding is the identity function — pinned here so that 4.0.0, which makes
-// the address a hash of the key, is visibly the change that moves it.
-describe('identity keys and addresses (3.3.0)', () => {
-    it('addressOf is the identity on 3.x keys, and refuses what is not lowercase hex', async () => {
-        const { publicKey } = await core.generateMlDsaKeyPair();
-        expect(core.addressOf(publicKey)).toBe(publicKey);
+// The identity seam (3.3.0) with its 4.0.0 meaning: an address is the SHA-384
+// of the composite identity key under a versioned, algorithm-naming prefix.
+describe('identity keys and addresses (4.0.0)', () => {
+    it('addressOf is the SHA-384 of the key under its domain, and refuses what is not a key', () => {
+        const { publicKey } = core.generateIdentityKeyPair();
+        const expected = createHash('sha384')
+            .update(Buffer.concat([
+                Buffer.from('Kryptolog address v4\nalg=MLDSA65-Ed25519-SHA512\n'),
+                Buffer.from(publicKey, 'hex'),
+            ]))
+            .digest('hex');
+        expect(core.addressOf(publicKey)).toBe(expected);
+        expect(core.isAddress(expected)).toBe(true);
         expect(() => core.addressOf(publicKey.toUpperCase())).toThrow(TypeError);
-        expect(() => core.addressOf('abc')).toThrow(TypeError);
+        expect(() => core.addressOf(publicKey.slice(2))).toThrow(TypeError);
+        expect(() => core.addressOf('cd'.repeat(1312))).toThrow(TypeError); // a 3.x key
         expect(() => core.addressOf(null)).toThrow(TypeError);
     });
 
     it('verifyIdentitySignature needs the address and the key to agree', async () => {
-        const me = await core.generateMlDsaKeyPair();
-        const other = await core.generateMlDsaKeyPair();
-        const signature = await core.signMessage('hello', me.privateKey);
+        const me = core.generateAccount('me');
+        const other = core.generateAccount('other');
+        const signature = await core.signMessage('hello', me.identity.seed);
         const verify = (address, identityPublicKey, message = 'hello') =>
             core.verifyIdentitySignature({ address, identityPublicKey, message, signature });
-        expect(await verify(me.publicKey, me.publicKey)).toBe(true);
-        expect(await verify(me.publicKey, me.publicKey, 'hellO')).toBe(false);
+        expect(await verify(me.id, me.identity.publicKey)).toBe(true);
+        expect(await verify(me.id, me.identity.publicKey, 'hellO')).toBe(false);
         // The right key under another address: the binding refuses it.
-        expect(await verify(other.publicKey, me.publicKey)).toBe(false);
-        expect(await verify(me.publicKey, other.publicKey)).toBe(false);
-        expect(core.isAddressOf(me.publicKey, undefined)).toBe(false);
-        expect(core.isAddressOf(undefined, me.publicKey)).toBe(false);
+        expect(await verify(other.id, me.identity.publicKey)).toBe(false);
+        expect(await verify(me.id, other.identity.publicKey)).toBe(false);
+        // The key itself is not an address.
+        expect(await verify(me.identity.publicKey, me.identity.publicKey)).toBe(false);
+        expect(core.isAddressOf(me.id, undefined)).toBe(false);
+        expect(core.isAddressOf(undefined, me.identity.publicKey)).toBe(false);
     });
 });

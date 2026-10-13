@@ -11,9 +11,10 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, act } from '@testing-library/react';
 import {
-    generateMlDsaKeyPair, generateMlKemKeyPair, attestEncryptionKey,
+    generateEncryptionKeyPair, attestEncryptionKey,
     generateSessionKey, wrapSessionKey,
 } from '../utils/crypto';
+import { makeSigner } from './identities';
 import { toast } from '../utils/toast';
 import { trustContactKey, checkContactKey } from '../services/trustedKeys';
 
@@ -31,18 +32,20 @@ const { PQCProvider } = await import('../context/PQCContext');
 
 /** An identity whose encryption key can be replaced, re-attested by the same identity. */
 const identity = async () => {
-    const dsa = await generateMlDsaKeyPair();
+    const signer = makeSigner();
     const id = {
         // What the directory serves NOW; each rekey() replaces it.
         current: null,
         rekey: async () => {
-            const kem = await generateMlKemKeyPair();
+            const kem = generateEncryptionKeyPair();
             id.current = {
-                address: dsa.publicKey,
-                identity_public_key: dsa.publicKey,
+                address: signer.address,
+                identity_public_key: signer.identityPublicKey,
                 username: 'U',
                 encryption_public_key: kem.publicKey,
-                encryption_key_attestation: await attestEncryptionKey(kem.publicKey, dsa.privateKey),
+                encryption_key_attestation: await attestEncryptionKey(
+                    { address: signer.address, encryptionPublicKey: kem.publicKey }, signer.seed
+                ),
             };
             return id.current;
         },

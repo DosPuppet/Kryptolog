@@ -1,11 +1,11 @@
-import { addressOf, generateAccount, decryptVault, encryptVault, normalizeAccount, isEncryptedVaultBlob, vaultPasswordProblem } from '../../utils/crypto.js';
+import { generateAccount, decryptVault, encryptVault, parseAccount, isEncryptedVaultBlob, vaultPasswordProblem } from '../../utils/crypto.js';
 import { state, requireUnlocked, requireActiveAccount } from '../state.js';
 import { saveVault, saveVaultWithSessionKey } from '../utils.js';
 
 export const createAccount = async (name) => {
     requireUnlocked();
 
-    const account = await generateAccount(name);
+    const account = generateAccount(name);
     state.vault.accounts.push(account);
     if (!state.vault.activeAccountId) state.vault.activeAccountId = account.id;
 
@@ -41,14 +41,13 @@ export const getActiveAccount = (checkOrigin) => {
     const account = requireActiveAccount();
 
     // The address, the identity key it names, and the encryption key, each
-    // under its own name (crypto-core 3.3.0). The same string for the first
-    // two until 4.0.0 makes the address a hash of the key; the page reads the
-    // key and derives nothing from the address.
+    // under its own name (crypto-core 3.3.0). An account's id IS its address
+    // since 4.0.0, so the address is not recomputed here.
     return {
         name: account.name,
-        address: addressOf(account.mldsa.publicKey),
-        identityPublicKey: account.mldsa.publicKey,
-        encryptionPublicKey: account.mlkem.publicKey,
+        address: account.id,
+        identityPublicKey: account.identity.publicKey,
+        encryptionPublicKey: account.encryption.publicKey,
     };
 };
 
@@ -131,10 +130,14 @@ export const importVault = async (vaultObj, password, passphrase) => {
         throw new Error("Invalid vault data: missing accounts");
     }
 
-    // Accept legacy kyber/dilithium backups by normalizing to mlkem/mldsa.
-    decryptedImport.accounts = decryptedImport.accounts.map(normalizeAccount);
+    // Re-derived from their seeds (crypto-core 4.0.0): an older backup is
+    // refused by name, and an account whose keys or id disagree is refused.
+    decryptedImport.accounts = decryptedImport.accounts.map(parseAccount);
 
-    // MERGE logic: Keep existing, add new ones if ID doesn't exist
+    // MERGE logic: keep existing, add new ones. Deduplicated by id, which is
+    // the ADDRESS in both apps now — an identity exported from the SPA and
+    // already here is recognised as the same one (it was a second copy when
+    // the extension gave accounts UUIDs).
     if (!state.vault) {
         // Fallback for fresh install/first import
         state.vault = decryptedImport;

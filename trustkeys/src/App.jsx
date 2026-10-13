@@ -61,7 +61,9 @@ function App() {
         checkStatus();
         cb(true);
       } else {
-        cb(false);
+        // An older TrustKeys' vault is refused by name (crypto-core 4.0.0),
+        // and that reason is shown instead of "Incorrect password".
+        cb(false, response?.error);
       }
     });
   };

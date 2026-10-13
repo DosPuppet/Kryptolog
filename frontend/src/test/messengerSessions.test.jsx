@@ -11,10 +11,8 @@
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, act } from '@testing-library/react';
-import {
-    generateMlDsaKeyPair, generateMlKemKeyPair, attestEncryptionKey,
-    generateSessionKey, wrapSessionKey,
-} from '../utils/crypto';
+import { generateSessionKey, wrapSessionKey } from '../utils/crypto';
+import { makeSigner, directoryRecord } from './identities';
 
 vi.mock('../services/vault', () => ({
     vaultService: {
@@ -30,17 +28,7 @@ const { PQCProvider } = await import('../context/PQCContext');
 
 let me, partner;
 
-const identity = async () => {
-    const dsa = await generateMlDsaKeyPair();
-    const kem = await generateMlKemKeyPair();
-    return {
-        address: dsa.publicKey,
-        identity_public_key: dsa.publicKey,
-        username: 'U',
-        encryption_public_key: kem.publicKey,
-        encryption_key_attestation: await attestEncryptionKey(kem.publicKey, dsa.privateKey),
-    };
-};
+const identity = () => directoryRecord(makeSigner());
 
 let messenger;
 function Probe() {

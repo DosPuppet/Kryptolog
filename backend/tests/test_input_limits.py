@@ -20,13 +20,11 @@ import schemas
 
 
 class TestBoundsAreSane:
-    def test_address_bound_fits_a_real_address_with_headroom(self):
-        """An ML-DSA-44 address is 2624 hex chars; the bound must admit it."""
-        from security.crypto_validation import ML_DSA_44_PUBLIC_KEY_HEX_LEN
-
-        assert schemas.MAX_ADDRESS_LEN >= ML_DSA_44_PUBLIC_KEY_HEX_LEN
-        # ...but nothing like the old 20 000-char ceiling.
-        assert schemas.MAX_ADDRESS_LEN < 20_000
+    def test_address_bound_is_exactly_an_address(self):
+        """An address is the 96-hex SHA-384 of an identity key (crypto-core
+        4.0.0); the bound admits exactly that, where it once admitted 20 000."""
+        assert schemas.MAX_ADDRESS_LEN == len(synthetic_address("bound"))
+        assert schemas.IDENTITY_KEY_CHARS == len(identity_key_of(synthetic_address("bound")))
 
     def test_envelope_bounds_admit_what_the_clients_produce(self):
         """The three PQC-envelope fields, checked against measured costs.
@@ -36,10 +34,10 @@ class TestBoundsAreSane:
         value at all, including the ones that shipped broken. The behaviour
         those bounds gate is covered by test_envelope_sizes.py.
         """
-        # Measured against crypto-core 2.0.0: a hex address (2 624) plus a
-        # base64 wrapped key (1 562) and the JSON between them.
-        per_member = 4_192
-        signature = 3_228  # base64 ML-DSA-44, was 4 840 in hex
+        # Measured against crypto-core 4.0.0: a hex address (96) plus a base64
+        # X-Wing wrapped key (1 642) and the JSON between them.
+        per_member = 1_742
+        signature = 4_500  # base64 composite ML-DSA-65 + Ed25519
 
         # A group name was once 500 000 (half a megabyte for what reads as a
         # sidebar label), then 2 000 — which rejected every group ever created,
@@ -50,11 +48,11 @@ class TestBoundsAreSane:
         # A signature rides on every message and a session-minting one carries
         # two wraps, before a single character of text.
         assert schemas.SIGNATURE_CHARS >= signature
-        assert schemas.MAX_DM_CONTENT_LEN >= signature + 3_200 + 2 * 1_000
+        assert schemas.MAX_DM_CONTENT_LEN >= signature + 3_304 + 2 * 1_000
 
         # A full-length message must fit even when every character costs three
         # bytes (CJK), which the old one-byte-per-char budget did not allow.
-        assert schemas.MAX_DM_CONTENT_LEN >= signature + 3_200 + 40_024
+        assert schemas.MAX_DM_CONTENT_LEN >= signature + 3_304 + 40_024
 
         # A group rekey wraps for every member at once.
         assert schemas.MAX_GROUP_MESSAGE_CONTENT_LEN >= (
@@ -78,7 +76,7 @@ class TestOversizedInputRejected:
             "/auth/login",
             json={
                 "address": "a" * (schemas.MAX_ADDRESS_LEN + 1),
-                "identity_public_key": identity_key_of("a" * (schemas.MAX_ADDRESS_LEN + 1)),
+                "identity_public_key": "a" * schemas.IDENTITY_KEY_CHARS,
                 "signature": "sig",
                 "nonce": "n",
                 "origin": TEST_ORIGIN,
@@ -128,10 +126,11 @@ class TestValidInputStillAccepted:
         assert r.status_code in (200, 201), r.text
 
     def test_real_length_address_is_accepted(self, client):
-        """A full 2624-char ML-DSA address must not be caught by the new bound."""
-        addr = "ab" * 1312
+        """A real address and its full composite key must not be caught by the
+        bounds (crypto-core 4.0.0)."""
+        addr = synthetic_address("real-length")
         token, user = do_login(client, addr, TEST_ENCRYPTION_KEY, "RealLen")
-        assert user["address"] == addr.lower()
+        assert user["address"] == addr
 
 
 class TestGroupMemberCap:

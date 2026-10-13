@@ -14,13 +14,13 @@
 import { describe, it, expect, beforeAll, vi } from 'vitest';
 import { renderHook, act } from '@testing-library/react';
 import {
-    generateMlDsaKeyPair,
     generateSessionKey,
     encryptWithSessionKey,
     messageSigningBody,
     signMessagePQC,
 } from '../utils/crypto';
 import { useMessageSessions } from '../context/messenger/useMessageSessions';
+import { makeSigner } from './identities';
 import { sessionKeyId, mayAdoptSession } from '../context/messenger/sessionScope';
 
 const CHANNEL = 'cccccccc-0000-4000-8000-000000000001';
@@ -31,12 +31,10 @@ const senderRecord = (who) => ({ address: who.address, identity_public_key: who.
 let me, alice, bob, mallory;
 
 beforeAll(async () => {
-    [me, alice, bob, mallory] = await Promise.all(
-        Array.from({ length: 4 }, async () => {
-            const { publicKey, privateKey } = await generateMlDsaKeyPair();
-            return { address: publicKey.toLowerCase(), identityPublicKey: publicKey, privateKey };
-        })
-    );
+    [me, alice, bob, mallory] = Array.from({ length: 4 }, () => {
+        const s = makeSigner();
+        return { address: s.address, identityPublicKey: s.identityPublicKey, privateKey: s.seed };
+    });
 }, 60000);
 
 /** A DM row as the server would deliver it. `signWith` defaults to the claimed sender. */

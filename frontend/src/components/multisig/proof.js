@@ -1,6 +1,24 @@
 import {
-    sha256Hex, verifyIdentitySignature, domainSeparate, SIGNING_CONTEXT, multisigApprovalMessage,
+    sha384Hex, verifyIdentitySignature, domainSeparate, SIGNING_CONTEXT, multisigApprovalMessage,
+    SIGNATURE_ALG, FormatError,
 } from '../../utils/crypto';
+
+// The proof format (crypto-core 4.0.0). 2.0 carries each signer's address AND
+// identity key, and its algorithm is the composite one; a 1.x proof holds
+// ML-DSA-44 signatures under bare addresses, which no 4.0.0 client can check,
+// and is refused by name rather than reported as a set of failed signatures.
+export const PROOF_VERSION = '2.0';
+export const PROOF_ALGORITHM = SIGNATURE_ALG;
+
+/** Refuse a proof that is not format 2.x, saying so. */
+export const assertProofVersion = (proof) => {
+    if (!String(proof?.version ?? '').startsWith('2.')) {
+        throw new FormatError(
+            `This proof was made by an older Kryptolog version (format ${proof?.version ?? 'unknown'}) ` +
+            'and cannot be verified by this one.'
+        );
+    }
+};
 
 // Build and download the offline verification proof for a workflow: the
 // document content plus every signature an auditor needs to re-verify it
@@ -38,7 +56,7 @@ export const downloadMultisigProof = async ({
             username: workflow.owner?.username || null,
             signature: creatorSignature,
             signed_at: workflow.created_at,
-            algorithm: 'ML-DSA-44',
+            algorithm: PROOF_ALGORITHM,
             role: 'creator',
         });
     }
@@ -52,19 +70,19 @@ export const downloadMultisigProof = async ({
                 username: s.user?.username || null,
                 signature: s.signature,
                 signed_at: s.signed_at,
-                algorithm: 'ML-DSA-44',
+                algorithm: PROOF_ALGORITHM,
                 role: 'signer',
             });
         }
     }
 
-    const ciphertextSha256 = workflow.secret?.encrypted_data
-        ? await sha256Hex(workflow.secret.encrypted_data)
+    const ciphertextSha384 = workflow.secret?.encrypted_data
+        ? await sha384Hex(workflow.secret.encrypted_data)
         : null;
 
     const proof = {
         type: 'kryptolog_multisig_proof',
-        version: '1.1',
+        version: PROOF_VERSION,
         exported_at: new Date().toISOString(),
         workflow: {
             id: workflow.id,
@@ -75,7 +93,7 @@ export const downloadMultisigProof = async ({
         },
         document: {
             content: creatorSignedContent || rawDecryptedContent,
-            ciphertext_sha256: ciphertextSha256,
+            ciphertext_sha384: ciphertextSha384,
         },
         signatures,
     };
@@ -89,9 +107,6 @@ export const downloadMultisigProof = async ({
     URL.revokeObjectURL(url);
 };
 
-// The algorithm labels a proof may carry for an ML-DSA signature. Proofs made
-// before the FIPS name was used say DILITHIUM2.
-export const isMlDsaLabel = (label) => label === 'ML-DSA-44' || label === 'DILITHIUM2';
 
 /**
  * Re-verify every signature a multisig proof carries, offline — Proof Audit's
@@ -108,11 +123,12 @@ export const isMlDsaLabel = (label) => label === 'ML-DSA-44' || label === 'DILIT
  */
 export const verifyMultisigProofSignatures = async (proofData) => {
     const creatorBody = domainSeparate(SIGNING_CONTEXT.CONTENT, proofData.document?.content);
-    const approvalBody = (proofData.document?.ciphertext_sha256 != null)
+    assertProofVersion(proofData);
+    const approvalBody = (proofData.document?.ciphertext_sha384 != null)
         ? multisigApprovalMessage(
             proofData.workflow?.id,
             proofData.workflow?.secret_id,
-            proofData.document.ciphertext_sha256,
+            proofData.document.ciphertext_sha384,
         )
         : null;
 
@@ -121,8 +137,7 @@ export const verifyMultisigProofSignatures = async (proofData) => {
         // 'signer' approvals need the ciphertext hash; 'creator' uses content.
         const message = entry.role === 'signer' ? approvalBody : creatorBody;
         let valid = false;
-        // PQC (ML-DSA-44) only; legacy ECDSA entries are unsupported.
-        if (message && isMlDsaLabel(entry.algorithm)) {
+        if (message && entry.algorithm === PROOF_ALGORITHM) {
             valid = await verifyIdentitySignature({
                 address: (entry.address || '').toLowerCase(),
                 identityPublicKey: entry.identity_public_key,

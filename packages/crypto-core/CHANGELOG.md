@@ -207,3 +207,53 @@ deploy the SPA, the extension and the server together. The identity-key seam
   message must declare the channel it was delivered under, a DM none. Channel
   ids are server-minted, so a server could otherwise mint one equal to an
   address and replay a DM into a group as verified, or the reverse.
+
+## 4.0.0
+
+CUTOVER — the eighth, and the one the 3.0.0 format markers were the hook for
+(audit 2026-10-12 K-10). Nothing written before it opens or verifies after it,
+and every decoder says so by name: wrapped keys, envelopes, vaults, `.kvault`
+backups, extension vaults, stored accounts, signatures, proofs and the server's
+identities. Deploy the SPA, the extension and the server together, on an empty
+database (the backend's migration b4c5d6e7f8a9 refuses one that holds
+identities).
+
+Hybrid throughout, at NIST category 3 — the level ANSSI asks for; each
+primitive holds while either of its halves does:
+
+- **Signatures are composite ML-DSA-65 + Ed25519** (`id-MLDSA65-Ed25519-SHA512`,
+  composite.js from 3.2.0). ML-DSA-44 is gone. `signMessage(message,
+  identitySeedHex)`; `verifySignature` is the raw primitive, and applications
+  verify through `verifyIdentitySignature`.
+- **Encryption is X-Wing** (ML-KEM-768 + X25519, kem.js from 3.2.0):
+  `KEM_ENVELOPE_ALG` = `XWING-HKDF384-A256GCM`, the AES key from HKDF-SHA-384
+  under `Kryptolog/X-Wing/AES-GCM/v4`.
+- **`FORMAT_VERSION` 4, and the markers are authenticated**: every envelope's
+  `v` and `alg` are its AES-GCM associated data (`formatAad`), where before they
+  sat beside the ciphertext unauthenticated. Pinned by decrypt-side golden
+  envelopes (test/golden-envelopes.json), since no round-trip can catch a
+  change both sides make together.
+- **An address is SHA-384 of the identity key**, under
+  `Kryptolog address v4\nalg=MLDSA65-Ed25519-SHA512\n` — 96 hex characters,
+  where it was the 2 624-character ML-DSA-44 key. `addressOf`, `isAddress`,
+  `isAddressOf` (identity.js). A golden address is pinned against the server's
+  computation (tests/fixtures/hybrid_interop.json).
+- **Every digest in a signed body is SHA-384**: `keysh`, the redaction-set
+  digests, the multisig ciphertext digest (`ciphertextSha384`), and the safety
+  number, now over `Kryptolog safety number v4\naddress=…\nencryption=…`.
+- **Signed bodies take addresses**: a sender and a DM conversation must be 96
+  hex. A channel id is at most 64 characters, so the two can no longer be
+  confused — a group named after an address cannot be signed at all.
+- **The key attestation names the address**:
+  `encryptionKeyAttestationBody({ address, encryptionPublicKey })`.
+- **Accounts are seeds** (account.js): `{ id, name, createdAt, identity: { seed,
+  publicKey }, encryption: { seed, publicKey } }`, with `id` the ADDRESS in both
+  apps (`generateAccount` moved here; the extension used UUIDs). `parseAccount`
+  re-derives every public value from the seeds and refuses a stored key or id
+  that disagrees, and a 3.x account by name. `normalizeAccount`,
+  `generateMlDsaKeyPair` and `generateMlKemKeyPair` are gone, as are the
+  `ml_dsa44` / `ml_kem768` paths.
+
+Measured on this development machine: an X-Wing unwrap costs 2.6 ms in the
+client, a composite signature ~10 ms to make and ~4 ms to verify; the server
+verifies 1 000 composite signatures (a full erase round) in 0.17 s.

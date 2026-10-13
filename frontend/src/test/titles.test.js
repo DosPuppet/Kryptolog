@@ -2,7 +2,7 @@
 // and the group name blob's member-wrap semantics.
 
 import { describe, it, expect } from 'vitest';
-import { generateSymmetricKey, generateMlKemKeyPair, unwrapSessionKey } from '../utils/crypto';
+import { generateSymmetricKey, generateEncryptionKeyPair, unwrapSessionKey } from '../utils/crypto';
 import {
     encryptSecretTitle,
     decryptSecretTitle,
@@ -38,9 +38,9 @@ describe('secret titles (encv1, under the item fileKey)', () => {
 
 describe('group names (encg1, own key wrapped per member)', () => {
     it('every member can unwrap and decrypt; non-members cannot', async () => {
-        const alice = await generateMlKemKeyPair();
-        const bob = await generateMlKemKeyPair();
-        const mallory = await generateMlKemKeyPair();
+        const alice = generateEncryptionKeyPair();
+        const bob = generateEncryptionKeyPair();
+        const mallory = generateEncryptionKeyPair();
 
         const blob = await encryptGroupName('Ops war room', [
             { address: 'ALICE_ADDR', encryption_public_key: alice.publicKey },
@@ -53,7 +53,7 @@ describe('group names (encg1, own key wrapped per member)', () => {
         for (const [addr, kp] of [['alice_addr', alice], ['BOB_ADDR', bob]]) {
             const wrap = groupNameWrapFor(blob, addr);
             expect(wrap).toBeTruthy();
-            const nameKey = await unwrapSessionKey(wrap, kp.privateKey);
+            const nameKey = await unwrapSessionKey(wrap, kp.seed);
             expect(await decryptGroupName(blob, nameKey)).toBe('Ops war room');
         }
 
@@ -68,11 +68,11 @@ describe('group names (encg1, own key wrapped per member)', () => {
     });
 
     it('re-encryption mints a fresh key: old wraps are useless for the new blob', async () => {
-        const alice = await generateMlKemKeyPair();
+        const alice = generateEncryptionKeyPair();
         const members = [{ address: 'a', encryption_public_key: alice.publicKey }];
         const blob1 = await encryptGroupName('Name v1', members);
         const blob2 = await encryptGroupName('Name v2', members);
-        const key1 = await unwrapSessionKey(groupNameWrapFor(blob1, 'a'), alice.privateKey);
+        const key1 = await unwrapSessionKey(groupNameWrapFor(blob1, 'a'), alice.seed);
         // The old key does not decrypt the new blob (fresh key per rebuild).
         expect(await decryptGroupName(blob2, key1)).toBe(null);
     });

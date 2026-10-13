@@ -7,7 +7,7 @@
 // worthless here — a malicious server simply wouldn't send it. Stored locally,
 // never transmitted.
 
-import { verifyEncryptionKeyAttestation } from '../utils/crypto';
+import { verifyEncryptionKeyAttestation, isAddress } from '../utils/crypto';
 
 const STORE_KEY = 'kryptolog_trusted_keys';
 // Separate store from STORE_KEY on purpose: that one records keys the user
@@ -16,9 +16,13 @@ const STORE_KEY = 'kryptolog_trusted_keys';
 // records and report spurious key changes.
 const ATTEST_KEY = 'kryptolog_attested_contacts';
 
+// Only records keyed by an address are kept (crypto-core 4.0.0): a 3.x store
+// is keyed by 2 624-hex ML-DSA keys that name no identity any more, and a pin
+// for nobody would only ever answer "changed" for somebody it is not.
 const load = (store) => {
     try {
-        return JSON.parse(localStorage.getItem(store)) || {};
+        const map = JSON.parse(localStorage.getItem(store)) || {};
+        return Object.fromEntries(Object.entries(map).filter(([address]) => isAddress(address)));
     } catch {
         return {};
     }
@@ -108,7 +112,7 @@ export const importTrustStores = (data) => {
         const map = load(store);
         for (const [address, rec] of Object.entries(incoming)) {
             const a = norm(address);
-            if (a && isRecord(rec) && !map[a]) map[a] = rec;
+            if (isAddress(a) && isRecord(rec) && !map[a]) map[a] = rec;
         }
         save(store, map);
     }

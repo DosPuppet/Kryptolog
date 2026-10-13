@@ -15,6 +15,7 @@ from conftest import (
     get_nonce,
     identity_key_of,
     login_body,
+    register_identity,
     synthetic_address,
 )
 from test_account_deletion import _delete, _dm_content, _send_dm
@@ -56,6 +57,26 @@ class TestLoginBindsTheKeyToTheAddress:
         resp = client.post("/auth/login", json=body)
         assert resp.status_code == 400, resp.text
         assert "not the one the address names" in resp.json()["detail"]
+        assert db_session.query(models.User).filter_by(address=address).count() == 0
+
+    def test_a_key_whose_ed25519_half_has_a_torsion_component_is_refused(self, client, db_session):
+        """Bound to its address, so the binding passes — the order check is what
+        refuses it (crypto-core 4.0.0, security/ed25519_subgroup.py). Such a key
+        would let its owner sign approvals OpenSSL accepts and every client
+        refuses. The key is the one tests/fixtures/hybrid_interop.json carries."""
+        import json
+        import pathlib
+
+        from security.crypto_validation import address_of
+
+        fixture = pathlib.Path(__file__).resolve().parents[2] / "tests/fixtures/hybrid_interop.json"
+        key = json.loads(fixture.read_text())["ed25519_edges"]["mixed_order_A_even_k"]["public_key"]
+        address = register_identity(key)
+        assert address == address_of(key)
+        body = login_body(address, get_nonce(client, address), TEST_ENCRYPTION_KEY)
+        resp = client.post("/auth/login", json=body)
+        assert resp.status_code == 400, resp.text
+        assert "malformed" in resp.json()["detail"]
         assert db_session.query(models.User).filter_by(address=address).count() == 0
 
     def test_a_login_without_a_key_is_malformed(self, client):

@@ -106,9 +106,17 @@ class TestNonce:
 
     def test_get_nonce_refuses_an_address_that_is_not_a_public_key(self, client):
         # Unauthenticated, so it used to write a row for any string it was
-        # handed (audit L-5). Only an ML-DSA-44 public key can ever complete a
-        # login, so nothing else has a reason to reserve a nonce.
-        for bad in ["not-an-address", "", "zz" * 1312, synthetic_address("short")[:-2]]:
+        # handed (audit L-5). Only an address — the 96-hex SHA-384 of an
+        # identity key — can ever complete a login, so nothing else has a
+        # reason to reserve a nonce. A whole identity KEY is not an address.
+        bad_inputs = [
+            "not-an-address",
+            "",
+            "zz" * 48,
+            synthetic_address("short")[:-2],
+            identity_key_of(synthetic_address("a-key")),
+        ]
+        for bad in bad_inputs:
             assert client.get(f"/auth/nonce/{bad}").status_code in (400, 404), bad
 
 
@@ -186,8 +194,8 @@ class TestLogin:
         assert resp2.status_code == 400
 
     def test_login_updates_encryption_key(self, client):
-        old_key = "5e" * 1184
-        new_key = "6f" * 1184
+        old_key = "5e" * 1216
+        new_key = "6f" * 1216
         do_login(client, TEST_USER_ADDRESS, old_key)
         token2, user2 = do_login(client, TEST_USER_ADDRESS, new_key)
         assert user2["encryption_public_key"] == new_key
@@ -262,7 +270,7 @@ class TestRegistrationUsernameCollision:
 class TestKeyChangeStamp:
     """audit S1: encryption-key changes are stamped (no longer silently overwritten)."""
 
-    ALT_KEY = "cd" * 1184  # a different, still well-formed ML-KEM-768 key
+    ALT_KEY = "cd" * 1216  # a different, still well-formed X-Wing key
 
     def test_new_user_has_no_key_change_stamp(self, client):
         _, user = do_login(client, TEST_USER_ADDRESS, TEST_ENCRYPTION_KEY, "Alice")

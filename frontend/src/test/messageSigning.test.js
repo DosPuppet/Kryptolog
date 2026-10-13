@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
     accountDeletionBody,
-    generateMlDsaKeyPair,
+    addressOf,
     signMessagePQC,
     verifySignature,
     messageSigningBody,
@@ -10,30 +10,39 @@ import {
     domainSeparate,
 } from '../utils/crypto';
 import { verifyMessageAuthenticity } from '../context/messenger/verifyMessage';
+import { makeSigner } from './identities';
+
+// A composite key pair under the names these tests grew up with: `publicKey`
+// is the identity key, `privateKey` its seed (crypto-core 4.0.0).
+const pair = () => {
+    const s = makeSigner();
+    return { publicKey: s.identityPublicKey, privateKey: s.seed, address: s.address };
+};
+
 
 // Audit S1: messages are signed end-to-end and verified against the sender's
-// ML-DSA public key (== sender_address).
+// identity key — the one its address names (crypto-core 4.0.0).
 describe('message signing (S1)', () => {
     it('MESSAGE_SIGNING_PREFIX matches an empty message-context domain string', async () => {
         expect(MESSAGE_SIGNING_PREFIX).toBe(domainSeparate(SIGNING_CONTEXT.MESSAGE, ''));
         // Every real message body starts with the prefix (the extension's silent
         // signer relies on this to refuse non-message payloads).
-        const body = await messageSigningBody({ ts: 1, seq: 0, from: 'a', conv: 'b', sid: 's', ct: 'cc' });
+        const body = await messageSigningBody({ ts: 1, seq: 0, from: 'aa'.repeat(48), conv: 'b', sid: 's', ct: 'cc' });
         expect(body.startsWith(MESSAGE_SIGNING_PREFIX)).toBe(true);
     });
 
     it('a sender signature verifies against the sender public key', async () => {
-        const { publicKey, privateKey } = await generateMlDsaKeyPair();
-        const body = await messageSigningBody({ ts: 1, seq: 0, from: publicKey, conv: 'recipient', sid: 'sid1', ct: 'deadbeef' });
+        const { publicKey, privateKey } = pair();
+        const body = await messageSigningBody({ ts: 1, seq: 0, from: addressOf(publicKey), conv: 'recipient', sid: 'sid1', ct: 'deadbeef' });
         const sig = await signMessagePQC(body, privateKey);
         expect(await verifySignature(body, sig, publicKey)).toBe(true);
     });
 
     it('verification fails if the ciphertext is tampered (re-attribution/forgery)', async () => {
-        const { publicKey, privateKey } = await generateMlDsaKeyPair();
-        const body = await messageSigningBody({ ts: 1, seq: 0, from: publicKey, conv: 'recipient', sid: 'sid1', ct: 'deadbeef' });
+        const { publicKey, privateKey } = pair();
+        const body = await messageSigningBody({ ts: 1, seq: 0, from: addressOf(publicKey), conv: 'recipient', sid: 'sid1', ct: 'deadbeef' });
         const sig = await signMessagePQC(body, privateKey);
-        const tampered = await messageSigningBody({ ts: 1, seq: 0, from: publicKey, conv: 'recipient', sid: 'sid1', ct: 'deadbe00' });
+        const tampered = await messageSigningBody({ ts: 1, seq: 0, from: addressOf(publicKey), conv: 'recipient', sid: 'sid1', ct: 'deadbe00' });
         expect(await verifySignature(tampered, sig, publicKey)).toBe(false);
     });
 
@@ -42,29 +51,29 @@ describe('message signing (S1)', () => {
         // string. Regression for the ct-binding bug: previously the object coerced
         // to the constant "[object Object]", so any ciphertext verified under one
         // signature. The signed bytes must commit to the actual ciphertext.
-        const { publicKey, privateKey } = await generateMlDsaKeyPair();
+        const { publicKey, privateKey } = pair();
         const ct = { iv: 'aabbccdd', content: '0011223344' };
-        const body = await messageSigningBody({ ts: 1, seq: 0, from: publicKey, conv: 'recipient', sid: 'sid1', ct });
+        const body = await messageSigningBody({ ts: 1, seq: 0, from: addressOf(publicKey), conv: 'recipient', sid: 'sid1', ct });
         const sig = await signMessagePQC(body, privateKey);
         expect(await verifySignature(body, sig, publicKey)).toBe(true);
         // Server swaps the ciphertext content for another value -> must fail now.
-        const swapped = await messageSigningBody({ ts: 1, seq: 0, from: publicKey, conv: 'recipient', sid: 'sid1', ct: { iv: 'aabbccdd', content: 'deadbeef99' } });
+        const swapped = await messageSigningBody({ ts: 1, seq: 0, from: addressOf(publicKey), conv: 'recipient', sid: 'sid1', ct: { iv: 'aabbccdd', content: 'deadbeef99' } });
         expect(await verifySignature(swapped, sig, publicKey)).toBe(false);
     });
 
     it("verification fails against a different sender's key (server can't forge as Alice)", async () => {
-        const alice = await generateMlDsaKeyPair();
-        const mallory = await generateMlDsaKeyPair();
-        const body = await messageSigningBody({ ts: 1, seq: 0, from: alice.publicKey, conv: 'r', sid: 's', ct: 'cc' });
+        const alice = pair();
+        const mallory = pair();
+        const body = await messageSigningBody({ ts: 1, seq: 0, from: alice.address, conv: 'r', sid: 's', ct: 'cc' });
         const sig = await signMessagePQC(body, alice.privateKey);
         // Server swaps the claimed author to Mallory's key → signature no longer verifies.
         expect(await verifySignature(body, sig, mallory.publicKey)).toBe(false);
     });
 
     it('a message signature cannot be replayed as a login signature (domain separation)', async () => {
-        const { publicKey, privateKey } = await generateMlDsaKeyPair();
+        const { publicKey, privateKey } = pair();
         const ct = 'abcd';
-        const body = await messageSigningBody({ ts: 1, seq: 0, from: publicKey, conv: 'r', sid: 's', ct });
+        const body = await messageSigningBody({ ts: 1, seq: 0, from: addressOf(publicKey), conv: 'r', sid: 's', ct });
         const sig = await signMessagePQC(body, publicKey ? privateKey : privateKey);
         const loginBody = domainSeparate(SIGNING_CONTEXT.LOGIN, `from=${publicKey}\nconv=r\nsid=s\nts=1\nseq=0\nct=${ct}`);
         expect(await verifySignature(loginBody, sig, publicKey)).toBe(false);
@@ -83,37 +92,37 @@ describe('group message channel binding (F-1)', () => {
     // Mirror how MessengerContext.sendGroupMessage signs: conv = gid = channel id.
     const signGroupMessage = async (privateKey, publicKey, channelId, sid, ct, keys = null) => {
         const body = await messageSigningBody({
-            from: publicKey.toLowerCase(), conv: channelId, gid: channelId, sid, ts: 1, seq: 0, keys, ct,
+            from: addressOf(publicKey), conv: channelId, gid: channelId, sid, ts: 1, seq: 0, keys, ct,
         });
         return signMessagePQC(body, privateKey);
     };
 
     it('verifies a group message delivered under the channel it was signed for', async () => {
-        const { publicKey, privateKey } = await generateMlDsaKeyPair();
+        const { publicKey, privateKey } = pair();
         const sid = 's1', ct = 'deadbeef';
         const sig = await signGroupMessage(privateKey, publicKey, channelA, sid, ct);
-        const msg = { sender_address: publicKey.toLowerCase(), sender: { identity_public_key: publicKey }, channel_id: channelA };
+        const msg = { sender_address: addressOf(publicKey), sender: { identity_public_key: publicKey }, channel_id: channelA };
         const payload = { v: 2, sid, gid: channelA, ts: 1, seq: 0, ct, sig };
         expect(await verifyMessageAuthenticity(msg, payload, 'group')).toBe(true);
     });
 
     it('rejects a message re-homed into another channel (server cannot move a signed message)', async () => {
-        const { publicKey, privateKey } = await generateMlDsaKeyPair();
+        const { publicKey, privateKey } = pair();
         const sid = 's1', ct = 'deadbeef';
         const sig = await signGroupMessage(privateKey, publicKey, channelA, sid, ct);
         // Malicious server serves the channel-A message inside channel B's history.
-        const msg = { sender_address: publicKey.toLowerCase(), sender: { identity_public_key: publicKey }, channel_id: channelB };
+        const msg = { sender_address: addressOf(publicKey), sender: { identity_public_key: publicKey }, channel_id: channelB };
         const payload = { v: 2, sid, gid: channelA, ts: 1, seq: 0, ct, sig };
         expect(await verifyMessageAuthenticity(msg, payload, 'group')).toBe(false);
     });
 
     it('rejects even when the server also rewrites gid to match the new channel', async () => {
-        const { publicKey, privateKey } = await generateMlDsaKeyPair();
+        const { publicKey, privateKey } = pair();
         const sid = 's1', ct = 'deadbeef';
         const sig = await signGroupMessage(privateKey, publicKey, channelA, sid, ct);
         // gid rewritten to B too — conv now binds to channel_id, so the sig (over
         // conv=A) still fails to verify under channel B.
-        const msg = { sender_address: publicKey.toLowerCase(), sender: { identity_public_key: publicKey }, channel_id: channelB };
+        const msg = { sender_address: addressOf(publicKey), sender: { identity_public_key: publicKey }, channel_id: channelB };
         const payload = { v: 2, sid, gid: channelB, ts: 1, seq: 0, ct, sig };
         expect(await verifyMessageAuthenticity(msg, payload, 'group')).toBe(false);
     });
@@ -136,10 +145,10 @@ describe('group message channel binding (F-1)', () => {
         };
 
         const deliver = async (servedKeys) => {
-            const { publicKey, privateKey } = await generateMlDsaKeyPair();
+            const { publicKey, privateKey } = pair();
             const sid = 's1', ct = 'deadbeef';
             const sig = await signGroupMessage(privateKey, publicKey, channelA, sid, ct, keys);
-            const msg = { sender_address: publicKey.toLowerCase(), sender: { identity_public_key: publicKey }, channel_id: channelA };
+            const msg = { sender_address: addressOf(publicKey), sender: { identity_public_key: publicKey }, channel_id: channelA };
             return verifyMessageAuthenticity(msg, { v: 2, sid, gid: channelA, ts: 1, seq: 0, keys: servedKeys, ct, sig }, 'group');
         };
 
@@ -172,7 +181,7 @@ describe('what the extension will and will not sign silently', () => {
     // else. Redaction happens once per session epoch during an account
     // deletion, so it has to be silent; the deletion itself must not be.
     it('a redaction body is a message body, so it is signed without a popup', async () => {
-        const body = await messageSigningBody({ ts: 1, seq: 0, from: 'a', conv: 'b', sid: 's', ct: null });
+        const body = await messageSigningBody({ ts: 1, seq: 0, from: 'aa'.repeat(48), conv: 'b', sid: 's', ct: null });
         expect(body.startsWith(MESSAGE_SIGNING_PREFIX)).toBe(true);
         expect(body.endsWith('\nredacted=1')).toBe(true);
     });
@@ -191,13 +200,13 @@ describe('what the extension will and will not sign silently', () => {
 describe('the signed position (crypto-core 3.0.0)', () => {
     const channel = 'aaaaaaaa-0000-4000-8000-000000000001';
     const deliver = async (served) => {
-        const { publicKey, privateKey } = await generateMlDsaKeyPair();
+        const { publicKey, privateKey } = pair();
         const signed = { sid: 's1', ts: 1760264400000, seq: 7, ct: 'deadbeef' };
         const body = await messageSigningBody({
-            from: publicKey.toLowerCase(), conv: channel, gid: channel, keys: null, ...signed,
+            from: addressOf(publicKey), conv: channel, gid: channel, keys: null, ...signed,
         });
         const sig = await signMessagePQC(body, privateKey);
-        const msg = { sender_address: publicKey.toLowerCase(), sender: { identity_public_key: publicKey }, channel_id: channel };
+        const msg = { sender_address: addressOf(publicKey), sender: { identity_public_key: publicKey }, channel_id: channel };
         return verifyMessageAuthenticity(msg, { v: 2, gid: channel, ...signed, ...served, sig }, 'group');
     };
 

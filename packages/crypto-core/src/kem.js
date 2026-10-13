@@ -17,6 +17,8 @@
 
 import { ml_kem768_x25519 } from '@noble/post-quantum/hybrid.js';
 
+import { isUint8Array } from './composite.js';
+
 export const XWING_LENGTHS = Object.freeze({
     publicKey: 1216, // ML-KEM-768 pk (1184) || X25519 pk (32)
     secretKey: 32,
@@ -25,7 +27,7 @@ export const XWING_LENGTHS = Object.freeze({
 });
 
 const need = (bytes, length, what) => {
-    if (!(bytes instanceof Uint8Array) || bytes.length !== length) {
+    if (!isUint8Array(bytes) || bytes.length !== length) {
         throw new RangeError(`X-Wing ${what} must be ${length} bytes`);
     }
 };

@@ -73,7 +73,7 @@ window.addEventListener('message', async (event) => {
             case 'TRUSTKEYS_SIGN_MULTISIG_APPROVAL': {
                 const res = await callBackground('SIGN_MULTISIG_APPROVAL', {
                     workflowId: payload.workflowId, secretId: payload.secretId,
-                    ciphertextSha256: payload.ciphertextSha256,
+                    ciphertextSha384: payload.ciphertextSha384,
                 });
                 result = res.signature;
                 break;
@@ -86,15 +86,6 @@ window.addEventListener('message', async (event) => {
             case 'TRUSTKEYS_GET_KEY_ATTESTATION': {
                 const attRes = await callBackground('GET_KEY_ATTESTATION');
                 result = attRes.attestation;
-                break;
-            }
-            case 'TRUSTKEYS_VERIFY': {
-                const verifyRes = await callBackground('VERIFY', {
-                    message: payload.message,
-                    signature: payload.signature,
-                    publicKey: payload.publicKey
-                });
-                result = verifyRes.isValid;
                 break;
             }
             case 'TRUSTKEYS_ENCRYPT': {

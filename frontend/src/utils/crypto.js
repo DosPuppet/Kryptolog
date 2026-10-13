@@ -8,15 +8,10 @@
 // This file only adds SPA-local glue:
 //   • `*PQC`-suffixed aliases — historical artifact from when the app also had
 //     `*Eth` variants (web3.js); the suffix disambiguates at the call sites.
-//   • generateAccount() — the SPA uses the ML-DSA public key as the account id
-//     (it doubles as the on-wire identity/address), which differs from the
-//     extension's local-UUID policy, so it cannot live in the shared core.
+// generateAccount() moved into crypto-core with 4.0.0: an account's id is its
+// address in both apps now, so the one policy lives in the one package.
 export * from '@kryptolog/crypto-core';
 
-import {
-    generateMlKemKeyPair,
-    generateMlDsaKeyPair,
-} from '@kryptolog/crypto-core';
 
 // PQC-suffixed aliases for the SPA's call sites (see note above).
 export {
@@ -24,16 +19,3 @@ export {
     encryptMessage as encryptMessagePQC,
     decryptMessage as decryptMessagePQC,
 } from '@kryptolog/crypto-core';
-
-export const generateAccount = async (name) => {
-    const mlkem = await generateMlKemKeyPair();
-    const mldsa = await generateMlDsaKeyPair();
-
-    return {
-        id: mldsa.publicKey, // Use Public Key as ID for consistency
-        name,
-        mlkem,
-        mldsa,
-        createdAt: Date.now(),
-    };
-};

@@ -1,25 +1,16 @@
 /**
- * PQC migration test gate (browser/extension side, @noble/post-quantum).
+ * The crypto the SPA imports, through its own shim (utils/crypto.js) —
+ * crypto-core 4: composite ML-DSA-65 + Ed25519 signatures and X-Wing.
  *
- * Covers:
- *   - FIPS 203/204 size conformance (ML-KEM-768, ML-DSA-44).
- *   - ML-KEM-768 wrap -> unwrap round-trips through the crypto.js envelope
- *     helpers (the KEM is browser-internal; the server never touches it, so
- *     only the clients need to agree — and both clients use this same lib).
- *   - ML-DSA-44 sign -> verify round-trip + tamper rejection.
- *   - Cross-library interop: a signature produced by OpenSSL (the server's
- *     pyca/cryptography) must verify here under noble (committed fixture). The
- *     mirror direction (noble -> OpenSSL) is asserted in
- *     backend/tests/test_pqc.py.
- *   - Deterministic seeded-keygen byte-pin: regression anchor against any
- *     future lib bump that would silently change the key encoding. The server
- *     derives the SAME ML-DSA public key from the same seed, which
- *     backend/tests/test_pqc.py pins too.
+ * The primitives themselves are pinned in crypto-core: the specifications'
+ * vectors, the noble <-> OpenSSL fixture in both directions, the seed pins
+ * (packages/crypto-core/test/hybrid.test.js and byte-compat.test.js). What is
+ * left to check HERE is that the app's view of them is the right one: the
+ * shim hands out the hybrid primitives at their sizes, and the app-level
+ * properties — envelopes open, domains stay disjoint, approvals bind the
+ * ciphertext — hold through it.
  */
 import { describe, it, expect } from 'vitest';
-import vec from '../../../tests/fixtures/pqc_interop.json';
-import { ml_kem768 } from '@noble/post-quantum/ml-kem.js';
-import { ml_dsa44 } from '@noble/post-quantum/ml-dsa.js';
 import {
   signMessagePQC,
   verifySignature,
@@ -28,53 +19,52 @@ import {
   generateSessionKey,
   wrapSessionKey,
   unwrapSessionKey,
-  generateMlKemKeyPair,
-  generateMlDsaKeyPair,
-  toHex,
+  generateEncryptionKeyPair,
+  generateIdentityKeyPair,
+  generateAccount,
+  addressOf,
   domainSeparate,
   SIGNING_CONTEXT,
-  sha256Hex,
+  sha384Hex,
   multisigApprovalMessage,
+  CRYPTO_CORE_VERSION,
 } from '../utils/crypto';
 
 const fromHexLocal = (h) => new Uint8Array(Buffer.from(h, 'hex'));
-// Payloads are base64 since the L-12 cutover; KEYS are still hex, because an
-// address is an identifier. The committed interop fixture stays hex — it is a
-// test vector, not a wire value — so a signature from it is re-encoded here.
 const fromB64Local = (b) => new Uint8Array(Buffer.from(b, 'base64'));
-const hexToB64 = (h) => Buffer.from(h, 'hex').toString('base64');
 
-describe('FIPS size conformance', () => {
-  it('ML-KEM-768 keys are 1184 / 2400 bytes', async () => {
-    const { publicKey, privateKey } = await generateMlKemKeyPair();
-    expect(fromHexLocal(publicKey).length).toBe(1184);
-    expect(fromHexLocal(privateKey).length).toBe(2400);
+describe('the shim hands out crypto-core 4', () => {
+  it('is the 4.0.0 package, not a stale copy', () => {
+    expect(CRYPTO_CORE_VERSION).toBe('4.0.0');
   });
 
-  it('ML-DSA-44 keys are 1312 / 2560 bytes', async () => {
-    const { publicKey, privateKey } = await generateMlDsaKeyPair();
-    expect(fromHexLocal(publicKey).length).toBe(1312);
-    expect(fromHexLocal(privateKey).length).toBe(2560);
+  it('composite identity keys: 1984-byte public key, 64-byte seed, 96-hex address', () => {
+    const { publicKey, seed } = generateIdentityKeyPair();
+    expect(fromHexLocal(publicKey).length).toBe(1984);
+    expect(fromHexLocal(seed).length).toBe(64);
+    expect(addressOf(publicKey)).toMatch(/^[0-9a-f]{96}$/);
+  });
+
+  it('X-Wing encryption keys: 1216-byte public key, 32-byte seed', () => {
+    const { publicKey, seed } = generateEncryptionKeyPair();
+    expect(fromHexLocal(publicKey).length).toBe(1216);
+    expect(fromHexLocal(seed).length).toBe(32);
+  });
+
+  it('an account is the same shape in the SPA as everywhere: its id is its address', () => {
+    const account = generateAccount('A');
+    expect(account.id).toBe(addressOf(account.identity.publicKey));
   });
 });
 
-describe('ML-DSA-44 sign/verify', () => {
+describe('composite sign/verify', () => {
   it('round-trips and rejects tampering', async () => {
-    const { publicKey, privateKey } = await generateMlDsaKeyPair();
-    const msg = 'Sign in to Kryptolog with nonce: 0123456789abcdef';
-    const sig = await signMessagePQC(msg, privateKey);
-    expect(fromB64Local(sig).length).toBe(2420);
+    const { publicKey, seed } = generateIdentityKeyPair();
+    const msg = 'login-challenge-abc';
+    const sig = await signMessagePQC(msg, seed);
+    expect(fromB64Local(sig).length).toBe(3373);
     expect(await verifySignature(msg, sig, publicKey)).toBe(true);
     expect(await verifySignature(msg + ' ', sig, publicKey)).toBe(false);
-  });
-
-  it('verifies an OpenSSL-produced signature (server -> client interop)', async () => {
-    // Signed by OpenSSL with the key it derived from ml_dsa_seed, which is
-    // noble's key for that seed — so it verifies under noble's public key.
-    const message = Buffer.from(vec.message, 'hex').toString('utf8');
-    const signature = hexToB64(vec.openssl_dsa_signature);
-    expect(await verifySignature(message, signature, vec.noble_dsa_publicKey)).toBe(true);
-    expect(await verifySignature(message + '!', signature, vec.noble_dsa_publicKey)).toBe(false);
   });
 
   it('verifySignature returns false on malformed input instead of throwing', async () => {
@@ -82,93 +72,57 @@ describe('ML-DSA-44 sign/verify', () => {
   });
 });
 
-describe('ML-KEM-768 hybrid envelope round-trips', () => {
+describe('X-Wing envelopes round-trip', () => {
   it('encryptMessagePQC -> decryptMessagePQC', async () => {
-    const { publicKey, privateKey } = await generateMlKemKeyPair();
-    const plaintext = 'hello post-quantum world 🛡️';
-    const env = await encryptMessagePQC(plaintext, publicKey);
-    expect(fromB64Local(env.kem).length).toBe(1088); // ML-KEM-768 ciphertext
-    expect(await decryptMessagePQC(env, privateKey)).toBe(plaintext);
+    const { publicKey, seed } = generateEncryptionKeyPair();
+    const env = await encryptMessagePQC('hello pqc', publicKey);
+    expect(env.alg).toBe('XWING-HKDF384-A256GCM');
+    expect(fromB64Local(env.kem).length).toBe(1120);
+    expect(await decryptMessagePQC(env, seed)).toBe('hello pqc');
   });
 
   it('wrapSessionKey -> unwrapSessionKey', async () => {
-    const { publicKey, privateKey } = await generateMlKemKeyPair();
-    const sessionKey = await generateSessionKey();
-    const wrapped = await wrapSessionKey(sessionKey, publicKey);
-    const unwrapped = await unwrapSessionKey(wrapped, privateKey);
-    expect(unwrapped).toBe(sessionKey);
+    const { publicKey, seed } = generateEncryptionKeyPair();
+    const sk = await generateSessionKey();
+    const wrapped = await wrapSessionKey(sk, publicKey);
+    expect(await unwrapSessionKey(wrapped, seed)).toBe(sk);
   });
 });
 
 describe('domain separation (audit H1)', () => {
   it('login and content contexts produce disjoint signed bytes', () => {
-    const body = 'Sign in to Kryptolog with nonce: abc\nEncryption key: xyz';
-    const asLogin = domainSeparate(SIGNING_CONTEXT.LOGIN, body);
-    const asContent = domainSeparate(SIGNING_CONTEXT.CONTENT, body);
-    expect(asLogin).not.toBe(asContent);
-    expect(asLogin.startsWith('Kryptolog Signed Message v1\ncontext=login\n')).toBe(true);
-    expect(asContent.startsWith('Kryptolog Signed Message v1\ncontext=content\n')).toBe(true);
+    const body = 'same-body';
+    expect(domainSeparate(SIGNING_CONTEXT.LOGIN, body))
+      .not.toBe(domainSeparate(SIGNING_CONTEXT.CONTENT, body));
   });
 
   it('a content-domain signature does NOT verify as a login challenge', async () => {
-    const { publicKey, privateKey } = await generateMlDsaKeyPair();
-    // Attacker coerces the victim into approving content that equals a login body.
-    const loginBody = 'Sign in to Kryptolog with nonce: 0123456789abcdef\nEncryption key: kem';
-    const contentSig = await signMessagePQC(
-      domainSeparate(SIGNING_CONTEXT.CONTENT, loginBody), privateKey
-    );
-
-    // The harvested signature is valid for the content it covers...
-    expect(await verifySignature(
-      domainSeparate(SIGNING_CONTEXT.CONTENT, loginBody), contentSig, publicKey
-    )).toBe(true);
-
-    // ...but is NOT a valid signature over the login challenge (replay blocked).
-    expect(await verifySignature(
-      domainSeparate(SIGNING_CONTEXT.LOGIN, loginBody), contentSig, publicKey
-    )).toBe(false);
-    // ...nor over the raw, unwrapped login body (the pre-fix attack target).
-    expect(await verifySignature(loginBody, contentSig, publicKey)).toBe(false);
+    const { publicKey, seed } = generateIdentityKeyPair();
+    const body = 'nonce=abc';
+    const contentSig = await signMessagePQC(domainSeparate(SIGNING_CONTEXT.CONTENT, body), seed);
+    expect(await verifySignature(domainSeparate(SIGNING_CONTEXT.LOGIN, body), contentSig, publicKey)).toBe(false);
   });
 });
 
 describe('multisig ciphertext-bound approval (audit M1)', () => {
-  it('sha256Hex matches a known vector (interop with Python hashlib)', async () => {
-    // echo -n "abc" | sha256sum
-    expect(await sha256Hex('abc')).toBe(
-      'ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad'
+  it('sha384Hex matches a known vector (interop with Python hashlib)', async () => {
+    // echo -n "abc" | sha384sum
+    expect(await sha384Hex('abc')).toBe(
+      'cb00753f45a35e8bb5a03d699ac65007272c32ab0eded1631a8b605a43ff5bed8086072ba1e7cc2358baeca134c825a7'
     );
   });
 
   it('approval message is distinct from a content signature over the same body', () => {
-    const approval = multisigApprovalMessage(7, 42, 'ab'.repeat(32));
+    const approval = multisigApprovalMessage(1, 2, 'ab'.repeat(48));
     expect(approval.startsWith('Kryptolog Signed Message v1\ncontext=multisig-approval\n')).toBe(true);
-    const body = `workflow=7\nsecret=42\nct=${'ab'.repeat(32)}`;
-    expect(approval).not.toBe(domainSeparate(SIGNING_CONTEXT.CONTENT, body));
+    expect(approval).not.toBe(domainSeparate(SIGNING_CONTEXT.CONTENT, 'workflow=1\nsecret=2\nct=' + 'ab'.repeat(48)));
   });
 
-  it('signs sha256(ciphertext) and verifies; rejects a different ciphertext', async () => {
-    const { publicKey, privateKey } = await generateMlDsaKeyPair();
-    const ciphertext = JSON.stringify({ iv: 'aa', ciphertext: 'deadbeef' });
-    const msg = multisigApprovalMessage(3, 9, await sha256Hex(ciphertext));
-    const sig = await signMessagePQC(msg, privateKey);
-    expect(await verifySignature(msg, sig, publicKey)).toBe(true);
-
-    // A signature bound to one ciphertext does not verify against another (the
-    // server recomputes the hash from its stored ciphertext, so a swap fails).
-    const tampered = multisigApprovalMessage(3, 9, await sha256Hex('other'));
-    expect(await verifySignature(tampered, sig, publicKey)).toBe(false);
-  });
-});
-
-describe('deterministic seeded-keygen byte-pin', () => {
-  it('ML-DSA-44 seeded public key matches the committed fixture', () => {
-    const k = ml_dsa44.keygen(fromHexLocal(vec.ml_dsa_seed));
-    expect(toHex(k.publicKey)).toBe(vec.noble_dsa_publicKey);
-  });
-
-  it('ML-KEM-768 seeded public key matches the committed fixture', () => {
-    const k = ml_kem768.keygen(fromHexLocal(vec.ml_kem_seed));
-    expect(toHex(k.publicKey)).toBe(vec.noble_kem_publicKey);
+  it('signs sha384(ciphertext) and verifies; rejects a different ciphertext', async () => {
+    const { publicKey, seed } = generateIdentityKeyPair();
+    const approve = async (ct) => multisigApprovalMessage(7, 9, await sha384Hex(ct));
+    const sig = await signMessagePQC(await approve('ciphertext-A'), seed);
+    expect(await verifySignature(await approve('ciphertext-A'), sig, publicKey)).toBe(true);
+    expect(await verifySignature(await approve('ciphertext-B'), sig, publicKey)).toBe(false);
   });
 });

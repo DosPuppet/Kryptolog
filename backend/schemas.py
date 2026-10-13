@@ -11,7 +11,7 @@ from pydantic import (
     model_validator,
 )
 
-from security.crypto_validation import is_b64, is_valid_ml_dsa_signature
+from security.crypto_validation import is_b64, is_valid_signature
 from utils.clock import to_wire_utc
 
 # Use for EVERY datetime the API returns: naive on the way in, because that is
@@ -34,12 +34,10 @@ UtcDateTime = Annotated[
 # push through a field, while the cryptographic format checks live in
 # security/crypto_validation.py.
 #
-# An address IS an ML-DSA-44 public key — 1312 bytes, 2624 hex chars. The old
-# 20 000-char cap let a caller send ~8x that in every address field. 4096 keeps
-# real addresses comfortably inside while cutting the ceiling, and leaves room
-# for the shorter synthetic addresses that predate strict validation (see the
-# "strict on write, lenient on read" note in the audit doc).
-MAX_ADDRESS_LEN = 4096
+# An address is the SHA-384 of an identity key: exactly 96 hex characters
+# since crypto-core 4.0.0 (audit 2026-10-12 K-10). It was the ML-DSA-44 key
+# itself before — 2 624 characters, bounded at 4 096 — in every address field.
+MAX_ADDRESS_LEN = 96
 
 # Hard cap on group size, enforced by routers/groups.py on both create and
 # add-member. It also sizes the two group blobs below, which is why it lives
@@ -56,7 +54,7 @@ MAX_GROUP_MEMBERS = 50
 # the first message of a conversation was capped at ~160 characters.
 #
 # So the costs are spelled out and the bounds derived from them. Every figure
-# is measured against crypto-core 2.0.0 and pinned on the producing side by
+# is measured against crypto-core 4.0.0 and pinned on the producing side by
 # packages/crypto-core/test/envelope-size.test.js, which fails if a primitive
 # change outgrows what this file budgets.
 
@@ -66,21 +64,24 @@ def b64_chars(byte_len: int) -> int:
     return ((byte_len + 2) // 3) * 4
 
 
-# The address IS the ML-DSA-44 public key (self-certifying), in HEX — 2624
-# chars, not the 42 an address usually suggests. Identifiers stayed hex through
-# the L-12 cutover; only opaque payloads moved to base64.
-ADDRESS_CHARS = 2_624
-# A detached ML-DSA-44 signature, base64 (2420 bytes). Every message carries
-# one (audit S1).
-SIGNATURE_CHARS = b64_chars(2_420)  # 3 228
-# One ML-KEM-768-wrapped session key, JSON-encoded: {v, alg, kem, iv, encKey}.
-# Measured 1 562 before crypto-core 3.0.0 added the format version and the
-# algorithm id to every envelope, ~1 600 after — past the old 1 600 budget by two
-# characters per member, which envelope-size.test.js caught.
+# An address, in HEX: SHA-384 of the identity key (crypto-core 4.0.0). It was
+# the 2 624-character ML-DSA-44 key itself until then. Identifiers stayed hex
+# through the L-12 cutover; only opaque payloads moved to base64.
+ADDRESS_CHARS = 96
+# The keys an address and an encryption key name, hex: a composite ML-DSA-65 +
+# Ed25519 identity key (1 984 bytes) and an X-Wing key (1 216 bytes).
+IDENTITY_KEY_CHARS = 3_968
+ENCRYPTION_KEY_CHARS = 2_432
+# A composite ML-DSA-65 + Ed25519 signature, base64 (3 373 bytes). Every
+# message carries one (audit S1).
+SIGNATURE_CHARS = b64_chars(3_373)  # 4 500
+# One X-Wing-wrapped session key, JSON-encoded: {v, alg, kem, iv, encKey}.
+# Measured ~1 640 under crypto-core 4.0.0 (an ML-KEM-768 wrap was ~1 600: the
+# X-Wing ciphertext is 32 bytes longer, the algorithm id the same length).
 WRAPPED_KEY_CHARS = 1_700
 # One entry in a key-wrap map: the member's address, their wrapped key, and the
-# JSON punctuation between them.
-KEY_WRAP_CHARS_PER_MEMBER = ADDRESS_CHARS + WRAPPED_KEY_CHARS  # 4 224
+# JSON punctuation between them. Shrank from 4 324 when addresses became hashes.
+KEY_WRAP_CHARS_PER_MEMBER = ADDRESS_CHARS + WRAPPED_KEY_CHARS  # 1 796
 # Plaintext a user may put in one message, counted the way the client counts it
 # — JavaScript string length, i.e. UTF-16 code units.
 MAX_MESSAGE_TEXT_CHARS = 10_000
@@ -102,7 +103,7 @@ ENVELOPE_SLACK_CHARS = 1_000
 # "encg1:" + JSON({ct, keys: {address: wrappedKey}}) — one wrap per member so
 # each can decrypt the name (audit M-3). Rebuilt on rename and on every
 # membership change, so create and update share the bound.
-MAX_GROUP_NAME_LEN = MAX_GROUP_MEMBERS * KEY_WRAP_CHARS_PER_MEMBER  # 211 200
+MAX_GROUP_NAME_LEN = MAX_GROUP_MEMBERS * KEY_WRAP_CHARS_PER_MEMBER  # 89 800
 
 # A DM that mints a session carries two wraps (recipient and sender), keyed by
 # short literal names rather than by address.
@@ -164,8 +165,8 @@ class UserResponse(UserBase):
     # When this identity's encryption key last changed (audit S1). Null = never
     # changed since creation. Clients use it to flag/verify key swaps.
     key_changed_at: UtcDateTime | None = None
-    # Self-signed ML-KEM key attestation (audit M-1) — peers verify this against
-    # the address before encrypting to encryption_public_key.
+    # Self-signed encryption-key attestation (audit M-1) — peers verify it with
+    # the identity key before encrypting to encryption_public_key.
     encryption_key_attestation: str | None = None
     # True once the identity has been deleted. The row is kept, stripped, so
     # that messages and workflows which still name the address can render as
@@ -337,20 +338,19 @@ MAX_DEPLOYMENT_LEN = 64
 class LoginRequest(BaseModel):
     address: str = Field(..., max_length=MAX_ADDRESS_LEN)
     # The key the signature verifies against, which must be the one `address`
-    # names (crypto-core 3.3.0). Bounded like an address while the two are the
-    # same string; the 4.0.0 cutover gives it its own bound.
-    identity_public_key: str = Field(..., max_length=MAX_ADDRESS_LEN)
-    signature: str = Field(..., max_length=64_000)
+    # names (crypto-core 3.3.0, an address is its hash since 4.0.0).
+    identity_public_key: str = Field(..., max_length=IDENTITY_KEY_CHARS)
+    signature: str = Field(..., max_length=SIGNATURE_CHARS)
     nonce: str = Field(..., max_length=200)
     # What the challenge was signed FOR (crypto-core 3.0.0, audit 2026-10-12
     # K-02): the SPA origin and this server's deployment id. Both are part of
     # the signed bytes, and the route refuses values that are not its own.
     origin: str = Field(..., max_length=MAX_ORIGIN_LEN)
     deployment: str = Field(..., max_length=MAX_DEPLOYMENT_LEN)
-    encryption_public_key: str | None = Field(None, max_length=MAX_ADDRESS_LEN)
+    encryption_public_key: str | None = Field(None, max_length=ENCRYPTION_KEY_CHARS)
     # Self-signed attestation of encryption_public_key (audit M-1). REQUIRED
     # whenever a key is submitted (audit 2026-10-12 K-04).
-    encryption_key_attestation: str | None = Field(None, max_length=64_000)
+    encryption_key_attestation: str | None = Field(None, max_length=SIGNATURE_CHARS)
     username: str | None = Field(None, max_length=200)
     # Access filter (audit §5): only consulted when the server requires invites
     # AND this is a brand-new identity. Ignored for existing users.
@@ -423,8 +423,8 @@ class MultisigWorkflowResponse(MultisigWorkflowSummaryResponse):
 
 
 class MultisigSignatureRequest(BaseModel):
-    # 64KB limit for PQC signatures
-    signature: str = Field(..., max_length=64_000)
+    # One composite signature (crypto-core 4.0.0); was a blanket 64 000.
+    signature: str = Field(..., max_length=SIGNATURE_CHARS)
     # Only provided by the completing signer.
     recipient_keys: dict[Address, WrappedKey] | None = Field(
         None, max_length=MAX_WORKFLOW_PARTICIPANTS
@@ -606,13 +606,13 @@ class PushSubscriptionResponse(PushSubscriptionCreate):
 
 # ── Account deletion ────────────────────────────────────────────────────────
 
-# One redaction is a namespaced message id plus an ML-DSA signature over the
-# redacted form of that message's body. The signature dominates the size: 3228
+# One redaction is a namespaced message id plus a composite signature over the
+# redacted form of that message's body. The signature dominates the size: 4 500
 # base64 characters against a couple of dozen for the id.
 #
 # A bound on ONE REQUEST, not on how much an account may erase. At the cap the
-# body is roughly 3.3 MB and the server performs 1000 ML-DSA-44 verifications,
-# ~0.05 s of CPU.
+# body is roughly 4.6 MB — inside the 8 MB body limit — and the server
+# performs 1000 composite verifications (measured in tests/test_envelope_sizes).
 #
 # It used to be both, and that made accounts permanently un-erasable: erase
 # asks for one signature per session epoch the user ever opened, and a group
@@ -636,8 +636,8 @@ class RedactionSignature(BaseModel):
         # Exact length and canonical spelling, not a length guess: a signature
         # commits to its message AS A STRING, so a second valid spelling of one
         # signature would be a second valid signature for it (audit L-12).
-        if not is_valid_ml_dsa_signature(v):
-            raise ValueError("signature must be a canonical base64 ML-DSA-44 signature")
+        if not is_valid_signature(v):
+            raise ValueError("signature must be a canonical base64 composite signature")
         return v
 
 
@@ -658,8 +658,8 @@ class AccountDeleteRequest(BaseModel):
     @field_validator("signature")
     @classmethod
     def _signature_is_ml_dsa(cls, v: str) -> str:
-        if not is_valid_ml_dsa_signature(v):
-            raise ValueError("signature must be a canonical base64 ML-DSA-44 signature")
+        if not is_valid_signature(v):
+            raise ValueError("signature must be a canonical base64 composite signature")
         return v
 
 
@@ -698,8 +698,8 @@ class ConversationEraseRequest(BaseModel):
     @field_validator("signature")
     @classmethod
     def _signature_is_ml_dsa(cls, v: str) -> str:
-        if not is_valid_ml_dsa_signature(v):
-            raise ValueError("signature must be a canonical base64 ML-DSA-44 signature")
+        if not is_valid_signature(v):
+            raise ValueError("signature must be a canonical base64 composite signature")
         return v
 
 

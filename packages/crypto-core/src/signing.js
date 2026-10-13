@@ -4,11 +4,11 @@
 // and receiver must build these identically, byte for byte, which is why they
 // live apart from the key handling in pqc.js.
 
-import { sha256Hex, canonicalJson } from './encoding.js';
+import { sha384Hex, canonicalJson } from './encoding.js';
 // The attestation helpers below sign and verify, so this module leans on pqc.js.
 // One-directional: pqc.js does not import signing.js, so there is no cycle.
 import { signMessage } from './pqc.js';
-import { verifyIdentitySignature } from './identity.js';
+import { verifyIdentitySignature, isAddress } from './identity.js';
 
 // --- Domain separation (audit H1) ---
 // Every signed payload is wrapped with a context tag *before* it is signed, so a
@@ -118,8 +118,11 @@ const canonicalCiphertext = (ct) =>
 //
 // Async because of the digest — every call site must await it.
 export const messageSigningBody = async ({ from, conv, sid, ct, gid = '', keys = null, ts, seq }) => {
-    need(typeof from === 'string' && HEX_RE.test(from), 'sender');
-    need(typeof conv === 'string' && (HEX_RE.test(conv) || ID_RE.test(conv)), 'conversation');
+    // An address, or a channel id (crypto-core 4.0.0): the two alphabets are
+    // disjoint — 96 hex characters against at most 64 — so neither can be
+    // mistaken for the other on either side.
+    need(isAddress(from), 'sender');
+    need(isAddress(conv) || isSignedIdentifier(conv), 'conversation');
     need(gid === '' || gid == null || isSignedIdentifier(gid), 'group id');
     need(isSignedIdentifier(sid), 'session id');
     // `ts` and `seq` (crypto-core 3.0.0, audit 2026-10-12 K-06): the sender's
@@ -132,7 +135,7 @@ export const messageSigningBody = async ({ from, conv, sid, ct, gid = '', keys =
     need(isCount(seq), 'sequence number');
     return domainSeparate(SIGNING_CONTEXT.MESSAGE,
         `from=${from}\nconv=${conv}\ngid=${gid ?? ''}\nsid=${sid}\nts=${ts}\nseq=${seq}` +
-        `\nkeysh=${await sha256Hex(canonicalJson(keys ?? null))}` +
+        `\nkeysh=${await sha384Hex(canonicalJson(keys ?? null))}` +
         (ct == null ? '\nredacted=1' : `\nct=${canonicalCiphertext(ct)}`));
 };
 
@@ -205,7 +208,7 @@ export const accountDeletionBody = async ({ nonce, mode, redactionKeys = [], ori
     need(isSignedIdentifier(deployment), 'deployment');
     return domainSeparate(SIGNING_CONTEXT.ACCOUNT_DELETION,
         `origin=${origin}\ndeployment=${deployment}\nnonce=${nonce}\nmode=${mode}` +
-        `\nredactions=${await sha256Hex(canonicalJson([...redactionKeys].sort()))}`);
+        `\nredactions=${await sha384Hex(canonicalJson([...redactionKeys].sort()))}`);
 };
 
 // Erasing one's OWN messages in ONE conversation (crypto-core 3.1.0, additive;
@@ -225,7 +228,7 @@ export const conversationEraseBody = async ({
 }) => {
     need(typeof nonce === 'string' && HEX_RE.test(nonce), 'nonce');
     need(
-        (kind === 'dm' && typeof conversation === 'string' && HEX_RE.test(conversation)) ||
+        (kind === 'dm' && isAddress(conversation)) ||
         (kind === 'group' && isSignedIdentifier(conversation)),
         'conversation'
     );
@@ -234,24 +237,33 @@ export const conversationEraseBody = async ({
     return domainSeparate(SIGNING_CONTEXT.CONVERSATION_ERASE,
         `origin=${origin}\ndeployment=${deployment}\nnonce=${nonce}` +
         `\nconversation=${kind}:${conversation}` +
-        `\nredactions=${await sha256Hex(canonicalJson([...redactionKeys].sort()))}`);
+        `\nredactions=${await sha384Hex(canonicalJson([...redactionKeys].sort()))}`);
 };
 
 // --- Encryption-key attestation (audit M-1) ---
-// The address IS the ML-DSA public key (self-certifying), but the ML-KEM
+// The address names the identity key (self-certifying, identity.js), but the
 // encryption key is a separate directory field the server could lie about. An
-// identity therefore SELF-SIGNS its own ML-KEM key: peers verify the signature
-// against the address before wrapping anything to that key, so a malicious
-// directory can no longer substitute a KEM key it controls. The message is
-// fixed and self-referential (never site- or peer-supplied), and the
-// `key-attestation` context keeps it disjoint from login/content/message
+// identity therefore SELF-SIGNS its own encryption key: peers verify the
+// signature, with the key the address names, before wrapping anything to it,
+// so a malicious directory cannot substitute a KEM key it controls. The
+// message is fixed and self-referential (never site- or peer-supplied), and
+// the `key-attestation` context keeps it disjoint from login/content/message
 // signatures. The server stores + verifies it too (backend
 // auth.encryption_key_attestation_message must stay byte-identical).
-export const encryptionKeyAttestationBody = (mlkemPublicKeyHex) =>
-    domainSeparate(SIGNING_CONTEXT.KEY_ATTESTATION, `mlkem=${mlkemPublicKeyHex}`);
+//
+// Since 4.0.0 it names the ADDRESS as well: the statement is "this encryption
+// key is <address>'s", not merely "I hold this key", so an attestation cannot
+// be lifted onto another identity's record even by a key that signs for both.
+export const encryptionKeyAttestationBody = ({ address, encryptionPublicKey }) => {
+    need(isAddress(address), 'address');
+    need(typeof encryptionPublicKey === 'string' && HEX_RE.test(encryptionPublicKey), 'encryption key');
+    return domainSeparate(
+        SIGNING_CONTEXT.KEY_ATTESTATION, `address=${address}\nencryption=${encryptionPublicKey}`
+    );
+};
 
-export const attestEncryptionKey = async (mlkemPublicKeyHex, mldsaPrivateKeyHex) =>
-    signMessage(encryptionKeyAttestationBody(mlkemPublicKeyHex), mldsaPrivateKeyHex);
+export const attestEncryptionKey = async ({ address, encryptionPublicKey }, identitySeedHex) =>
+    signMessage(encryptionKeyAttestationBody({ address, encryptionPublicKey }), identitySeedHex);
 
 // Verified as the identity `address`, with the key the address names
 // (3.3.0, identity.js): a directory that serves a key under somebody else's
@@ -260,21 +272,26 @@ export const verifyEncryptionKeyAttestation = async ({
     address, identityPublicKey, encryptionPublicKey, attestation,
 }) => {
     if (!encryptionPublicKey || !attestation) return false;
-    return verifyIdentitySignature({
-        address,
-        identityPublicKey,
-        message: encryptionKeyAttestationBody(encryptionPublicKey),
-        signature: attestation,
-    });
+    let message;
+    try {
+        message = encryptionKeyAttestationBody({ address, encryptionPublicKey });
+    } catch {
+        return false;
+    }
+    return verifyIdentitySignature({ address, identityPublicKey, message, signature: attestation });
 };
 
 // Safety-number fingerprint of an identity + its encryption key, for manual
 // out-of-band comparison (both parties read the SAME number for a contact —
 // it's a digest of the contact's keys, not of the pair of participants).
-// SHA-256 over the attestation body → 60 decimal digits in 12 groups of 5,
-// Signal-style: digits are easier to read aloud / compare than hex.
-export const keyFingerprint = async (addressHex, mlkemPublicKeyHex) => {
-    const hex = await sha256Hex(`fingerprint\naddr=${addressHex}\nmlkem=${mlkemPublicKeyHex}`);
+// SHA-384 over a labelled, versioned statement of the two → 60 decimal digits
+// in 12 groups of 5, Signal-style: digits are easier to read aloud / compare
+// than hex. 4.0.0 changed the number for every contact, deliberately: the keys
+// it summarises changed too.
+export const keyFingerprint = async (address, encryptionPublicKey) => {
+    const hex = await sha384Hex(
+        `Kryptolog safety number v4\naddress=${address}\nencryption=${encryptionPublicKey}`
+    );
     const groups = [];
     for (let i = 0; i < 12; i++) {
         // 5 hex chars (20 bits) per group → mod 100000 keeps 5 decimal digits.
@@ -285,14 +302,14 @@ export const keyFingerprint = async (addressHex, mlkemPublicKeyHex) => {
 };
 
 // Server-verifiable multisig approval message (audit M1). A signer approves a
-// workflow by signing the SHA-256 of the STORED CIPHERTEXT, bound to the
+// workflow by signing the SHA-384 (4.0.0) of the STORED CIPHERTEXT, bound to the
 // workflow + secret id. The server is zero-knowledge (can't see plaintext) but
 // can hash the ciphertext it holds, so it can verify this. Must be byte-
 // identical to the server's auth.multisig_approval_message().
-export const multisigApprovalMessage = (workflowId, secretId, ciphertextSha256Hex) =>
+export const multisigApprovalMessage = (workflowId, secretId, ciphertextSha384Hex) =>
     domainSeparate(
         SIGNING_CONTEXT.MULTISIG_APPROVAL,
-        `workflow=${workflowId}\nsecret=${secretId}\nct=${ciphertextSha256Hex}`
+        `workflow=${workflowId}\nsecret=${secretId}\nct=${ciphertextSha384Hex}`
     );
 
 // --- Device transfer passphrase ---

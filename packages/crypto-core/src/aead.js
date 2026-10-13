@@ -4,10 +4,9 @@
 // names for the ciphertext property. Chunk encryption is separate because its
 // associated data is mandatory (audit M-2).
 
-import { ml_kem768 } from '@noble/post-quantum/ml-kem.js';
-
 import { toHex, fromHex, toB64, fromB64, ENC, DEC } from './encoding.js';
-import { kemAesKey, FORMAT_VERSION, KEM_ENVELOPE_ALG, assertFormat } from './pqc.js';
+import { kemAesKey, FORMAT_VERSION, KEM_ENVELOPE_ALG, assertFormat, formatAad } from './pqc.js';
+import { xwingEncapsulate, xwingDecapsulate } from './kem.js';
 
 // The symmetric envelope's algorithm id (see pqc.js for why every envelope
 // carries one). A session or content key is always a fresh 256-bit AES-GCM key.
@@ -39,7 +38,7 @@ const aeadEncrypt = async (plaintext, keyHex, field) => {
     const iv = crypto.getRandomValues(new Uint8Array(12));
     const key = await importAesKey(keyHex);
     const encrypted = await crypto.subtle.encrypt(
-        { name: "AES-GCM", iv: iv },
+        { name: "AES-GCM", iv: iv, additionalData: formatAad(AEAD_ALG) },
         key,
         ENC.encode(plaintext)
     );
@@ -51,59 +50,43 @@ const aeadDecrypt = async (envelope, keyHex, field) => {
     assertFormat(envelope, AEAD_ALG, 'AES-GCM envelope');
     const key = await importAesKey(keyHex);
     const decrypted = await crypto.subtle.decrypt(
-        { name: "AES-GCM", iv: fromB64(envelope.iv) },
+        { name: "AES-GCM", iv: fromB64(envelope.iv), additionalData: formatAad(AEAD_ALG) },
         key,
         fromB64(envelope[field])
     );
     return DEC.decode(decrypted);
 };
 
-export const wrapSessionKey = async (sessionKeyHex, publicKeyHex) => {
-    // 1. Encapsulate a shared secret for the receiver (ML-KEM-768)
-    const publicKey = fromHex(publicKeyHex);
-    const { cipherText: ct, sharedSecret: ss } = ml_kem768.encapsulate(publicKey);
-
-    // 2. Use Shared Secret (HKDF-derived, audit S5) to encrypt the Session Key
+// A session key, wrapped to one recipient's X-Wing key (crypto-core 4.0.0).
+// The envelope's markers are its AES-GCM associated data (pqc.js formatAad).
+export const wrapSessionKey = async (sessionKeyHex, encryptionPublicKeyHex) => {
+    const { cipherText, sharedSecret } = xwingEncapsulate(fromHex(encryptionPublicKeyHex));
     const iv = crypto.getRandomValues(new Uint8Array(12));
-    const kek = await kemAesKey(new Uint8Array(ss), ["encrypt"]);
-
-    const sessKeyBytes = fromHex(sessionKeyHex);
+    const kek = await kemAesKey(sharedSecret, ["encrypt"]);
     const encryptedKey = await crypto.subtle.encrypt(
-        { name: "AES-GCM", iv: iv },
+        { name: "AES-GCM", iv, additionalData: formatAad(KEM_ENVELOPE_ALG) },
         kek,
-        sessKeyBytes
+        fromHex(sessionKeyHex)
     );
-
     return {
         v: FORMAT_VERSION,
         alg: KEM_ENVELOPE_ALG,
-        kem: toB64(ct),
+        kem: toB64(cipherText),
         iv: toB64(iv),
-        encKey: toB64(new Uint8Array(encryptedKey))
+        encKey: toB64(new Uint8Array(encryptedKey)),
     };
 };
 
-export const unwrapSessionKey = async (wrappedKey, privateKeyHex) => {
+export const unwrapSessionKey = async (wrappedKey, encryptionSeedHex) => {
     // wrappedKey: { v, alg, kem, iv, encKey } — the three blobs base64
     assertFormat(wrappedKey, KEM_ENVELOPE_ALG, 'wrapped key');
-    const privateKey = fromHex(privateKeyHex);
-    const ct = fromB64(wrappedKey.kem);
-
-    // 1. Decapsulate Shared Secret (ML-KEM-768)
-    const ss = ml_kem768.decapsulate(ct, privateKey);
-
-    // 2. Decrypt Session Key
-    const iv = fromB64(wrappedKey.iv);
-    const encryptedKey = fromB64(wrappedKey.encKey);
-
-    const kek = await kemAesKey(new Uint8Array(ss), ["decrypt"]); // HKDF (audit S5)
-
+    const sharedSecret = xwingDecapsulate(fromB64(wrappedKey.kem), fromHex(encryptionSeedHex));
+    const kek = await kemAesKey(sharedSecret, ["decrypt"]);
     const decryptedKeyBytes = await crypto.subtle.decrypt(
-        { name: "AES-GCM", iv: iv },
+        { name: "AES-GCM", iv: fromB64(wrappedKey.iv), additionalData: formatAad(KEM_ENVELOPE_ALG) },
         kek,
-        encryptedKey
+        fromB64(wrappedKey.encKey)
     );
-
     return toHex(new Uint8Array(decryptedKeyBytes));
 };
 

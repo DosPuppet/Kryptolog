@@ -9,6 +9,19 @@ import { boot, bootWithVault, VAULT_PASSWORD } from './harness.js';
 import { internalSender } from './chrome-mock.js';
 
 describe('setup and unlock', () => {
+    it('names a vault an older TrustKeys wrote, rather than calling the password wrong', async () => {
+        // A format-3 vault: ML-DSA-44 / ML-KEM-768 keys that open nothing in
+        // crypto-core 4.0.0. "Incorrect password" would send the user looking
+        // for a password that was never the problem.
+        const { newVaultKdf } = await import('../src/utils/crypto.js');
+        const h = await boot({
+            local: { vaultData: { v: 3, kdf: newVaultKdf(), iv: 'AAAAAAAAAAAAAAAA', data: 'AAAA' } },
+        });
+        const res = await h.send({ type: 'UNLOCK', password: VAULT_PASSWORD }, internalSender());
+        expect(res.success).toBe(false);
+        expect(res.error).toMatch(/older Kryptolog version/);
+    });
+
     it('reports no password before setup', async () => {
         const h = await boot();
         const res = await h.send({ type: 'GET_STATUS' }, internalSender());
@@ -28,9 +41,10 @@ describe('setup and unlock', () => {
         // non-empty string".
         const blob = Object.fromEntries(h.localStore).vaultData;
         // crypto-core 3.0.0: versioned, with the Argon2id parameters stored next
-        // to the data so the next unlock derives with exactly these.
+        // to the data so the next unlock derives with exactly these. Format 4
+        // since 4.0.0 — a format-3 vault is refused by name.
         expect(blob).toMatchObject({
-            v: 3,
+            v: 4,
             kdf: {
                 alg: 'argon2id', m: 46 * 1024, t: 1, p: 1,
                 salt: expect.stringMatching(/^[A-Za-z0-9+/]+={0,2}$/),
@@ -115,8 +129,10 @@ describe('export / import round-trip', () => {
 
         // The imported identity is the same key, not a new one.
         const srcAccount = source.state.vault.accounts[0];
-        expect(target.state.vault.accounts[0].mldsa.publicKey).toBe(srcAccount.mldsa.publicKey);
-        expect(target.state.vault.accounts[0].mlkem.publicKey).toBe(srcAccount.mlkem.publicKey);
+        expect(target.state.vault.accounts[0].identity.publicKey).toBe(srcAccount.identity.publicKey);
+        expect(target.state.vault.accounts[0].encryption.publicKey).toBe(srcAccount.encryption.publicKey);
+        // One identity, one id, whichever app exported it: the address (4.0.0).
+        expect(target.state.vault.accounts[0].id).toBe(srcAccount.id);
     });
 
     it('the export is gated on the vault password', async () => {

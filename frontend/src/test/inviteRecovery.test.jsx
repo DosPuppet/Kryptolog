@@ -16,15 +16,17 @@
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, act, screen, fireEvent } from '@testing-library/react';
+import { addressOf } from '../utils/crypto';
 import { MemoryRouter } from 'react-router-dom';
 
 const PASSWORD = 'correct horse battery staple';
 const CODE = 'INVITE-1234';
 
 const account = {
+    id: addressOf('a'.repeat(3968)),
     name: 'Alice',
-    mldsa: { publicKey: 'a'.repeat(64) },
-    mlkem: { publicKey: 'b'.repeat(64) },
+    identity: { publicKey: 'a'.repeat(3968) },
+    encryption: { publicKey: 'b'.repeat(2432) },
 };
 const vault = {
     isLocked: false,
@@ -61,7 +63,7 @@ const stubServer = (...statuses) => {
         if (/nonce/i.test(String(url))) return { ok: true, json: async () => ({ nonce: 'ab12', deployment: 'dev' }) };
         const status = queue.length > 1 ? queue.shift() : queue[0];
         if (status === 200) {
-            return { ok: true, json: async () => ({ user: { address: account.mldsa.publicKey }, access_token: 't' }) };
+            return { ok: true, json: async () => ({ user: { address: account.id }, access_token: 't' }) };
         }
         return { ok: false, status, json: async () => ({ detail: 'An invite code is required' }) };
     });

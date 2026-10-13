@@ -38,11 +38,11 @@ export const LoginScreen = ({ onUnlock }) => {
     if (loading) return;
     setError('');
     setLoading(true);
-    onUnlock(password, (success) => {
+    onUnlock(password, (success, reason) => {
       // On success the app re-renders to the Dashboard; only need to recover
       // the form (re-enable input + button) on failure.
       if (!success) {
-        setError("Incorrect password");
+        setError(reason || "Incorrect password");
         setLoading(false);
       }
     });

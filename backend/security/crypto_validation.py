@@ -1,39 +1,59 @@
-"""Format validation for PQC key material.
+"""Format validation for key material, addresses and signatures (crypto-core 4).
 
 KRY-011: capability checks were written as `len(key) < 500`, which a run of
 600 arbitrary characters satisfies. The real security boundary is elsewhere
-(`bytes.fromhex` + ML-DSA verification in auth.py), so this was never
-directly exploitable — but a length floor is a poor proxy for "this is an
-ML-KEM public key", it makes the invariant unauditable, and it lets malformed
-keys reach storage where they surface later as confusing failures.
+(signature verification in auth.py), so this was never directly exploitable —
+but a length floor is a poor proxy for "this is a public key", it makes the
+invariant unauditable, and it lets malformed keys reach storage where they
+surface later as confusing failures. Every check here is exact.
 
-Sizes are FIPS 203 / 204 constants for the parameter sets this project uses:
-    ML-KEM-768  public key  1184 bytes -> 2368 hex chars
-    ML-DSA-44   public key  1312 bytes -> 2624 hex chars
-    ML-DSA-44   signature   2420 bytes -> 3228 base64 chars
+crypto-core 4.0.0 is hybrid throughout (audit 2026-10-12 K-10):
+    identity key    composite ML-DSA-65 + Ed25519   1984 bytes -> 3968 hex
+    address         SHA-384 of the identity key       48 bytes ->   96 hex
+    encryption key  X-Wing (ML-KEM-768 + X25519)    1216 bytes -> 2432 hex
+    signature       composite                       3373 bytes -> 4500 base64
 
-Two encodings, on purpose (audit L-12). Public keys are IDENTIFIERS — an
-address IS an ML-DSA public key, it is a primary key and a URL path segment,
-and the project normalizes addresses to lowercase everywhere, which would not
-survive a case-sensitive encoding. Signatures are opaque payloads and moved to
-base64 with the rest of them.
+Two encodings, on purpose (audit L-12). Keys and addresses are IDENTIFIERS —
+an address is a primary key and a URL path segment, and the project
+normalizes addresses to lowercase everywhere, which would not survive a
+case-sensitive encoding. Signatures are opaque payloads and are base64 with
+the rest of them.
+
+These are the only places the server answers "what is an address" and "what
+does a key look like"; identity.js in crypto-core is the client's half and
+the two must agree (tests/fixtures/hybrid_interop.json pins a golden address).
 """
 
 import base64
+import hashlib
 import re
 
 from security.ed25519_subgroup import in_prime_order_subgroup
 
-# Byte lengths (FIPS 203/204).
-ML_KEM_768_PUBLIC_KEY_BYTES = 1184
-ML_DSA_44_PUBLIC_KEY_BYTES = 1312
-ML_DSA_44_SIGNATURE_BYTES = 2420
+# Byte lengths.
+_ML_DSA_65_PUBLIC_KEY_BYTES = 1952
+IDENTITY_KEY_BYTES = _ML_DSA_65_PUBLIC_KEY_BYTES + 32
+ENCRYPTION_KEY_BYTES = 1216
+SIGNATURE_BYTES = 3309 + 64
+ADDRESS_BYTES = 48
 
 # Hex lengths for the identifiers.
-ML_KEM_768_PUBLIC_KEY_HEX_LEN = ML_KEM_768_PUBLIC_KEY_BYTES * 2
-ML_DSA_44_PUBLIC_KEY_HEX_LEN = ML_DSA_44_PUBLIC_KEY_BYTES * 2
+IDENTITY_KEY_HEX_LEN = IDENTITY_KEY_BYTES * 2
+ENCRYPTION_KEY_HEX_LEN = ENCRYPTION_KEY_BYTES * 2
+ADDRESS_HEX_LEN = ADDRESS_BYTES * 2
 # Base64 length for the payload: 4 chars per 3 bytes, padded.
-ML_DSA_44_SIGNATURE_B64_LEN = ((ML_DSA_44_SIGNATURE_BYTES + 2) // 3) * 4
+SIGNATURE_B64_LEN = ((SIGNATURE_BYTES + 2) // 3) * 4
+
+
+def _lowercase_hex(length: int) -> re.Pattern:
+    # One spelling only: lowercase, no whitespace (which `bytes.fromhex`
+    # skips). An identifier with two spellings is the L-12 defect again.
+    return re.compile(rf"^[0-9a-f]{{{length}}}$")
+
+
+_ADDRESS_RE = _lowercase_hex(ADDRESS_HEX_LEN)
+_IDENTITY_KEY_RE = _lowercase_hex(IDENTITY_KEY_HEX_LEN)
+_ENCRYPTION_KEY_RE = _lowercase_hex(ENCRYPTION_KEY_HEX_LEN)
 
 
 def is_hex(value: str) -> bool:
@@ -81,114 +101,71 @@ def is_valid_b64_of_length(value: str | None, b64_len: int) -> bool:
     return is_b64(value)
 
 
-def is_valid_hex_of_length(value: str | None, hex_len: int) -> bool:
-    """True if `value` is valid hex of exactly `hex_len` characters."""
-    if not value or not isinstance(value, str):
-        return False
-    if len(value) != hex_len:
-        return False
-    return is_hex(value)
+def is_valid_signature(value: str | None) -> bool:
+    """True if `value` is canonical base64 of exactly one composite signature.
 
-
-def is_valid_ml_kem_public_key(value: str | None) -> bool:
-    """True if `value` is a well-formed hex ML-KEM-768 public key.
-
-    Structural only — and that is the ceiling, not an omission. ML-KEM's only
-    cheap validity predicate is the FIPS 203 modulus check (every 12-bit
-    coefficient below q), and 1184 bytes of `AA` pass it: OpenSSL encapsulates
-    against them happily. So "decode it with the PQC library" (as the audit
-    suggests) rejects almost nothing that this check does not already reject. What actually
-    binds a key to an identity is the ML-DSA key attestation, which the
-    project already implements and verifies in auth.py.
+    By decoded BYTES, not characters: base64 pads to a multiple of four, so
+    3 373 and 3 374 bytes both spell 4 500 characters, and a check on the
+    length alone accepts a signature with a byte appended.
     """
-    return is_valid_hex_of_length(value, ML_KEM_768_PUBLIC_KEY_HEX_LEN)
+    return (
+        is_valid_b64_of_length(value, SIGNATURE_B64_LEN)
+        and len(base64.b64decode(value)) == SIGNATURE_BYTES
+    )
 
 
-def is_valid_ml_dsa_public_key(value: str | None) -> bool:
-    """True if `value` is a well-formed hex ML-DSA-44 public key (= an address)."""
-    return is_valid_hex_of_length(value, ML_DSA_44_PUBLIC_KEY_HEX_LEN)
+def is_valid_encryption_key(value: str | None) -> bool:
+    """True if `value` is a lowercase-hex X-Wing public key.
+
+    Structural only — and that is the ceiling, not an omission. Its ML-KEM-768
+    half has one cheap validity predicate, the FIPS 203 modulus check, and 1184
+    bytes of `AA` pass it; any 32 bytes are an X25519 key. What binds a key to
+    an identity is the key attestation, which the login route verifies.
+    """
+    return isinstance(value, str) and _ENCRYPTION_KEY_RE.match(value) is not None
 
 
-# --- Addresses and the keys they name (crypto-core 3.3.0) --------------------
-#
-# Until 4.0.0 an address IS the identity's ML-DSA-44 public key; the cutover
-# makes it a hash of a composite key (audit 2026-10-12 K-10). These three are
-# the only places the server answers "what is an address", so the cutover
-# changes them and nothing that calls them. Mirrors identity.js in crypto-core.
+# --- Addresses and the keys they name (crypto-core 3.3.0 seam, 4.0.0 meaning) -
+
+# The address of a composite identity key: SHA-384 under a prefix that names
+# the version and the algorithm. Byte-identical to crypto-core's addressOf.
+_ADDRESS_DOMAIN = b"Kryptolog address v4\nalg=MLDSA65-Ed25519-SHA512\n"
 
 
 def is_valid_address(value: str | None) -> bool:
-    """True if `value` has the shape of an address. 3.x: an ML-DSA-44 key."""
-    return is_valid_ml_dsa_public_key(value)
+    """True if `value` is shaped like an address: 96 lowercase hex characters."""
+    return isinstance(value, str) and _ADDRESS_RE.match(value) is not None
 
 
 def address_of(identity_public_key: str) -> str:
-    """The address an identity public key is known by. 3.x: the key itself."""
-    return identity_public_key
+    """The address an identity public key (lowercase hex) is known by. Raises
+    ValueError for anything that is not one."""
+    if not isinstance(identity_public_key, str) or not _IDENTITY_KEY_RE.match(identity_public_key):
+        raise ValueError("an identity public key is 3968 lowercase hex characters")
+    return hashlib.sha384(_ADDRESS_DOMAIN + bytes.fromhex(identity_public_key)).hexdigest()
 
 
 def identity_binds_address(identity_public_key: str | None, address: str | None) -> bool:
     """Is `identity_public_key` the key `address` names? Never raises."""
-    if not isinstance(identity_public_key, str) or not isinstance(address, str):
+    try:
+        return is_valid_address(address) and address_of(identity_public_key) == address
+    except ValueError:
         return False
-    return is_valid_address(address) and address_of(identity_public_key) == address
 
 
-def is_valid_ml_dsa_signature(value: str | None) -> bool:
-    """True if `value` is a well-formed base64 ML-DSA-44 signature."""
-    return is_valid_b64_of_length(value, ML_DSA_44_SIGNATURE_B64_LEN)
-
-
-# --- Composite identity key (crypto-core 4, audit 2026-10-12 K-10) -----------
-#
-# mldsa65PK (1952 bytes) || ed25519PK (32 bytes). Not used yet: the 4.0.0
-# cutover makes it the identity key, checked here where a key enters (login).
-COMPOSITE_IDENTITY_KEY_BYTES = 1952 + 32
-COMPOSITE_IDENTITY_KEY_HEX_LEN = COMPOSITE_IDENTITY_KEY_BYTES * 2
-# One spelling only: lowercase, no whitespace (which `bytes.fromhex` skips).
-# The key is hashed into the address, and an identifier with two spellings is
-# the L-12 defect again.
-_COMPOSITE_IDENTITY_KEY_RE = re.compile(rf"^[0-9a-f]{{{COMPOSITE_IDENTITY_KEY_HEX_LEN}}}$")
-
-
-def is_valid_composite_identity_key(value: str | None) -> bool:
+def is_valid_identity_key(value: str | None) -> bool:
     """True if `value` is a lowercase-hex composite key whose Ed25519 half is
     a point of order exactly L.
 
     The second condition is what lets the server verify with OpenSSL alone:
     with such a key, OpenSSL's cofactorless Ed25519 rule and the clients'
     stricter one accept the same signatures (see security/ed25519_subgroup.py).
+    Checked once, where a key enters — the login route — so every stored key
+    satisfies it.
     """
-    if not isinstance(value, str) or not _COMPOSITE_IDENTITY_KEY_RE.match(value):
+    if not isinstance(value, str) or not _IDENTITY_KEY_RE.match(value):
         return False
     # Nothing to check in the ML-DSA-65 half beyond its length: FIPS 204's
     # pkDecode cannot fail on 1952 bytes (rho is any 32 bytes, t1 any packed
     # 10-bit values), and OpenSSL accepts every such key.
-    return in_prime_order_subgroup(bytes.fromhex(value)[1952:])
-
-
-# --- Capability check -------------------------------------------------------
-#
-# `strict=False` is the default on purpose. Accounts predating strict
-# validation hold keys that are well-formed but were never length-checked,
-# and test fixtures use placeholder keys; rejecting those outright would lock
-# existing users out of the messenger rather than fixing anything. The floor
-# is retained as a compatibility fallback while new/updated keys are checked
-# properly at the point they are written (see routers/auth.py).
-LEGACY_MIN_KEY_LEN = 500
-
-
-def is_usable_encryption_key(value: str | None, strict: bool = False) -> bool:
-    """True if `value` can serve as a messenger encryption key.
-
-    strict=True demands an exact, well-formed ML-KEM-768 hex key.
-    strict=False additionally accepts legacy/non-hex keys above the historical
-    length floor, so existing accounts keep working.
-    """
-    if not value or not isinstance(value, str):
-        return False
-    if is_valid_ml_kem_public_key(value):
-        return True
-    if strict:
-        return False
-    return len(value) >= LEGACY_MIN_KEY_LEN
+    return in_prime_order_subgroup(bytes.fromhex(value)[_ML_DSA_65_PUBLIC_KEY_BYTES:])

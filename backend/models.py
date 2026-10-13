@@ -53,23 +53,36 @@ class Nonce(Base):
 
 class User(Base):
     __tablename__ = "users"
+    # The two shapes crypto-core 4.0.0 defines (audit 2026-10-12 K-10), held by
+    # the database as well as by the login route: an address that is not a
+    # SHA-384 hex digest, or a key that is not a composite key, can only have
+    # come from data written before the cutover — which migration b4c5d6e7f8a9
+    # refuses to carry forward.
+    __table_args__ = (
+        CheckConstraint("address ~ '^[0-9a-f]{96}$'", name="ck_users_address"),
+        CheckConstraint(
+            "char_length(identity_public_key) = 3968", name="ck_users_identity_public_key"
+        ),
+    )
 
-    address = Column(String, primary_key=True)  # Identity public key (ML-DSA-44, lowercase hex)
-    # The key `address` names, which every signature by this identity is
-    # verified against (crypto-core 3.3.0). Equal to the address until 4.0.0
-    # makes the address a hash of a composite key (audit 2026-10-12 K-10); the
-    # login route checks the binding before it stores one. Survives account
-    # deletion: readers still verify a deleted identity's messages.
+    # SHA-384 of the identity key, 96 lowercase hex (crypto-core 4.0.0; it was
+    # the ML-DSA-44 key itself before). CHECKed in the database.
+    address = Column(String, primary_key=True)
+    # The key `address` names: a composite ML-DSA-65 + Ed25519 key, which every
+    # signature by this identity is verified against (audit 2026-10-12 K-10).
+    # The login route checks the binding, and that its Ed25519 half has order
+    # L, before it stores one. Survives account deletion: readers still verify
+    # a deleted identity's messages.
     identity_public_key = Column(String, nullable=False)
     username = Column(String, nullable=True)
-    encryption_public_key = Column(String, nullable=True)  # ML-KEM-768 public key (hex)
+    encryption_public_key = Column(String, nullable=True)  # X-Wing public key (hex)
     # Stamped whenever encryption_public_key changes for an existing identity
     # (audit S1: key-directory transparency). Lets clients surface "this contact's
     # key changed on <date>" and detect a malicious/compromised key swap.
     key_changed_at = Column(DateTime, nullable=True)
     # Self-signed binding of encryption_public_key to this identity (audit M-1):
-    # an ML-DSA-44 signature (base64) by `address` over the domain-separated
-    # key-attestation message. Peers verify it client-side before wrapping keys
+    # a composite signature (base64) by the identity over the domain-separated
+    # key-attestation message, which names the address and the key. Peers verify it client-side before wrapping keys
     # to this user, so the directory can't substitute a KEM key it controls.
     # Null = account predates attestations (clients show "unverified").
     encryption_key_attestation = Column(Text, nullable=True)
@@ -86,8 +99,8 @@ class User(Base):
     # those constraints, and `db.delete(instance)` would first NULL the very
     # sender_address / owner_address columns those signatures verify against.
     #
-    # What is left here is the address, which IS the ML-DSA public key and is
-    # public data embedded in every message the identity ever signed. So nothing
+    # What is left here is the address and the identity key it names: public
+    # data, embedded in or verifying every message the identity ever signed. So nothing
     # survives this that a hard delete would have removed.
     #
     # NULL = active. Every "is this a usable identity" question goes through

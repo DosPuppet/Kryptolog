@@ -7,7 +7,7 @@ import { useTheme } from '../context/ThemeContext';
 import { Shield, ArrowRight, Loader2, Sun, Moon, Lock, UserPlus, X, Upload, FileJson, Smartphone } from 'lucide-react';
 
 export default function Login() {
-    const { loginTrustKeys, loginLocalVault, createLocalVault, importLocalVault, isExtensionAvailable, hasLocalVault, unlockWithBiometrics, hasBiometrics, forgetLocalIdentity } = usePQC();
+    const { loginTrustKeys, loginLocalVault, createLocalVault, importLocalVault, isExtensionAvailable, hasLocalVault, unlockWithBiometrics, hasBiometrics, forgetLocalIdentity, discardOldVault } = usePQC();
     const { theme, toggleTheme } = useTheme();
     const navigate = useNavigate();
     const [loading, setLoading] = useState(false);
@@ -37,6 +37,8 @@ export default function Login() {
     // device, so without a way out the screen would offer nothing but "Unlock
     // Local Vault" for a key the server will never admit again.
     const [vaultKeyDeleted, setVaultKeyDeleted] = useState(false);
+    // The vault on this device was written by an older Kryptolog (4.0.0).
+    const [vaultIsOld, setVaultIsOld] = useState(false);
 
     // Open the vault modal in a specific mode ('unlock' | 'create' | 'import').
     const openVault = (mode) => {
@@ -127,6 +129,22 @@ export default function Login() {
         }
     };
 
+    const handleDiscardOldVault = async () => {
+        const ok = await confirmDialog({
+            title: 'Remove the old vault?',
+            message: 'It was created by an older Kryptolog version and its keys can no longer be used. '
+                + 'Removing it lets you create a new identity. This cannot be undone.',
+            confirmText: 'Remove it',
+            danger: true,
+        });
+        if (!ok) return;
+        discardOldVault();
+        setVaultIsOld(false);
+        setError(null);
+        setPassword('');
+        switchVaultMode('create');
+    };
+
     const switchVaultMode = (mode) => {
         setVaultMode(mode);
         setError(null);
@@ -167,7 +185,10 @@ export default function Login() {
             setVaultNeedsInvite(false);
         } catch (err) {
             console.error("Vault Action Error:", err);
-            if (err.code === 'ACCOUNT_DELETED') {
+            if (err.name === 'FormatError') {
+                setVaultIsOld(true);
+                setError(err.message);
+            } else if (err.code === 'ACCOUNT_DELETED') {
                 setVaultKeyDeleted(true);
                 setError(err.message);
             } else if (err.code === 'INVITE_REQUIRED') {
@@ -379,6 +400,21 @@ export default function Login() {
                                     />
                                 </div>
 
+                                {vaultIsOld && (
+                                    <div className="p-3 bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800 rounded-lg space-y-2">
+                                        <p className="text-xs text-amber-800 dark:text-amber-300">
+                                            This vault was created by an older version of Kryptolog,
+                                            before its keys became hybrid. They cannot be used any more.
+                                        </p>
+                                        <button
+                                            type="button"
+                                            onClick={handleDiscardOldVault}
+                                            className="w-full px-3 py-2 bg-amber-600 hover:bg-amber-500 text-white rounded-lg text-xs font-medium"
+                                        >
+                                            Remove the old vault and start fresh
+                                        </button>
+                                    </div>
+                                )}
                                 {vaultKeyDeleted && (
                                     <div className="p-3 bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-lg space-y-2">
                                         <p className="text-xs text-red-700 dark:text-red-300">

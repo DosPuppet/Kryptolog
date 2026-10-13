@@ -16,7 +16,7 @@ import { describe, it, expect, vi } from 'vitest';
 import { decryptWorkflowSecret } from '../components/multisig/decryptWorkflow';
 import { signMultisigWorkflow } from '../components/multisig/signWorkflow';
 
-const USER = { address: 'aa'.repeat(1312) };
+const USER = { address: 'aa'.repeat(48) };
 
 /** What `GET /multisig/workflows` returns: no `secret.encrypted_data`. */
 const summaryWorkflow = () => ({

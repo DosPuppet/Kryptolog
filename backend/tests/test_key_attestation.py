@@ -17,7 +17,7 @@ from conftest import (
     TEST_ENCRYPTION_KEY,
     TEST_ORIGIN,
     TEST_USER_ADDRESS,
-    MLDSA44Signer,
+    CompositeSigner,
     auth_header,
     get_nonce,
     identity_key_of,
@@ -127,7 +127,7 @@ class TestAttestationStorage:
         )
         # New encryption key + new attestation: the old one signed the old key
         # and must never survive the swap.
-        new_key = "1a" * 1184
+        new_key = "1a" * 1216
         new_att = "bb" * 100
         resp = login_with_attestation(client, TEST_USER_ADDRESS, new_key, new_att)
         assert resp.status_code == 200
@@ -153,7 +153,7 @@ class TestAttestationStorage:
                 "nonce": nonce,
                 "origin": TEST_ORIGIN,
                 "deployment": server_deployment(),
-                "encryption_public_key": "2b" * 1184,
+                "encryption_public_key": "2b" * 1216,
             },
         )
         assert resp.status_code == 400
@@ -197,11 +197,11 @@ class TestRealCrypto:
         # Restore the real verifier (conftest mocks it for endpoint tests).
         monkeypatch.setattr("auth.verify_identity_signature", _REAL_VERIFY)
 
-        signer = MLDSA44Signer()
+        signer = CompositeSigner()
         address = signer.address
-        enc_key = "3c" * 1184
+        enc_key = "3c" * 1216
 
-        att_msg = auth_module.encryption_key_attestation_message(enc_key)
+        att_msg = auth_module.encryption_key_attestation_message(address, enc_key)
         good_att = base64.b64encode(signer.sign(att_msg.encode("utf-8"))).decode()
 
         resp = login_with_attestation(client, address, enc_key, good_att, "RealAtt")
@@ -209,7 +209,7 @@ class TestRealCrypto:
         assert resp.json()["user"]["encryption_key_attestation"] == good_att
 
         # Same signature presented for a different KEM key must fail.
-        other_key = "4d" * 1184
+        other_key = "4d" * 1216
         resp = login_with_attestation(client, address, other_key, good_att)
         assert resp.status_code == 400
 

@@ -1,4 +1,4 @@
-import { encryptVault, decryptVaultWithKey, encryptVaultWithKey, deriveKey, vaultKdfOf, vaultPasswordProblem, generateAccount, signMessagePQC, decryptMessagePQC, unwrapSessionKey, generateSessionKey, wrapSessionKey, normalizeAccount } from '../utils/crypto';
+import { encryptVault, decryptVaultWithKey, encryptVaultWithKey, deriveKey, vaultKdfOf, vaultPasswordProblem, generateAccount, signMessagePQC, decryptMessagePQC, unwrapSessionKey, generateSessionKey, wrapSessionKey, parseAccount, FormatError } from '../utils/crypto';
 import { backupMethods } from './vaultBackup';
 import { biometricMethods } from './vaultBiometrics';
 
@@ -19,7 +19,7 @@ class VaultService {
         // key, so the next reader derives the same one.
         this._cachedKdf = null;
         this._cacheTimer = null;     // setTimeout reference for auto-expiry
-        this._signingKey = null;     // active account ML-DSA private key (message signing, audit S1)
+        this._signingKey = null;     // active account identity seed (message signing, audit S1)
         // In-flight WebAuthn ceremony, shared by concurrent callers (vaultBiometrics.js).
         this._bioInFlight = null;
         const savedTTL = parseInt(localStorage.getItem('kryptolog_key_cache_ttl') || '0', 10);
@@ -74,18 +74,15 @@ class VaultService {
         return !!localStorage.getItem('kryptolog_vault');
     }
 
-    // Helper to sanitize an account (remove private keys)
+    // Helper to sanitize an account: the seeds — the only secrets it holds —
+    // never stay in memory outside an operation that needs them.
     _sanitize(account) {
         return {
-            ...account,
-            mldsa: {
-                publicKey: account.mldsa.publicKey
-                // privateKey is REMOVED
-            },
-            mlkem: {
-                publicKey: account.mlkem.publicKey
-                // privateKey is REMOVED
-            }
+            id: account.id,
+            name: account.name,
+            createdAt: account.createdAt,
+            identity: { publicKey: account.identity.publicKey },
+            encryption: { publicKey: account.encryption.publicKey },
         };
     }
 
@@ -117,13 +114,13 @@ class VaultService {
         return this._normalizeVault(vault);
     }
 
-    // Map legacy kyber/dilithium account fields to mlkem/mldsa on load (compat,
-    // crypto-core v1.2.0). Applied wherever a vault is decrypted from storage or
-    // an import, so all downstream code sees only the current field names; the
-    // next _save() then re-persists the normalized shape.
+    // Every account is re-derived from its seeds on load (crypto-core 4.0.0,
+    // parseAccount), wherever a vault is decrypted from storage or an import:
+    // a stored public key or id that disagrees with its seed is refused, and
+    // so is an account an older Kryptolog wrote — by name, as a FormatError.
     _normalizeVault(vault) {
         if (vault && Array.isArray(vault.accounts)) {
-            vault.accounts = vault.accounts.map(normalizeAccount);
+            vault.accounts = vault.accounts.map(parseAccount);
         }
         return vault;
     }
@@ -240,6 +237,11 @@ class VaultService {
             // Password is intentionally NOT saved
             return true;
         } catch (e) {
+            // An older Kryptolog's vault is not a wrong password, and saying it
+            // was left a device with no way forward: every attempt answered
+            // "Incorrect password" (crypto-core 4.0.0). The caller offers to
+            // remove it instead.
+            if (e instanceof FormatError) throw e;
             console.error("Unlock failed", e);
             return false;
         }
@@ -260,7 +262,7 @@ class VaultService {
     }
 
     // Sign one chat message. The first call this session derives and caches the
-    // active account's ML-DSA private key (needs `password` or a cached vault
+    // active account's identity seed (needs `password` or a cached vault
     // key); subsequent calls sign silently. Kept separate from the per-op
     // `sign()` so messaging doesn't prompt on every message.
     async signMessage(body, password = null) {
@@ -269,7 +271,7 @@ class VaultService {
             const fullVault = await this._getFullVault(password);
             const account = fullVault.accounts.find(a => a.id === fullVault.activeAccountId);
             if (!account) throw new Error("Active account not found in vault");
-            this._signingKey = account.mldsa.privateKey;
+            this._signingKey = account.identity.seed;
         }
         return signMessagePQC(body, this._signingKey);
     }
@@ -287,9 +289,9 @@ class VaultService {
             name: a.name,
             isActive: a.id === this.vault.activeAccountId,
             createdAt: a.createdAt,
-            // Public keys are available if needed for UI, but no private keys
-            mldsaPublicKey: a.mldsa.publicKey,
-            mlkemPublicKey: a.mlkem.publicKey
+            // Public keys are available if needed for UI, never the seeds.
+            identityPublicKey: a.identity.publicKey,
+            encryptionPublicKey: a.encryption.publicKey
         }));
     }
 
@@ -386,7 +388,7 @@ class VaultService {
 
         if (!account) throw new Error("Active account not found in vault");
 
-        const signature = await signMessagePQC(message, account.mldsa.privateKey);
+        const signature = await signMessagePQC(message, account.identity.seed);
 
         return signature;
     }
@@ -399,7 +401,7 @@ class VaultService {
 
         if (!account) throw new Error("Active account not found in vault");
 
-        const plaintext = await decryptMessagePQC(encryptedData, account.mlkem.privateKey);
+        const plaintext = await decryptMessagePQC(encryptedData, account.encryption.seed);
 
         return plaintext;
     }
@@ -415,7 +417,7 @@ class VaultService {
         // We catch errors per message so one failure doesn't break all
         return await Promise.all(encryptedItems.map(async (item) => {
             try {
-                return await decryptMessagePQC(item, account.mlkem.privateKey);
+                return await decryptMessagePQC(item, account.encryption.seed);
             } catch (e) {
                 console.error("Failed to decrypt message:", e);
                 return "Error: Decryption Failed";
@@ -440,7 +442,7 @@ class VaultService {
         const account = fullVault.accounts.find(a => a.id === fullVault.activeAccountId);
         if (!account) throw new Error("Active account not found");
 
-        return await unwrapSessionKey(wrappedKey, account.mlkem.privateKey);
+        return await unwrapSessionKey(wrappedKey, account.encryption.seed);
     }
 
     async unwrapManySessionKeys(wrappedKeys, password) {
@@ -450,7 +452,7 @@ class VaultService {
         const account = fullVault.accounts.find(a => a.id === fullVault.activeAccountId);
         if (!account) throw new Error("Active account not found");
 
-        const privKey = account.mlkem.privateKey;
+        const privKey = account.encryption.seed;
 
         // We run these in parallel since we have the key
         return await Promise.all(wrappedKeys.map(async (blob) => {

@@ -1,4 +1,4 @@
-"""The signature-gated paths, with real ML-DSA-44 signatures end to end.
+"""The signature-gated paths, with real composite signatures end to end.
 
 Everywhere else conftest stubs the verifier, so a test proves the route's logic
 and not that the bytes it verifies are the bytes a client signs (audit
@@ -17,7 +17,7 @@ import pytest
 from conftest import (
     TEST_ENCRYPTION_KEY,
     TEST_ORIGIN,
-    MLDSA44Signer,
+    CompositeSigner,
     auth_header,
     get_nonce,
     identity_key_of,
@@ -34,10 +34,10 @@ def _sign(message: str, signer) -> str:
 
 
 class Identity:
-    """A real ML-DSA-44 key pair, logged in for real."""
+    """A real composite key pair, logged in for real."""
 
     def __init__(self, client, username):
-        self.signer = MLDSA44Signer()
+        self.signer = CompositeSigner()
         self.address = self.signer.address
         nonce = get_nonce(client, self.address)
         resp = client.post(
@@ -58,7 +58,7 @@ class Identity:
                 "deployment": server_deployment(),
                 "encryption_public_key": TEST_ENCRYPTION_KEY,
                 "encryption_key_attestation": self.sign(
-                    auth.encryption_key_attestation_message(TEST_ENCRYPTION_KEY)
+                    auth.encryption_key_attestation_message(self.address, TEST_ENCRYPTION_KEY)
                 ),
                 "username": username,
             },
@@ -103,7 +103,7 @@ class TestMultisigApproval:
         return resp.json()
 
     def _approval(self, wf, ciphertext="Y2lwaGVydGV4dA=="):
-        digest = hashlib.sha256(ciphertext.encode("utf-8")).hexdigest()
+        digest = hashlib.sha384(ciphertext.encode("utf-8")).hexdigest()
         return auth.multisig_approval_message(wf["id"], wf["secret_id"], digest)
 
     def test_a_genuine_approval_completes_the_workflow(self, client, people):
@@ -144,7 +144,7 @@ class TestConversationErase:
             "ts": 1760264400000,
             "seq": 0,
             "ct": "Y3Q=",
-            "sig": base64.b64encode(b"\x00" * 2420).decode(),
+            "sig": base64.b64encode(b"\x00" * 3373).decode(),
             "keys": {
                 "recip": {
                     "v": 3,
@@ -236,7 +236,7 @@ class TestConversationErase:
             ct=None,
             keys=stored["keys"],
         )
-        assert auth.verify_identity_signature(alice.address, body, stored["sig"])
+        assert auth.verify_identity_signature(alice.signer.identity_public_key, body, stored["sig"])
 
     def test_an_approval_for_another_conversation_is_refused(self, client, people):
         alice, bob = people

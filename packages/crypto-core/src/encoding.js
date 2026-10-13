@@ -1,7 +1,9 @@
 // Hex, digests and canonical JSON — the encodings every other module builds on.
 //
-// This module has no dependencies of its own, deliberately: everything else
-// here imports from it, so a cycle is impossible by construction.
+// This module has no dependencies inside the package, deliberately: everything
+// else here imports from it, so a cycle is impossible by construction.
+
+import { sha384 } from '@noble/hashes/sha2.js';
 
 // Helper: Uint8Array/Array <-> Hex. Deliberately Buffer-free so this package
 // stays a pure, runtime-agnostic ESM module (Node, browser SPA, MV3 extension)
@@ -108,6 +110,14 @@ export const sha256HexBytes = async (bytes) =>
 // one a caller wants is a real decision — hashing a File's contents and hashing
 // its name are both plausible and give different answers.
 export const sha256Hex = async (str) => sha256HexBytes(ENC.encode(str));
+
+// SHA-384 -> lowercase hex (Python hashlib.sha384().hexdigest()). Every digest
+// crypto-core 4 puts inside a signed body or an identifier is SHA-384: ANSSI
+// asks for at least that level next to category-3 primitives (audit
+// 2026-10-12 K-10). Synchronous, from noble, because an address is one of them
+// and code that adopts an identity cannot wait for WebCrypto to name it.
+export const sha384HexBytes = (bytes) => toHex(sha384(bytes));
+export const sha384Hex = async (str) => sha384HexBytes(ENC.encode(str));
 
 // Deterministic JSON with recursively sorted object keys. JSON.stringify would
 // NOT do: it preserves insertion order, so the sender and a verifier that

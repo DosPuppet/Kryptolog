@@ -18,6 +18,7 @@
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, act, screen, fireEvent } from '@testing-library/react';
+import { addressOf } from '../utils/crypto';
 
 const PASSWORD = 'correct horse battery staple';
 
@@ -37,8 +38,8 @@ const vault = {
     unlock: vi.fn(async () => true),
     getActiveAccount: () => ({
         name: 'Alice',
-        mldsa: { publicKey: 'a'.repeat(64) },
-        mlkem: { publicKey: 'b'.repeat(64) },
+        identity: { publicKey: 'a'.repeat(3968) },
+        encryption: { publicKey: 'b'.repeat(2432) },
     }),
     sign: vi.fn(async () => 'signature'),
     decryptMany: vi.fn(async () => ['plaintext']),
@@ -74,7 +75,7 @@ beforeEach(() => {
     global.fetch = vi.fn(async (url) =>
         /nonce/i.test(String(url))
             ? { ok: true, json: async () => ({ nonce: 'ab12', deployment: 'dev' }) }
-            : { ok: true, json: async () => ({ user: { address: 'a'.repeat(64) }, access_token: 't' }) }
+            : { ok: true, json: async () => ({ user: { address: addressOf('a'.repeat(3968)) }, access_token: 't' }) }
     );
 });
 afterEach(() => { vi.restoreAllMocks(); });

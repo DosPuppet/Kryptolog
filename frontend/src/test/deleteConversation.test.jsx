@@ -18,8 +18,8 @@ const { MessengerProvider, useMessengerContext } = await import('../context/Mess
 const { AuthProvider, useAuth } = await import('../context/AuthContext');
 const { PQCProvider } = await import('../context/PQCContext');
 
-const ME = { address: 'aa'.repeat(1312), username: 'me' };
-const BOB = { address: 'bb'.repeat(1312), username: 'bob', encryption_public_key: 'k' };
+const ME = { address: 'aa'.repeat(48), username: 'me' }; // 96-hex addresses (crypto-core 4.0.0)
+const BOB = { address: 'bb'.repeat(48), username: 'bob', encryption_public_key: 'k' };
 
 let messenger;
 function Probe() {

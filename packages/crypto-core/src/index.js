@@ -1,18 +1,21 @@
 // @kryptolog/crypto-core — the single source of truth for client-side crypto.
 //
-// NIST FIPS post-quantum primitives (@noble/post-quantum: pure JS, no WASM):
-//   ML-KEM-768  (FIPS 203) — key encapsulation, replaces Kyber768
-//   ML-DSA-44   (FIPS 204) — signatures,        replaces Dilithium2
-// noble is NOT independently audited (self-audited at 0.6.1) and does not claim
-// constant-time execution; it stays because no production-grade replacement runs
-// in all three browsers yet (see CLAUDE.md, "liboqs -> pyca/cryptography").
-// ML-DSA byte encoding is interop-verified against the server's OpenSSL, down to
-// the same public key from the same seed.
+// crypto-core 4 is HYBRID throughout (audit 2026-10-12 K-10), at NIST category
+// 3, the level ANSSI asks for — each primitive holds while either half does:
+//   identity    composite ML-DSA-65 + Ed25519, id-MLDSA65-Ed25519-SHA512
+//               (draft-ietf-lamps-pq-composite-sigs)                — composite.js
+//   encryption  X-Wing, ML-KEM-768 + X25519
+//               (draft-connolly-cfrg-xwing-kem)                     — kem.js
+//   address     SHA-384 of the identity key                          — identity.js
+// Both are pinned to their specifications' own vectors and checked against
+// the server's OpenSSL in both directions (test/hybrid.test.js).
 //
-// Hybrid primitives (3.2.0, additive — audit 2026-10-12 K-10), which 4.0.0
-// switches every format to:
-//   composite ML-DSA-65 + Ed25519 (draft-ietf-lamps-pq-composite-sigs) — composite.js
-//   X-Wing, ML-KEM-768 + X25519   (draft-connolly-cfrg-xwing-kem)     — kem.js
+// The primitives come from @noble/post-quantum and @noble/curves: pure JS, no
+// WASM. noble is NOT independently audited (post-quantum self-audited at 0.6.1)
+// and does not claim constant-time execution; it stays because no
+// production-grade replacement runs in all three browsers yet (see CLAUDE.md,
+// "liboqs -> pyca/cryptography"). Keys are stored as SEEDS, which is what any
+// other library — WebCrypto's ML-DSA/ML-KEM once it ships, OpenSSL — imports.
 //
 // This package is consumed by BOTH the SPA (frontend/) and the TrustKeys
 // extension (trustkeys/) via their respective Vite builds. There is exactly ONE
@@ -21,8 +24,9 @@
 // hand-maintained "KEEP IN SYNC" comment is now structural. The guarantee is
 // enforced by test/byte-compat.test.js (golden vectors + version guard), not by
 // a comment. Each app's src/utils/crypto.js is a thin shim that re-exports this
-// module and adds only its app-local glue (the `*PQC` aliases in the SPA, and
-// each app's own generateAccount() id policy).
+// module and adds only its app-local glue (the `*PQC` aliases in the SPA).
+// Accounts are generated here too since 4.0.0 (account.js): the two apps used
+// to give an account different ids.
 //
 // The implementation is split across the modules re-exported below, cut at the
 // section boundaries this file used to carry as banner comments. The public
@@ -33,12 +37,13 @@
 
 // Bumped whenever a wire/storage format or shared primitive changes; the
 // per-version history is in CHANGELOG.md next to this file.
-export const CRYPTO_CORE_VERSION = '3.3.0';
+export const CRYPTO_CORE_VERSION = '4.0.0';
 
 export * from './encoding.js';
 export * from './signing.js';
 export * from './pqc.js';
 export * from './identity.js';
+export * from './account.js';
 export * from './composite.js';
 export * from './kem.js';
 export * from './aead.js';

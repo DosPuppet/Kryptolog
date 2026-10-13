@@ -7,7 +7,7 @@ import schemas
 from database import get_db
 from dependencies import get_current_user, limiter
 from security import authorization
-from security.crypto_validation import LEGACY_MIN_KEY_LEN
+from security.crypto_validation import ENCRYPTION_KEY_HEX_LEN
 from security.usernames import InvalidUsername, normalize_username, username_taken
 
 router = APIRouter(prefix="/users", tags=["users"])
@@ -137,12 +137,12 @@ def list_users(
     query = query.filter(or_(*matches))
 
     if only_pqc:
-        # Messenger requires an ML-KEM encryption key. Filtered in SQL so paging
-        # stays correct; the floor (rather than the exact 2368-char length) keeps
-        # legacy accounts whose keys predate strict validation visible, matching
-        # is_usable_encryption_key's non-strict behaviour used by the endpoints
-        # that actually gate on capability.
-        query = query.filter(func.length(models.User.encryption_public_key) >= LEGACY_MIN_KEY_LEN)
+        # Messenger requires an encryption key. Filtered in SQL so paging stays
+        # correct; the exact length, since crypto-core 4.0.0 left no accounts
+        # whose keys predate strict validation (the legacy floor went with them).
+        query = query.filter(
+            func.length(models.User.encryption_public_key) == ENCRYPTION_KEY_HEX_LEN
+        )
 
     # A total order, so paging neither repeats nor skips a row.
     return (

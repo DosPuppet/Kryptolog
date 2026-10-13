@@ -23,7 +23,7 @@ import json
 import pathlib
 
 import pytest
-from conftest import TEST_ORIGIN, MLDSA44Signer, get_nonce, identity_key_of, server_deployment
+from conftest import TEST_ORIGIN, CompositeSigner, get_nonce, identity_key_of, server_deployment
 
 import auth
 
@@ -44,13 +44,13 @@ class TestSignedBodiesMatchTheSharedFixture:
         )
 
     def test_login_challenge_with_the_encryption_key_bound_in(self):
-        """The ML-KEM key is folded into the challenge (audit M-2), so the
+        """The encryption key is folded into the challenge (audit M-2), so the
         identity's signature authorizes that key."""
         v = _vectors()
         assert (
             auth._login_message(
                 v["nonce"],
-                encryption_public_key=v["mlkem_public_key"],
+                encryption_public_key=v["encryption_public_key"],
                 origin=v["origin"],
                 deployment=v["deployment"],
             )
@@ -60,14 +60,14 @@ class TestSignedBodiesMatchTheSharedFixture:
     def test_key_attestation(self):
         v = _vectors()
         assert (
-            auth.encryption_key_attestation_message(v["mlkem_public_key"])
+            auth.encryption_key_attestation_message(v["address"], v["encryption_public_key"])
             == v["bodies"]["key_attestation"]
         )
 
     def test_multisig_approval(self):
         v = _vectors()
         assert (
-            auth.multisig_approval_message(v["workflow_id"], v["secret_id"], v["ciphertext_sha256"])
+            auth.multisig_approval_message(v["workflow_id"], v["secret_id"], v["ciphertext_sha384"])
             == v["bodies"]["multisig_approval"]
         )
 
@@ -141,14 +141,16 @@ class TestSignedBodiesMatchTheSharedFixture:
     def test_a_conversation_erase_names_its_conversation_and_nothing_else_spells_it(self):
         v = _vectors()
         common = dict(origin=v["origin"], deployment=v["deployment"])
-        dm = auth.conversation_erase_message(v["nonce"], "dm", "ab", ["dm:1"], **common)
-        assert dm != auth.conversation_erase_message(v["nonce"], "dm", "ac", ["dm:1"], **common)
+        a, b = "ab" * 48, "ac" * 48  # two addresses (crypto-core 4.0.0: 96 hex)
+        dm = auth.conversation_erase_message(v["nonce"], "dm", a, ["dm:1"], **common)
+        assert dm != auth.conversation_erase_message(v["nonce"], "dm", b, ["dm:1"], **common)
         assert dm != auth.conversation_erase_message(v["nonce"], "group", "ab", ["dm:1"], **common)
         for kind, conversation in (
-            ("dm", "AB"),
-            ("dm", "ab\nnonce=00"),
+            ("dm", a.upper()),
+            ("dm", a + "\nnonce=00"),
+            ("dm", "ab"),  # hex, but not an address
             ("group", "x y"),
-            ("x", "ab"),
+            ("x", a),
         ):
             with pytest.raises(auth.NonCanonicalSignedBody):
                 auth.conversation_erase_message(v["nonce"], kind, conversation, [], **common)
@@ -291,7 +293,7 @@ class TestTheVectorsAreWhatWeThinkTheyAre:
             )
             + "}"
         )
-        digest = hashlib.sha256(canon.encode("utf-8")).hexdigest()
+        digest = hashlib.sha384(canon.encode("utf-8")).hexdigest()
         assert f"keysh={digest}" in v["bodies"]["message"]
 
     def test_binding_the_encryption_key_changes_the_bytes(self):
@@ -321,9 +323,9 @@ class TestARealLoginSignatureThroughTheEndpoint:
     @pytest.mark.real_signatures
     def test_a_genuine_signature_over_the_shared_body_logs_in(self, client):
         v = _vectors()
-        enc_key = v["mlkem_public_key"]
+        enc_key = v["encryption_public_key"]
 
-        signer = MLDSA44Signer()
+        signer = CompositeSigner()
         address = signer.address
         nonce = get_nonce(client, address)
         # Built the way the SPA builds it: crypto-core's loginChallengeBody
@@ -338,7 +340,7 @@ class TestARealLoginSignatureThroughTheEndpoint:
             ),
             signer,
         )
-        attestation = self._sign(auth.encryption_key_attestation_message(enc_key), signer)
+        attestation = self._sign(auth.encryption_key_attestation_message(address, enc_key), signer)
 
         resp = client.post(
             "/auth/login",
@@ -366,7 +368,7 @@ class TestARealLoginSignatureThroughTheEndpoint:
         stale nonce and submitting THAT is caught earlier, by the nonce lookup,
         which would prove nothing about the signature.
         """
-        signer = MLDSA44Signer()
+        signer = CompositeSigner()
         address = signer.address
         nonce = get_nonce(client, address)
         signature = self._sign(
@@ -392,7 +394,7 @@ class TestARealLoginSignatureThroughTheEndpoint:
         """M-2: signing the bare challenge must not authorize an ML-KEM key, or
         a network attacker could attach one of their own to the login."""
         v = _vectors()
-        signer = MLDSA44Signer()
+        signer = CompositeSigner()
         address = signer.address
         nonce = get_nonce(client, address)
         signature = self._sign(
@@ -409,7 +411,7 @@ class TestARealLoginSignatureThroughTheEndpoint:
                 "nonce": nonce,
                 "origin": TEST_ORIGIN,
                 "deployment": server_deployment(),
-                "encryption_public_key": v["mlkem_public_key"],
+                "encryption_public_key": v["encryption_public_key"],
                 "encryption_key_attestation": "fake_attestation_for_testing",
             },
         )
@@ -433,7 +435,7 @@ class TestARealLoginSignatureThroughTheEndpoint:
         accepts any origin, which is why this sets it."""
         monkeypatch.setenv("ALLOWED_ORIGINS", TEST_ORIGIN)
         server = {"origin": TEST_ORIGIN, "deployment": server_deployment(), **signed_for}
-        signer = MLDSA44Signer()
+        signer = CompositeSigner()
         address = signer.address
         nonce = get_nonce(client, address)
         signature = self._sign(auth._login_message(nonce, **server), signer)

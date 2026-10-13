@@ -5,27 +5,9 @@
 // structural (one source) and enforced by that package's
 // test/byte-compat.test.js, NOT by a hand-maintained "KEEP IN SYNC" comment.
 //
-// This file only adds extension-local glue: generateAccount() uses a random UUID
-// as the local account id (used for the wallet's account list / activeAccountId),
-// which differs from the SPA's public-key-as-id policy, so it cannot live in the
-// shared core. The extension signs the exact bytes the page hands it, so the H1
-// domain-separation wrapper is applied at the SPA's call sites, not here.
+// Nothing extension-local is left here. generateAccount() used to be: the
+// extension gave an account a random UUID where the SPA used its key, so one
+// identity was two different accounts depending on which app had exported it.
+// Since crypto-core 4.0.0 an account's id is its address in both, and the one
+// generateAccount lives in crypto-core.
 export * from '@kryptolog/crypto-core';
-
-import {
-    generateMlKemKeyPair,
-    generateMlDsaKeyPair,
-} from '@kryptolog/crypto-core';
-
-export const generateAccount = async (name) => {
-    const mlkem = await generateMlKemKeyPair();
-    const mldsa = await generateMlDsaKeyPair();
-
-    return {
-        id: crypto.randomUUID(),
-        name,
-        mlkem,
-        mldsa,
-        createdAt: Date.now(),
-    };
-};

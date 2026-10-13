@@ -16,7 +16,13 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, act, fireEvent } from '@testing-library/react';
 
 const PASSWORD = 'correct horse battery staple';
-const ADDRESS = 'a'.repeat(64);
+import { addressOf } from '../utils/crypto';
+
+// Keys of the right SHAPE (crypto-core 4.0.0: a 3968-hex composite identity
+// key, a 2432-hex X-Wing key); the addresses are what they name.
+const IDENTITY_KEY = 'a'.repeat(3968);
+const ADDRESS = addressOf(IDENTITY_KEY);
+const BOB_ADDRESS = addressOf('c'.repeat(3968));
 
 const vault = {
     isLocked: false,
@@ -29,15 +35,15 @@ const vault = {
     hasCachedSigningKey: () => true,
     unlock: vi.fn(async () => true),
     getActiveAccount: () => ({
-        id: 'acct-1',
+        id: ADDRESS,
         name: 'Alice',
-        mldsa: { publicKey: ADDRESS },
-        mlkem: { publicKey: 'b'.repeat(64) },
+        identity: { publicKey: IDENTITY_KEY },
+        encryption: { publicKey: 'b'.repeat(2432) },
     }),
     sign: vi.fn(async () => 'deletion-signature'),
     signMessage: vi.fn(async () => 'redaction-signature'),
     // Local-vault cleanup after an erase.
-    getAccounts: vi.fn(() => [{ id: 'acct-1' }]),
+    getAccounts: vi.fn(() => [{ id: ADDRESS }]),
     deleteAccount: vi.fn(async () => {}),
     wipeVault: vi.fn(),
 };
@@ -448,21 +454,21 @@ describe('what an erase leaves on the device', () => {
     // be unlocked into a refusal — and while it is there the login screen
     // offers nothing but "Unlock Local Vault".
     it('removes only the erased identity when the vault holds others', async () => {
-        vault.getAccounts.mockReturnValue([{ id: 'acct-1' }, { id: 'acct-2' }]);
+        vault.getAccounts.mockReturnValue([{ id: ADDRESS }, { id: BOB_ADDRESS }]);
         stubServer();
         await mount();
         await withPasswordPrompts(() => api.deleteServerAccount('erase', { forgetVault: true }));
 
         // A vault can hold several identities and only one of them just became
         // useless. Wiping the lot would destroy keys the user still needs.
-        expect(vault.deleteAccount).toHaveBeenCalledWith('acct-1', null);
+        expect(vault.deleteAccount).toHaveBeenCalledWith(ADDRESS, null);
         expect(vault.wipeVault).not.toHaveBeenCalled();
     });
 
     it('wipes the vault only when the erased identity was the last one', async () => {
         // deleteAccount refuses to remove the final account, and an empty but
         // present vault would still block the "create" path on the login screen.
-        vault.getAccounts.mockReturnValue([{ id: 'acct-1' }]);
+        vault.getAccounts.mockReturnValue([{ id: ADDRESS }]);
         stubServer();
         await mount();
         await withPasswordPrompts(() => api.deleteServerAccount('erase', { forgetVault: true }));
@@ -498,7 +504,8 @@ describe('an erase performed with the keys in the extension', () => {
     // which is what used to select "wipe the whole vault" (audit 2026-09-12
     // M-1). The keys it holds are a different, still-valid identity's, and they
     // exist nowhere else unless the user exported a backup.
-    const EXTENSION_ADDRESS = 'e'.repeat(64);
+    const EXTENSION_KEY = 'e'.repeat(3968);
+    const EXTENSION_ADDRESS = addressOf(EXTENSION_KEY);
     const localActiveAccount = vault.getActiveAccount;
 
     afterEach(() => {
@@ -511,8 +518,8 @@ describe('an erase performed with the keys in the extension', () => {
             connect: vi.fn(async () => true),
             getAccount: vi.fn(async () => ({
                 address: EXTENSION_ADDRESS,
-                identityPublicKey: EXTENSION_ADDRESS,
-                encryptionPublicKey: 'f'.repeat(64),
+                identityPublicKey: EXTENSION_KEY,
+                encryptionPublicKey: 'f'.repeat(2432),
                 name: 'ext-user',
             })),
             sign: vi.fn(async () => 'extension-signature'),
@@ -579,12 +586,12 @@ describe('a vault open on a different identity', () => {
         // A "is the vault open?" check passes here; only comparing the ADDRESS
         // catches it, and the keys are not recoverable from a wrong guess.
         vault.getActiveAccount = () => ({
-            id: 'acct-2',
+            id: BOB_ADDRESS,
             name: 'Bob',
-            mldsa: { publicKey: 'c'.repeat(64) },
-            mlkem: { publicKey: 'd'.repeat(64) },
+            identity: { publicKey: 'c'.repeat(3968) },
+            encryption: { publicKey: 'd'.repeat(2432) },
         });
-        vault.getAccounts.mockReturnValue([{ id: 'acct-1' }, { id: 'acct-2' }]);
+        vault.getAccounts.mockReturnValue([{ id: ADDRESS }, { id: BOB_ADDRESS }]);
 
         await expect(api.forgetLocalIdentity()).resolves.toBe('none');
         expect(vault.deleteAccount).not.toHaveBeenCalled();

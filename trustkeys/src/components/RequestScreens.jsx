@@ -26,10 +26,11 @@ const describeSignature = ({ kind, details = {}, origin }) => {
       return {
         title: 'Delete account',
         danger: true,
-        lines: details.mode === 'erase'
+        lines: (details.mode === 'erase'
           ? [`Permanently ERASE this account on ${origin}.`, 'Your content is removed and this key can never be used there again.',
             `${details.redactions} message(s) will be redacted.`]
-          : [`Remove this account from ${origin}.`, 'Logging in again with this key brings it back.'],
+          : [`Remove this account from ${origin}.`, 'Logging in again with this key brings it back.'])
+          .concat(details.address ? [`Account: ${details.address}`] : []),
       };
     case 'conversation-erase':
       return {
@@ -47,7 +48,7 @@ const describeSignature = ({ kind, details = {}, origin }) => {
       return {
         title: 'Approve workflow',
         lines: [`Approve multisig workflow #${details.workflowId} (secret #${details.secretId}) on ${origin}.`,
-          `Content fingerprint: ${String(details.ciphertextSha256).slice(0, 16)}…`],
+          `Content fingerprint: ${String(details.ciphertextSha384).slice(0, 16)}…`],
       };
     case 'content':
       return { title: 'Sign document', lines: [`${origin} asks you to sign this document:`], text: details.text };

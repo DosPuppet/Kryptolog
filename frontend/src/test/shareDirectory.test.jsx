@@ -15,15 +15,18 @@ vi.mock('../context/AuthContext', () => ({
 
 const { default: ShareModal } = await import('../components/dashboard/ShareModal');
 
+// Contacts are keyed by address: 96 hex since crypto-core 4.0.0.
+const ALICE = 'aa'.repeat(48);
+const BOB = 'bb'.repeat(48);
 const directory = {
-    aa: { address: 'aa', username: 'alice', encryption_public_key: 'k-a' },
-    bb: { address: 'bb', username: 'bob', encryption_public_key: 'k-b', deleted: true },
+    [ALICE]: { address: ALICE, username: 'alice', encryption_public_key: 'k-a' },
+    [BOB]: { address: BOB, username: 'bob', encryption_public_key: 'k-b', deleted: true },
 };
 
 beforeEach(() => {
     localStorage.clear();
     global.fetch = vi.fn(async (url) => {
-        const addr = String(url).match(/\/users\/([a-z]+)$/)?.[1];
+        const addr = String(url).match(/\/users\/([0-9a-f]+)$/)?.[1];
         if (addr && directory[addr]) return { ok: true, status: 200, json: async () => directory[addr] };
         return { ok: true, status: 200, json: async () => [] };
     });
@@ -38,13 +41,13 @@ const open = async () => {
 
 describe('ShareModal with nothing typed', () => {
     it('offers the pinned contacts, resolved by address, and never lists the directory', async () => {
-        trustContactKey('aa', 'k-a');
-        trustContactKey('bb', 'k-b');
+        trustContactKey(ALICE, 'k-a');
+        trustContactKey(BOB, 'k-b');
         await open();
 
         const urls = global.fetch.mock.calls.map(([url]) => String(url));
         expect(urls.some((u) => /\/users(\?|$)/.test(u))).toBe(false);
-        expect(urls.filter((u) => /\/users\/(aa|bb)$/.test(u))).toHaveLength(2);
+        expect(urls.filter((u) => u.endsWith(`/users/${ALICE}`) || u.endsWith(`/users/${BOB}`))).toHaveLength(2);
         expect(screen.getByText('alice')).toBeTruthy();
         expect(screen.queryByText('bob')).toBeNull(); // deleted: nobody to wrap to
     });

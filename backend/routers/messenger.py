@@ -25,7 +25,7 @@ from database import SessionLocal, get_db
 from dependencies import get_current_user, limiter, user_for_token
 from security import authorization
 from security.audit_log import audit_event
-from security.crypto_validation import is_usable_encryption_key
+from security.crypto_validation import is_valid_encryption_key
 from utils.clock import to_wire_utc
 from utils.push import display_name, schedule_push
 from websocket_manager import SESSION_REVOKED, manager
@@ -61,7 +61,7 @@ def send_message(
         raise HTTPException(status_code=404, detail="Recipient not found")
 
     # Validate PQC key for recipient (Messenger requires PQC for all participants)
-    if not is_usable_encryption_key(recipient.encryption_public_key):
+    if not is_valid_encryption_key(recipient.encryption_public_key):
         raise HTTPException(
             status_code=400, detail="Recipient is not Messenger-capable (Missing PQC key)"
         )

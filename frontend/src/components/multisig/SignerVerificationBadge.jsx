@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { Shield, AlertTriangle } from 'lucide-react';
-import { verifyIdentitySignature, domainSeparate, SIGNING_CONTEXT, sha256Hex, multisigApprovalMessage } from '../../utils/crypto';
+import { verifyIdentitySignature, domainSeparate, SIGNING_CONTEXT, sha384Hex, multisigApprovalMessage } from '../../utils/crypto';
 import { useAuth } from '../../context/AuthContext';
 import { identityKeyFor } from '../../services/identityKeys';
 
@@ -23,7 +23,7 @@ const SignerVerificationBadge = ({ signer, verifyTarget }) => {
             // Rebuild the exact domain-separated bytes the signer signed.
             let message;
             if (verifyTarget.kind === 'approval') {
-                const ctHash = await sha256Hex(verifyTarget.encryptedData);
+                const ctHash = await sha384Hex(verifyTarget.encryptedData);
                 message = multisigApprovalMessage(verifyTarget.workflowId, verifyTarget.secretId, ctHash);
             } else {
                 message = domainSeparate(SIGNING_CONTEXT.CONTENT, verifyTarget.content);

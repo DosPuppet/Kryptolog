@@ -19,6 +19,7 @@ from conftest import (
     TEST_ENCRYPTION_KEY,
     auth_header,
     identity_key_of,
+    synthetic_address,
 )
 
 import models
@@ -117,7 +118,7 @@ class TestSecretListPaging:
 
         # Grantees must exist: access_grants.grantee_address is an FK.
         for i in range(120):
-            addr = f"{i:04x}" * 656  # 2624 hex chars, the address shape
+            addr = synthetic_address(f"grantee-{i}")
             db_session.add(
                 models.User(
                     address=addr,
@@ -305,7 +306,7 @@ class TestConversationListPaging:
 
         partners = []
         for i in range(MANY):
-            addr = f"{i:04x}" * 656
+            addr = synthetic_address(f"partner-{i}")
             db_session.add(
                 models.User(
                     address=addr,

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { generateTransferCode, encryptVault, decryptVault } from '../utils/crypto';
+import { generateTransferCode, encryptVault, decryptVault, generateAccount } from '../utils/crypto';
 import { packHandoff, unpackHandoff } from '../services/transfer';
 
 describe('device key transfer helpers', () => {
@@ -26,7 +26,8 @@ describe('device key transfer helpers', () => {
     });
 
     it('encrypted vault blob round-trips with the transfer passphrase', async () => {
-        const vault = { accounts: [{ id: 'a', name: 'A', mlkem: { privateKey: 'ab' }, mldsa: { privateKey: 'cd' } }], activeAccountId: 'a' };
+        const account = generateAccount('A');
+        const vault = { accounts: [account], activeAccountId: account.id };
         const pass = generateTransferCode();
         const blob = await encryptVault(vault, pass);
         // Server-relayed/serialized form.

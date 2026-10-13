@@ -261,9 +261,6 @@ const HANDLERS = {
         // Silent, domain-restricted chat-message signing (audit S1).
         fn: ({ request, sender, sendResponse }) => crypto.handleSignMessage(request, sender, sendResponse),
     },
-    VERIFY: {
-        fn: ({ request }) => crypto.handleVerify(request),
-    },
     GET_KEY_ATTESTATION: {
         origin: 'unlessInternal',
         // Same gating as GET_ACTIVE_ACCOUNT. No popup — see the handler comment.

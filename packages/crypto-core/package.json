@@ -1,9 +1,9 @@
 {
   "name": "@kryptolog/crypto-core",
-  "version": "3.3.0",
+  "version": "4.0.0",
   "private": true,
   "type": "module",
-  "description": "Single source of truth for Kryptolog client-side PQC crypto (ML-KEM-768 + ML-DSA-44), shared by the SPA and the TrustKeys extension.",
+  "description": "Single source of truth for Kryptolog client-side hybrid crypto (composite ML-DSA-65 + Ed25519, X-Wing), shared by the SPA and the TrustKeys extension.",
   "main": "src/index.js",
   "module": "src/index.js",
   "exports": {
