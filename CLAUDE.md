@@ -1243,7 +1243,7 @@ single crypto-core **3.0.0** cutover (lots 4–6); hybridization is a later **4.
 | 8 | Realtime and push availability | P1 | done — `4967000` |
 | 9 | Operations: audit log, retention, backup, health, conversation deletion | P2 | done — `9bbcc05` |
 | 10 | Assurance and documentation | P2 | done — `3d9421c` |
-| 11 | Hybridization, crypto-core 4.0.0 | P3 | done on `dev` — `e31b0c0`..`e96e5e1` + docs (un-postponed 2026-10-13; see "Lot 11" below) |
+| 11 | Hybridization, crypto-core 4.0.0 | P3 | done on branch `hybrid` — `e31b0c0`..`12e8cfb` (un-postponed 2026-10-13; see "Lot 11" below) |
 
 ### Lot 1 — supply chain
 
@@ -1742,7 +1742,7 @@ with every suite, both builds, every lint/format/drift gate — and, from lot 10
 the browser suite — green. Lot 11 (hybrid crypto-core 4.0.0) was postponed at
 the user's decision, with lot 12's budget items (forward secrecy, code-delivery
 integrity, an external audit). *(Lot 11 un-postponed and done on 2026-10-13,
-branch `dev` — see the end of this file. Lot 12 is still postponed.)* Final counts: backend **668**, frontend **270**,
+branch `hybrid` — see the end of this file. Lot 12 is still postponed.)* Final counts: backend **668**, frontend **270**,
 crypto-core **67**, extension **128**, e2e **1** (the critical path).
 
 **Merged to `main` on 2026-10-12** (fast-forward, `238ee15`..`c347d2a`: lots
@@ -1837,7 +1837,7 @@ tests across five files; dropping the startup probe fails its gate.
 branch `pqc-pyca-2026-10` is still around at the merged commit). **Not pushed** —
 the first CI run without liboqs has not happened yet.
 
-## Lot 11 — hybrid cryptography, crypto-core 4.0.0 — 2026-10-13, branch `dev`
+## Lot 11 — hybrid cryptography, crypto-core 4.0.0 — 2026-10-13, branch `hybrid`
 
 The 2026-10-12 audit's **K-10**, un-postponed, and ANSSI's level with it: its
 December 2023 follow-up paper asks for NIST category 3 or 5, and ML-DSA-44 was
@@ -1859,7 +1859,7 @@ digest the cutover introduced follows from ANSSI's hash guidance.
 | 11b | backend `_verify_composite`, `security/ed25519_subgroup.py`, noble <-> OpenSSL fixture (additive) | `927b00a` |
 | 11c | crypto-core 3.3.0: verify against the identity KEY the address names; `users.identity_public_key` | `a8f1004` |
 | 11d | crypto-core 4.0.0: the cutover, one commit | `e96e5e1` |
-| 11e | documentation | this commit |
+| 11e | documentation | `12e8cfb` |
 
 **Why 11d is one commit:** the apps import crypto-core live and the fixtures
 and size constants are shared across languages, so no intermediate state of the
@@ -1922,7 +1922,8 @@ equivalent ones. Counts: backend **720**, frontend **289**, crypto-core
 gate, at `e96e5e1`.
 
 **Not done, and needed before relying on it:**
-- **Not merged, not pushed.** No CI run has seen lots 1–11.
+- **On branch `hybrid`** (created from `dev` at `12e8cfb`, which carries the
+  same commits). **Not merged, not pushed.** No CI run has seen lots 1–11.
 - **Deploy all three together on an empty database** (DEPLOYMENT.md). Every
   user recreates their identity; proofs exported before are refused.
 - **The approval windows and the TrustKeys Dashboard on 4.0.0 have not been
