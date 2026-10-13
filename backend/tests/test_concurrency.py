@@ -20,6 +20,7 @@ from conftest import (
     TestingSessionLocal,
     auth_header,
     do_login,
+    identity_key_of,
     server_deployment,
 )
 from fastapi.testclient import TestClient
@@ -113,6 +114,7 @@ class TestNonceIsSingleUse:
         nonce = client.get(f"/auth/nonce/{TEST_USER_ADDRESS}").json()["nonce"]
         body = {
             "address": TEST_USER_ADDRESS,
+            "identity_public_key": identity_key_of(TEST_USER_ADDRESS),
             "signature": "fake_signature_for_testing",
             "nonce": nonce,
             "origin": TEST_ORIGIN,
@@ -140,6 +142,7 @@ class TestNonceIsSingleUse:
                 "/auth/login",
                 json={
                     "address": TEST_USER_ADDRESS,
+                    "identity_public_key": identity_key_of(TEST_USER_ADDRESS),
                     "signature": "wrong",
                     "nonce": nonce,
                     "origin": TEST_ORIGIN,
@@ -153,6 +156,7 @@ class TestNonceIsSingleUse:
             "/auth/login",
             json={
                 "address": TEST_USER_ADDRESS,
+                "identity_public_key": identity_key_of(TEST_USER_ADDRESS),
                 "signature": "fake_signature_for_testing",
                 "nonce": nonce,
                 "origin": TEST_ORIGIN,
@@ -179,6 +183,7 @@ class TestNonceIsSingleUse:
             "/auth/login",
             json={
                 "address": TEST_USER_ADDRESS,
+                "identity_public_key": identity_key_of(TEST_USER_ADDRESS),
                 "signature": "fake_signature_for_testing",
                 "nonce": nonce,
                 "origin": TEST_ORIGIN,

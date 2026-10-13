@@ -35,6 +35,7 @@ const identity = async () => {
     const kem = await generateMlKemKeyPair();
     return {
         address: dsa.publicKey,
+        identity_public_key: dsa.publicKey,
         username: 'U',
         encryption_public_key: kem.publicKey,
         encryption_key_attestation: await attestEncryptionKey(kem.publicKey, dsa.privateKey),

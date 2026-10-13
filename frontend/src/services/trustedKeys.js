@@ -117,9 +117,10 @@ export const importTrustStores = (data) => {
 // --- Encryption-key attestation (audit M-1) ---
 // TOFU above detects a key CHANGE; the attestation proves the key BINDING:
 // the contact self-signed their ML-KEM key with their identity (ML-DSA) key,
-// and the address IS that identity key, so verification needs no trusted
-// third party. A directory that substitutes a KEM key it controls cannot
-// forge this signature.
+// and that key is checked to be the one their address names (crypto-core
+// 3.3.0), so verification needs no trusted third party. A directory that
+// substitutes a KEM key it controls cannot forge this signature, and one that
+// substitutes the identity key too is refused by the address check.
 
 // 'verified'   — attestation present and cryptographically valid
 // 'unattested' — no attestation. Refused by every gate since crypto-core 3.0.0
@@ -127,13 +128,19 @@ export const importTrustStores = (data) => {
 //                can say WHY a contact cannot be written to.
 // 'invalid'    — attestation present but WRONG: treat as an active key-swap
 //                attack and refuse to encrypt to this key.
+//
+// A record served without its identity key has no proof either, so it gets the
+// same verdict as one served without its attestation — and the same downgrade
+// rule below, so a key that disappears from the record is no way around it.
 export const attestationStatus = async (user) => {
     if (!user?.encryption_public_key || !user?.encryption_key_attestation) return 'unattested';
-    const ok = await verifyEncryptionKeyAttestation(
-        norm(user.address),
-        user.encryption_public_key,
-        user.encryption_key_attestation,
-    );
+    if (!user?.identity_public_key) return 'unattested';
+    const ok = await verifyEncryptionKeyAttestation({
+        address: norm(user.address),
+        identityPublicKey: user.identity_public_key,
+        encryptionPublicKey: user.encryption_public_key,
+        attestation: user.encryption_key_attestation,
+    });
     return ok ? 'verified' : 'invalid';
 };
 

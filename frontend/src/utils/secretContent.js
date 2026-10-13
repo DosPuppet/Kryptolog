@@ -6,6 +6,36 @@
 // is a data question, kept here so the component that renders it does not have
 // to nest two JSON.parse attempts inside its render.
 
+import { addressOf, verifyIdentitySignature, domainSeparate, SIGNING_CONTEXT } from './crypto';
+
+/**
+ * Verify a signed document against the key it carries, offline.
+ *
+ * `signerPublicKey` is the signer's IDENTITY key (crypto-core 3.3.0), and the
+ * address it names is derived from it rather than read from the document, so
+ * the address this returns is the one the signature actually proves. Who that
+ * address belongs to is a separate question — the caller's — and holding SOME
+ * key is all a valid signature here proves (audit L-3).
+ *
+ * Returns { valid, signerAddress }; signerAddress is null when the key is not
+ * one at all.
+ */
+export async function verifySignedDocument({ content, signature, signerPublicKey }) {
+    let signerAddress;
+    try {
+        signerAddress = addressOf(signerPublicKey);
+    } catch {
+        return { valid: false, signerAddress: null };
+    }
+    const valid = await verifyIdentitySignature({
+        address: signerAddress,
+        identityPublicKey: signerPublicKey,
+        message: domainSeparate(SIGNING_CONTEXT.CONTENT, content),
+        signature,
+    });
+    return { valid, signerAddress };
+}
+
 /**
  * Unwrap a signed document, if that is what this is.
  *

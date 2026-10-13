@@ -25,6 +25,17 @@ export default defineConfig(({ mode }) => {
     resolve: {
       preserveSymlinks: true,
     },
+    // crypto-core is linked SOURCE, not a dependency: never pre-bundle it. The
+    // dev server caches pre-bundled deps until the LOCKFILE changes, and a
+    // `file:` package's source changing does not touch it — so `vite` kept
+    // serving the crypto-core it first saw, and the SPA failed to load with
+    // "does not provide an export named 'addressOf'" after 3.3.0 added one
+    // (found by the e2e run, 2026-10-13). The one copy of every primitive is
+    // only one copy if the dev server reads it too. Its @noble deps are ESM
+    // and still pre-bundled on their own.
+    optimizeDeps: {
+      exclude: ['@kryptolog/crypto-core'],
+    },
     plugins: [
       react(),
       {

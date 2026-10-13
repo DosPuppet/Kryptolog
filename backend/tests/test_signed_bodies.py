@@ -23,7 +23,7 @@ import json
 import pathlib
 
 import pytest
-from conftest import TEST_ORIGIN, MLDSA44Signer, get_nonce, server_deployment
+from conftest import TEST_ORIGIN, MLDSA44Signer, get_nonce, identity_key_of, server_deployment
 
 import auth
 
@@ -344,6 +344,7 @@ class TestARealLoginSignatureThroughTheEndpoint:
             "/auth/login",
             json={
                 "address": address,
+                "identity_public_key": identity_key_of(address),
                 "signature": signature,
                 "nonce": nonce,
                 "origin": TEST_ORIGIN,
@@ -377,6 +378,7 @@ class TestARealLoginSignatureThroughTheEndpoint:
             "/auth/login",
             json={
                 "address": address,
+                "identity_public_key": identity_key_of(address),
                 "signature": signature,
                 "nonce": nonce,
                 "origin": TEST_ORIGIN,
@@ -402,6 +404,7 @@ class TestARealLoginSignatureThroughTheEndpoint:
             "/auth/login",
             json={
                 "address": address,
+                "identity_public_key": identity_key_of(address),
                 "signature": signature,
                 "nonce": nonce,
                 "origin": TEST_ORIGIN,
@@ -437,7 +440,13 @@ class TestARealLoginSignatureThroughTheEndpoint:
 
         resp = client.post(
             "/auth/login",
-            json={"address": address, "signature": signature, "nonce": nonce, **server},
+            json={
+                "address": address,
+                "identity_public_key": identity_key_of(address),
+                "signature": signature,
+                "nonce": nonce,
+                **server,
+            },
         )
         assert resp.status_code == 400, resp.text
         assert "signed for another" in resp.json()["detail"]

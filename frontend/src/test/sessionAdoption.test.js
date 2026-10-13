@@ -25,13 +25,16 @@ import { sessionKeyId, mayAdoptSession } from '../context/messenger/sessionScope
 
 const CHANNEL = 'cccccccc-0000-4000-8000-000000000001';
 
+// The user record the server embeds in a delivered row (crypto-core 3.3.0).
+const senderRecord = (who) => ({ address: who.address, identity_public_key: who.identityPublicKey });
+
 let me, alice, bob, mallory;
 
 beforeAll(async () => {
     [me, alice, bob, mallory] = await Promise.all(
         Array.from({ length: 4 }, async () => {
             const { publicKey, privateKey } = await generateMlDsaKeyPair();
-            return { address: publicKey.toLowerCase(), privateKey };
+            return { address: publicKey.toLowerCase(), identityPublicKey: publicKey, privateKey };
         })
     );
 }, 60000);
@@ -47,7 +50,7 @@ const dmMessage = async ({ id, from, to, sid, sKey, text = 'hello', blob = null,
         const body = await messageSigningBody({ from: from.address, conv: to.address, sid, ts, seq, keys, ct });
         payload.sig = await signMessagePQC(body, (signWith || from).privateKey);
     }
-    return { id, sender_address: from.address, recipient_address: to.address, content: JSON.stringify(payload) };
+    return { id, sender_address: from.address, sender: senderRecord(from), recipient_address: to.address, content: JSON.stringify(payload) };
 };
 
 const groupMessage = async ({ id, from, sid, sKey, text = 'hi group', wrapFor = [], sign = true, signWith }) => {
@@ -63,7 +66,7 @@ const groupMessage = async ({ id, from, sid, sKey, text = 'hi group', wrapFor = 
         });
         payload.sig = await signMessagePQC(body, (signWith || from).privateKey);
     }
-    return { id, sender_address: from.address, channel_id: CHANNEL, content: JSON.stringify(payload) };
+    return { id, sender_address: from.address, sender: senderRecord(from), channel_id: CHANNEL, content: JSON.stringify(payload) };
 };
 
 /** An author-redacted DM: the key envelope and signature survive, `ct` does not. */
@@ -76,7 +79,7 @@ const dmRedacted = async ({ id, from, to, sid, blob }) => {
         }),
         from.privateKey
     );
-    return { id, sender_address: from.address, recipient_address: to.address, content: JSON.stringify(payload) };
+    return { id, sender_address: from.address, sender: senderRecord(from), recipient_address: to.address, content: JSON.stringify(payload) };
 };
 
 /** Mount the hook with a stub custody provider that maps blob strings to keys. */

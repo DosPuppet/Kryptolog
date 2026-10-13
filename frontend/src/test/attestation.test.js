@@ -17,6 +17,7 @@ const makeIdentity = async () => {
     const attestation = await attestEncryptionKey(mlkem.publicKey, mldsa.privateKey);
     return {
         address: mldsa.publicKey,
+        identity_public_key: mldsa.publicKey,
         encryption_public_key: mlkem.publicKey,
         encryption_key_attestation: attestation,
         mldsa,

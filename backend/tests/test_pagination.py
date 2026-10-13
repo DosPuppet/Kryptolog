@@ -18,6 +18,7 @@ from datetime import UTC, datetime, timedelta
 from conftest import (
     TEST_ENCRYPTION_KEY,
     auth_header,
+    identity_key_of,
 )
 
 import models
@@ -117,7 +118,13 @@ class TestSecretListPaging:
         # Grantees must exist: access_grants.grantee_address is an FK.
         for i in range(120):
             addr = f"{i:04x}" * 656  # 2624 hex chars, the address shape
-            db_session.add(models.User(address=addr, encryption_public_key=TEST_ENCRYPTION_KEY))
+            db_session.add(
+                models.User(
+                    address=addr,
+                    identity_public_key=identity_key_of(addr),
+                    encryption_public_key=TEST_ENCRYPTION_KEY,
+                )
+            )
             db_session.flush()
             db_session.add(
                 models.AccessGrant(
@@ -299,7 +306,13 @@ class TestConversationListPaging:
         partners = []
         for i in range(MANY):
             addr = f"{i:04x}" * 656
-            db_session.add(models.User(address=addr, encryption_public_key=TEST_ENCRYPTION_KEY))
+            db_session.add(
+                models.User(
+                    address=addr,
+                    identity_public_key=identity_key_of(addr),
+                    encryption_public_key=TEST_ENCRYPTION_KEY,
+                )
+            )
             db_session.flush()
             db_session.add(
                 models.Message(

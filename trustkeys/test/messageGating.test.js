@@ -10,6 +10,7 @@
 import { describe, it, expect } from 'vitest';
 import { boot, bootWithVault } from './harness.js';
 import { internalSender, pageSender, foreignSender } from './chrome-mock.js';
+import { addressOf } from '../src/utils/crypto.js';
 
 // Every type that must be reachable ONLY from the extension's own pages.
 const INTERNAL_ONLY = [
@@ -139,7 +140,11 @@ describe('the authoritative-origin gate (audit M4)', () => {
         const h = await bootWithVault({});
         const res = await h.send({ type: 'GET_ACTIVE_ACCOUNT' }, internalSender());
         expect(res.success).toBe(true);
-        expect(res.account).toBeTruthy();
+        // Public fields only, each under its own name (crypto-core 3.3.0): the
+        // page reads the identity KEY and is told the address it names.
+        expect(Object.keys(res.account).sort())
+            .toEqual(['address', 'encryptionPublicKey', 'identityPublicKey', 'name']);
+        expect(res.account.address).toBe(addressOf(res.account.identityPublicKey));
     });
 
     it('serves a connected page', async () => {

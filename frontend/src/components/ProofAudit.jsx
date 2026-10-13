@@ -5,8 +5,8 @@ import { Upload, ShieldCheck, ShieldAlert, FileJson, User, Key, Clock, FileText,
 // 'DILITHIUM2' until crypto-core 3.0.0 and 'ML-DSA-44' since (audit 2026-09-11
 // Q-1). Both are the same FIPS 204 parameter set, and document signatures did
 // not change format, so proofs exported before still verify.
-const isMlDsaLabel = (label) => label === 'ML-DSA-44' || label === 'DILITHIUM2';
-import { verifySignaturePQC, domainSeparate, SIGNING_CONTEXT, multisigApprovalMessage } from '../utils/crypto';
+import { verifySignedDocument } from '../utils/secretContent';
+import { verifyMultisigProofSignatures, isMlDsaLabel } from './multisig/proof';
 // Ethereum/ECDSA proofs are no longer verifiable (the app is post-quantum only);
 // such legacy entries are reported as unsupported rather than verified.
 
@@ -81,8 +81,11 @@ export default function ProofAudit() {
 
         // Verify against the `content`-domain-separated bytes the signer actually signed (H1).
         // PQC (ML-DSA-44) only; legacy ECDSA proofs are unsupported.
-        const signedBody = domainSeparate(SIGNING_CONTEXT.CONTENT, doc.content);
-        const isValid = isPQC && await verifySignaturePQC(signedBody, signature, signer.publicKey);
+        // The proof carries the signer's identity KEY; the address it names is
+        // derived from it, so a valid result names the right identity (3.3.0).
+        const isValid = isPQC && (await verifySignedDocument({
+            content: doc.content, signature, signerPublicKey: signer.publicKey,
+        })).valid;
 
         setResults({
             type: 'single',
@@ -98,46 +101,7 @@ export default function ProofAudit() {
     };
 
     const verifyMultisigProof = async (proofData) => {
-        const content = proofData.document.content;
-        // Each role signed different bytes (H1/M1):
-        //   creator → the plaintext document under the `content` domain.
-        //   signer  → sha256(ciphertext) bound to the workflow, under the
-        //             `multisig-approval` domain (server-verifiable).
-        const creatorBody = domainSeparate(SIGNING_CONTEXT.CONTENT, content);
-        const approvalBody = (proofData.document?.ciphertext_sha256 != null)
-            ? multisigApprovalMessage(
-                proofData.workflow?.id,
-                proofData.workflow?.secret_id,
-                proofData.document.ciphertext_sha256,
-            )
-            : null;
-        const signerResults = [];
-
-        for (const entry of proofData.signatures) {
-            const isPQC = isMlDsaLabel(entry.algorithm);
-            let isValid = false;
-
-            // 'signer' approvals need the ciphertext hash; 'creator' uses content.
-            const message = entry.role === 'signer' ? approvalBody : creatorBody;
-
-            try {
-                // PQC (ML-DSA-44) only; legacy ECDSA entries are unsupported.
-                if (message && isPQC) {
-                    isValid = await verifySignaturePQC(message, entry.signature, entry.address);
-                }
-            } catch (e) {
-                isValid = false;
-            }
-
-            signerResults.push({
-                publicKey: entry.address,
-                algorithm: entry.algorithm,
-                valid: isValid,
-                username: entry.username || null,
-                role: entry.role,
-                signedAt: entry.signed_at,
-            });
-        }
+        const signerResults = await verifyMultisigProofSignatures(proofData);
 
         setResults({
             type: 'multisig',

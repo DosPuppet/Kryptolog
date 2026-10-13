@@ -334,8 +334,8 @@ def _release_recipient_keys(db: Session, wf, supplied):
         )
 
 
-def _verify_approval(db, wf, signer_address: str, signature: str) -> None:
-    """Check that `signer_address` really approved this workflow's ciphertext.
+def _verify_approval(db, wf, signer: models.User, signature: str) -> None:
+    """Check that `signer` really approved this workflow's ciphertext.
 
     The server is zero-knowledge, so a signer signs the SHA-256 of the STORED
     CIPHERTEXT bound to this workflow and secret (audit M1). The server can
@@ -349,7 +349,7 @@ def _verify_approval(db, wf, signer_address: str, signature: str) -> None:
 
     ct_hash = hashlib.sha256((secret.encrypted_data or "").encode("utf-8")).hexdigest()
     approval_msg = auth.multisig_approval_message(wf.id, wf.secret_id, ct_hash)
-    if not auth.verify_message_signature(signer_address, approval_msg, signature):
+    if not auth.verify_identity_signature(signer.identity_public_key, approval_msg, signature):
         raise HTTPException(status_code=400, detail="Invalid approval signature")
 
 
@@ -435,7 +435,7 @@ def sign_multisig_workflow(
     if signer.has_signed:
         raise HTTPException(status_code=400, detail="Already signed")
 
-    _verify_approval(db, wf, current_user.address, sig_req.signature)
+    _verify_approval(db, wf, current_user, sig_req.signature)
 
     # Recipient keys may only be released by the COMPLETING signer (audit M1).
     # Pre-fix, any signer could overwrite them (with garbage) at any step.

@@ -1,4 +1,4 @@
-import { generateAccount, decryptVault, encryptVault, normalizeAccount, isEncryptedVaultBlob, vaultPasswordProblem } from '../../utils/crypto.js';
+import { addressOf, generateAccount, decryptVault, encryptVault, normalizeAccount, isEncryptedVaultBlob, vaultPasswordProblem } from '../../utils/crypto.js';
 import { state, requireUnlocked, requireActiveAccount } from '../state.js';
 import { saveVault, saveVaultWithSessionKey } from '../utils.js';
 
@@ -40,10 +40,15 @@ export const getActiveAccount = (checkOrigin) => {
 
     const account = requireActiveAccount();
 
+    // The address, the identity key it names, and the encryption key, each
+    // under its own name (crypto-core 3.3.0). The same string for the first
+    // two until 4.0.0 makes the address a hash of the key; the page reads the
+    // key and derives nothing from the address.
     return {
         name: account.name,
-        mlkemPublicKey: account.mlkem.publicKey,
-        mldsaPublicKey: account.mldsa.publicKey
+        address: addressOf(account.mldsa.publicKey),
+        identityPublicKey: account.mldsa.publicKey,
+        encryptionPublicKey: account.mlkem.publicKey,
     };
 };
 

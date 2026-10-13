@@ -22,6 +22,7 @@ from conftest import (
     TEST_ENCRYPTION_KEY,
     TEST_ORIGIN,
     auth_header,
+    identity_key_of,
     server_deployment,
     synthetic_address,
 )
@@ -37,7 +38,13 @@ ROLES = ("owner", "signer", "recipient", "signer+recipient", "stranger")
 def _user(db_session, tag):
     address = synthetic_address(tag)
     if not db_session.query(models.User).filter_by(address=address).first():
-        db_session.add(models.User(address=address, encryption_public_key=TEST_ENCRYPTION_KEY))
+        db_session.add(
+            models.User(
+                address=address,
+                identity_public_key=identity_key_of(address),
+                encryption_public_key=TEST_ENCRYPTION_KEY,
+            )
+        )
         db_session.commit()
     return address
 
@@ -167,11 +174,23 @@ class TestGroupRoleLadder:
         # A fourth plain member nobody in the table *is*, so "remove someone
         # else" stays a different question from "leave" for all three actors.
         target = synthetic_address("drift-target")
-        db_session.add(models.User(address=target, encryption_public_key=TEST_ENCRYPTION_KEY))
+        db_session.add(
+            models.User(
+                address=target,
+                identity_public_key=identity_key_of(target),
+                encryption_public_key=TEST_ENCRYPTION_KEY,
+            )
+        )
         # And a second admin, so "remove a peer admin" is asked of every actor
         # without anyone removing themselves (audit 2026-10-12 K-12).
         target_admin = synthetic_address("drift-target-admin")
-        db_session.add(models.User(address=target_admin, encryption_public_key=TEST_ENCRYPTION_KEY))
+        db_session.add(
+            models.User(
+                address=target_admin,
+                identity_public_key=identity_key_of(target_admin),
+                encryption_public_key=TEST_ENCRYPTION_KEY,
+            )
+        )
 
         channel = models.GroupChannel(
             id=str(uuid.uuid4()), name="g", owner_address=owner["address"]
@@ -260,7 +279,11 @@ class TestGroupRoleLadder:
     def test_a_non_member_is_refused_everything(self, client, group, capability, db_session):
         outsider_address = synthetic_address("drift-outsider")
         db_session.add(
-            models.User(address=outsider_address, encryption_public_key=TEST_ENCRYPTION_KEY)
+            models.User(
+                address=outsider_address,
+                identity_public_key=identity_key_of(outsider_address),
+                encryption_public_key=TEST_ENCRYPTION_KEY,
+            )
         )
         db_session.commit()
         from conftest import do_login

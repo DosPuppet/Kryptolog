@@ -1,4 +1,6 @@
-import { sha256Hex } from '../../utils/crypto';
+import {
+    sha256Hex, verifyIdentitySignature, domainSeparate, SIGNING_CONTEXT, multisigApprovalMessage,
+} from '../../utils/crypto';
 
 // Build and download the offline verification proof for a workflow: the
 // document content plus every signature an auditor needs to re-verify it
@@ -30,6 +32,9 @@ export const downloadMultisigProof = async ({
     if (creatorSignature) {
         signatures.push({
             address: workflow.owner_address,
+            // The key the address names (crypto-core 3.3.0): what an auditor
+            // verifies against, offline, after checking it is that address's.
+            identity_public_key: workflow.owner?.identity_public_key || null,
             username: workflow.owner?.username || null,
             signature: creatorSignature,
             signed_at: workflow.created_at,
@@ -43,6 +48,7 @@ export const downloadMultisigProof = async ({
         if (s.has_signed && s.signature) {
             signatures.push({
                 address: s.user_address,
+                identity_public_key: s.user?.identity_public_key || null,
                 username: s.user?.username || null,
                 signature: s.signature,
                 signed_at: s.signed_at,
@@ -81,4 +87,57 @@ export const downloadMultisigProof = async ({
     a.download = `${workflow.name.replace(/[^a-zA-Z0-9_-]/g, '_')}.kryptolog-proof.json`;
     a.click();
     URL.revokeObjectURL(url);
+};
+
+// The algorithm labels a proof may carry for an ML-DSA signature. Proofs made
+// before the FIPS name was used say DILITHIUM2.
+export const isMlDsaLabel = (label) => label === 'ML-DSA-44' || label === 'DILITHIUM2';
+
+/**
+ * Re-verify every signature a multisig proof carries, offline — Proof Audit's
+ * job, kept next to the code that writes the proof so the two cannot drift.
+ *
+ * Each role signed different bytes (H1/M1): the creator the plaintext document
+ * under the `content` domain, a signer sha256(ciphertext) bound to the
+ * workflow under the `multisig-approval` domain (server-verifiable).
+ *
+ * Each entry is verified with the identity key it carries, which must be the
+ * one its address names (crypto-core 3.3.0). An entry without one is NOT
+ * verified against its address instead: that shortcut is exactly what stops
+ * working when the address becomes a hash of the key.
+ */
+export const verifyMultisigProofSignatures = async (proofData) => {
+    const creatorBody = domainSeparate(SIGNING_CONTEXT.CONTENT, proofData.document?.content);
+    const approvalBody = (proofData.document?.ciphertext_sha256 != null)
+        ? multisigApprovalMessage(
+            proofData.workflow?.id,
+            proofData.workflow?.secret_id,
+            proofData.document.ciphertext_sha256,
+        )
+        : null;
+
+    const results = [];
+    for (const entry of proofData.signatures || []) {
+        // 'signer' approvals need the ciphertext hash; 'creator' uses content.
+        const message = entry.role === 'signer' ? approvalBody : creatorBody;
+        let valid = false;
+        // PQC (ML-DSA-44) only; legacy ECDSA entries are unsupported.
+        if (message && isMlDsaLabel(entry.algorithm)) {
+            valid = await verifyIdentitySignature({
+                address: (entry.address || '').toLowerCase(),
+                identityPublicKey: entry.identity_public_key,
+                message,
+                signature: entry.signature,
+            });
+        }
+        results.push({
+            publicKey: entry.address,
+            algorithm: entry.algorithm,
+            valid,
+            username: entry.username || null,
+            role: entry.role,
+            signedAt: entry.signed_at,
+        });
+    }
+    return results;
 };

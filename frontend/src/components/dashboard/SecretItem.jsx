@@ -2,11 +2,10 @@ import { useState } from 'react';
 import { Lock, Copy, FileText, Share2, Trash2, FileSignature, BadgeCheck, AlertTriangle, Users, ShieldCheck, ChevronDown } from 'lucide-react';
 import { useTheme } from '../../context/ThemeContext';
 import { useAuth } from '../../context/AuthContext';
-import { verifySignaturePQC, domainSeparate, SIGNING_CONTEXT } from '../../utils/crypto';
 import API_ENDPOINTS from '../../config';
 import { toast } from '../../utils/toast';
 import { apiFetch } from '../../services/api';
-import { unwrapSignedDocument, readFileDescriptor } from '../../utils/secretContent';
+import { unwrapSignedDocument, readFileDescriptor, verifySignedDocument } from '../../utils/secretContent';
 import SecretContentPane from './SecretContentPane';
 
 const SecretItem = ({ secret, decryptedContent, onDecrypt, onLock, onDelete, onShare, onViewDetails, viewMode = 'grid', isSharedView }) => {
@@ -30,16 +29,18 @@ const SecretItem = ({ secret, decryptedContent, onDecrypt, onLock, onDelete, onS
                 return;
             }
 
-            const isValid = await verifySignaturePQC(domainSeparate(SIGNING_CONTEXT.CONTENT, docData.content), docData.signature, docData.signerPublicKey);
+            const { valid: isValid, signerAddress } = await verifySignedDocument(docData);
 
             // Resolve User (Optional)
             let signerInfo = null;
-            try {
-                signerInfo = await apiFetch(API_ENDPOINTS.USERS.RESOLVE, token, {
-                    method: 'POST',
-                    body: { address: docData.signerPublicKey },
-                });
-            } catch { /* best-effort: failure is non-fatal */ }
+            if (signerAddress) {
+                try {
+                    signerInfo = await apiFetch(API_ENDPOINTS.USERS.RESOLVE, token, {
+                        method: 'POST',
+                        body: { address: signerAddress },
+                    });
+                } catch { /* best-effort: failure is non-fatal */ }
+            }
 
             setVerificationResult({
                 valid: isValid,

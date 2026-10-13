@@ -232,7 +232,7 @@ def erase_conversation(
         )
     except auth.NonCanonicalSignedBody as exc:
         refuse(400, str(exc))
-    if not auth.verify_message_signature(address, message, req.signature):
+    if not auth.verify_identity_signature(current_user.identity_public_key, message, req.signature):
         refuse(401, "Invalid erase signature")
 
     # One erase of this account at a time, so two rounds cannot both count the
@@ -240,7 +240,7 @@ def erase_conversation(
     db.refresh(current_user, with_for_update=True)
 
     try:
-        redacted = account_deletion.apply_redactions(db, address, signatures, scope)
+        redacted = account_deletion.apply_redactions(db, current_user, signatures, scope)
     except account_deletion.RedactionRefused as exc:
         db.rollback()
         refuse(400, str(exc))

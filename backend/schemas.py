@@ -153,6 +153,11 @@ class UserUpdate(BaseModel):
 
 
 class UserResponse(UserBase):
+    # The key `address` names (crypto-core 3.3.0). Embedded wherever a user is,
+    # so a reader verifying a message has it without a lookup of its own — the
+    # by-address route is rate-limited. Readers check the binding themselves:
+    # this field is the server's claim, not proof. Kept for deleted identities.
+    identity_public_key: str
     username: str | None
     encryption_public_key: str | None
     created_at: UtcDateTime
@@ -331,6 +336,10 @@ MAX_DEPLOYMENT_LEN = 64
 
 class LoginRequest(BaseModel):
     address: str = Field(..., max_length=MAX_ADDRESS_LEN)
+    # The key the signature verifies against, which must be the one `address`
+    # names (crypto-core 3.3.0). Bounded like an address while the two are the
+    # same string; the 4.0.0 cutover gives it its own bound.
+    identity_public_key: str = Field(..., max_length=MAX_ADDRESS_LEN)
     signature: str = Field(..., max_length=64_000)
     nonce: str = Field(..., max_length=200)
     # What the challenge was signed FOR (crypto-core 3.0.0, audit 2026-10-12

@@ -70,6 +70,7 @@ export const MessengerProvider = ({ children }) => {
         handleManualDecrypt,
     } = useMessageSessions({
         user,
+        token,
         unwrapSessionKey,
         unwrapManySessionKeys,
         activeConversationRef,
@@ -267,7 +268,7 @@ export const MessengerProvider = ({ children }) => {
                 if (key) {
                     plainText = await decryptWithSessionKey(payload.ct, key);
                 }
-                verified = await verifyMessageAuthenticity(msg, payload, 'dm');
+                verified = await verifyMessageAuthenticity(msg, payload, 'dm', token);
             }
         } catch { /* best-effort: failure is non-fatal */ }
 
@@ -743,7 +744,7 @@ export const MessengerProvider = ({ children }) => {
                 if (key) {
                     plainText = await decryptWithSessionKey(payload.ct, key);
                 }
-                verified = await verifyMessageAuthenticity(msg, payload, 'group');
+                verified = await verifyMessageAuthenticity(msg, payload, 'group', token);
             }
         } catch { /* best-effort: failure is non-fatal */ }
 

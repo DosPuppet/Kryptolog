@@ -73,26 +73,49 @@ from security.crypto_validation import ML_DSA_44_PUBLIC_KEY_HEX_LEN
 # ---------- Constants ----------
 
 
+# address -> identity public key, for every identity the suite makes up. In
+# crypto-core 3.x the two are the same string; the registry is what lets the
+# 4.0.0 cutover, which makes the address a hash of the key, change how an
+# identity is made up here without touching the tests that log one in.
+_IDENTITY_KEYS: dict[str, str] = {}
+
+
+def identity_key_of(address: str) -> str:
+    """The identity public key behind an address the suite made up. Falls back
+    to the address itself, which is its key while the two are the same."""
+    return _IDENTITY_KEYS.get(address, address)
+
+
+def _register_identity(identity_public_key: str) -> str:
+    from security.crypto_validation import address_of
+
+    address = address_of(identity_public_key)
+    _IDENTITY_KEYS[address] = identity_public_key
+    return address
+
+
 def synthetic_address(tag: str) -> str:
-    """A structurally valid ML-DSA-44 public key (= an address) for tests.
+    """The address of a structurally valid ML-DSA-44 identity key, for tests.
 
     Deterministic per tag, and the right shape: 1312 bytes hex-encoded (2624
     chars). These used to be readable strings like "pqc_test_user_aaa...",
-    which /auth/nonce now refuses — the address IS an ML-DSA public key, so an
+    which /auth/nonce now refuses — an address names an ML-DSA public key, so an
     unauthenticated endpoint has no reason to write a row for anything that
     isn't one (audit L-5). Not real keys: signature verification is patched out
     in these tests, and the server can only check the format anyway.
     """
     digest = hashlib.sha256(tag.encode()).hexdigest()  # 64 chars
-    return (digest * (ML_DSA_44_PUBLIC_KEY_HEX_LEN // len(digest) + 1))[
+    key = (digest * (ML_DSA_44_PUBLIC_KEY_HEX_LEN // len(digest) + 1))[
         :ML_DSA_44_PUBLIC_KEY_HEX_LEN
     ]
+    return _register_identity(key)
 
 
 class MLDSA44Signer:
     """A REAL ML-DSA-44 client identity, for the tests that must not trust the
-    stubbed verifier: `address` is its public key in hex, `sign` returns raw
-    signature bytes (callers base64 them, as the clients do).
+    stubbed verifier: `identity_public_key` is its public key in hex, `address`
+    the address that key names, `sign` returns raw signature bytes (callers
+    base64 them, as the clients do).
 
     The one place the suite names the PQC library, so swapping it is one class
     rather than a dozen call sites — the liboqs -> pyca/cryptography move
@@ -103,7 +126,8 @@ class MLDSA44Signer:
         from cryptography.hazmat.primitives.asymmetric import mldsa
 
         self._key = mldsa.MLDSA44PrivateKey.generate()
-        self.address = self._key.public_key().public_bytes_raw().hex()
+        self.identity_public_key = self._key.public_key().public_bytes_raw().hex()
+        self.address = _register_identity(self.identity_public_key)
 
     def sign(self, message: bytes) -> bytes:
         return self._key.sign(message)
@@ -148,6 +172,7 @@ def login_body(address, nonce, encryption_key=None, username=None, **extra):
     """
     body = {
         "address": address,
+        "identity_public_key": identity_key_of(address),
         "signature": "fake_signature_for_testing",
         "nonce": nonce,
         "origin": TEST_ORIGIN,
@@ -215,7 +240,7 @@ def pytest_configure(config):
 def _mock_pqc(request):
     """Accept the placeholder client signatures used across the endpoint tests:
     the login challenge (`verify_signature`) and the multisig approval
-    (`verify_message_signature`). Server-side token issue/verify is left
+    (`verify_identity_signature`). Server-side token issue/verify is left
     untouched (HS256, audit §2/§3).
 
     Opt out with `@pytest.mark.real_signatures` when a test needs the real
@@ -230,7 +255,7 @@ def _mock_pqc(request):
         return
     with (
         patch("auth.verify_signature", return_value=True),
-        patch("auth.verify_message_signature", return_value=True),
+        patch("auth.verify_identity_signature", return_value=True),
     ):
         yield
 

@@ -1,6 +1,8 @@
 import { useState } from 'react';
 import { Shield, AlertTriangle } from 'lucide-react';
-import { verifySignaturePQC, domainSeparate, SIGNING_CONTEXT, sha256Hex, multisigApprovalMessage } from '../../utils/crypto';
+import { verifyIdentitySignature, domainSeparate, SIGNING_CONTEXT, sha256Hex, multisigApprovalMessage } from '../../utils/crypto';
+import { useAuth } from '../../context/AuthContext';
+import { identityKeyFor } from '../../services/identityKeys';
 
 // verifyTarget describes exactly what the signer signed:
 //   { kind: 'content', content }  — the CREATOR's signature over the plaintext
@@ -9,6 +11,7 @@ import { verifySignaturePQC, domainSeparate, SIGNING_CONTEXT, sha256Hex, multisi
 //      SIGNER's server-verifiable approval over sha256(ciphertext) (M1).
 const SignerVerificationBadge = ({ signer, verifyTarget }) => {
     const [status, setStatus] = useState('idle'); // idle, verifying, valid, invalid
+    const { token } = useAuth();
 
     const verify = async () => {
         if (!signer.signature || !verifyTarget) {
@@ -26,8 +29,13 @@ const SignerVerificationBadge = ({ signer, verifyTarget }) => {
                 message = domainSeparate(SIGNING_CONTEXT.CONTENT, verifyTarget.content);
             }
 
-            // The signer's user_address is their ML-DSA-44 public key.
-            const isValid = await verifySignaturePQC(message, signer.signature, signer.user_address);
+            // Against the key the signer's address names, checked as such
+            // (crypto-core 3.3.0) — not against the address itself.
+            const address = (signer.user_address || '').toLowerCase();
+            const identityPublicKey = await identityKeyFor(address, { hint: signer.user, token });
+            const isValid = Boolean(identityPublicKey) && await verifyIdentitySignature({
+                address, identityPublicKey, message, signature: signer.signature,
+            });
             setStatus(isValid ? 'valid' : 'invalid');
         } catch (e) {
             console.error(e);

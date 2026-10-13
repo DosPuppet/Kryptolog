@@ -573,15 +573,22 @@ describe('encryption-key attestation (audit M-1, v1.3.0)', () => {
         const evil = await core.generateMlKemKeyPair();
 
         const att = await core.attestEncryptionKey(mlkem.publicKey, mldsa.privateKey);
-        // Peer verifies against the address (= ML-DSA public key).
-        expect(await core.verifyEncryptionKeyAttestation(mldsa.publicKey, mlkem.publicKey, att)).toBe(true);
+        const check = (overrides) => core.verifyEncryptionKeyAttestation({
+            address: mldsa.publicKey, identityPublicKey: mldsa.publicKey,
+            encryptionPublicKey: mlkem.publicKey, attestation: att, ...overrides,
+        });
+        // Peer verifies as the address, with the key the address names.
+        expect(await check({})).toBe(true);
         // A directory that swaps in another KEM key fails verification.
-        expect(await core.verifyEncryptionKeyAttestation(mldsa.publicKey, evil.publicKey, att)).toBe(false);
-        // Wrong identity fails too.
+        expect(await check({ encryptionPublicKey: evil.publicKey })).toBe(false);
+        // Wrong identity fails too — as the key, and as the address.
         const other = await core.generateMlDsaKeyPair();
-        expect(await core.verifyEncryptionKeyAttestation(other.publicKey, mlkem.publicKey, att)).toBe(false);
+        expect(await check({ address: other.publicKey, identityPublicKey: other.publicKey })).toBe(false);
+        // An identity key that is not the address's is refused before any
+        // verification, even when it is the key that really signed (3.3.0).
+        expect(await check({ address: other.publicKey })).toBe(false);
         // Missing pieces fail closed.
-        expect(await core.verifyEncryptionKeyAttestation(mldsa.publicKey, mlkem.publicKey, null)).toBe(false);
+        expect(await check({ attestation: null })).toBe(false);
     });
 
     it('keyFingerprint is deterministic, input-sensitive, and 12 groups of 5 digits', async () => {
@@ -596,7 +603,7 @@ describe('encryption-key attestation (audit M-1, v1.3.0)', () => {
 
 describe('single-source / version guard', () => {
     it('exports a version both app builds can assert against', () => {
-        expect(core.CRYPTO_CORE_VERSION).toBe('3.2.0');
+        expect(core.CRYPTO_CORE_VERSION).toBe('3.3.0');
     });
 });
 

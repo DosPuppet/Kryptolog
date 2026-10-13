@@ -493,15 +493,17 @@ def _verify_composite(
     return True
 
 
-def verify_message_signature(address: str, message: str, signature: str) -> bool:
-    """Verify an exact-message ML-DSA-44 signature. `address` is the signer's
-    public key in HEX (an address is an identifier); `signature` is BASE64 (an
-    opaque payload — audit L-12). Used for non-login signatures the server must
-    check (e.g. multisig approvals). `message` is the exact UTF-8 string signed.
+def verify_identity_signature(identity_public_key: str, message: str, signature: str) -> bool:
+    """Verify an exact-message signature by an identity, against its stored
+    identity public key (hex) — never against an address, which from 4.0.0 on
+    no longer is one (crypto-core 3.3.0). The caller supplies the key from the
+    `users` row, where the login route checked that it is the one the address
+    names. `signature` is BASE64 (an opaque payload — audit L-12); `message` is
+    the exact UTF-8 string signed.
     """
     try:
         return _verify_ml_dsa44(
-            bytes.fromhex(address), message.encode("utf-8"), _sig_bytes(signature)
+            bytes.fromhex(identity_public_key), message.encode("utf-8"), _sig_bytes(signature)
         )
     except Exception as e:
         # Verification failures are expected/attacker-triggerable — keep at debug.
@@ -536,10 +538,11 @@ def verify_pqc_signature(
         return False
 
 
-def verify_signature(address: str, signature: str, **body) -> bool:
-    """Verify a login challenge. Identities are ML-DSA-44 public keys, so this is
-    a thin wrapper over verify_pqc_signature — the seam the test suite stubs."""
-    return verify_pqc_signature(address, signature, **body)
+def verify_signature(identity_public_key: str, signature: str, **body) -> bool:
+    """Verify a login challenge against the identity key the login submitted —
+    a thin wrapper over verify_pqc_signature, and the seam the test suite stubs.
+    The key's binding to the address is the route's check, made before this."""
+    return verify_pqc_signature(identity_public_key, signature, **body)
 
 
 ACCESS_TOKEN_EXPIRE_MINUTES = 30

@@ -2,7 +2,7 @@ import { createContext, useContext, useState, useEffect, useRef } from 'react';
 import API_ENDPOINTS from '../config';
 import { useAuth } from './AuthContext';
 import { vaultService } from '../services/vault';
-import { loginChallengeBody, encryptionKeyAttestationBody, messageSigningBody, accountDeletionBody, conversationEraseBody, multisigApprovalMessage } from '../utils/crypto';
+import { addressOf, loginChallengeBody, encryptionKeyAttestationBody, messageSigningBody, accountDeletionBody, conversationEraseBody, multisigApprovalMessage } from '../utils/crypto';
 import { toast } from '../utils/toast';
 import { apiFetch } from '../services/api';
 import { PAGE_SIZE as MANIFEST_PAGE, pageUrl } from '../utils/paging';
@@ -33,7 +33,10 @@ export const usePQC = () => {
 
 export const PQCProvider = ({ children }) => {
     const { login: authLogin, logout: authLogout, token } = useAuth();
-    const [pqcAccount, setPqcAccount] = useState(null); // ML-DSA public key
+    const [pqcAccount, setPqcAccount] = useState(null); // this identity's ADDRESS
+    // The key that address names (crypto-core 3.3.0): the same string until
+    // 4.0.0 makes the address a hash of it. Set only through adoptIdentity.
+    const [identityPublicKey, setIdentityPublicKey] = useState(null);
     const [mlkemKey, setMlkemKey] = useState(null);
     const [isExtensionAvailable, setIsExtensionAvailable] = useState(false);
     const [hasLocalVault, setHasLocalVault] = useState(false);
@@ -66,6 +69,7 @@ export const PQCProvider = ({ children }) => {
     useEffect(() => {
         if (authType !== 'trustkeys') {
             setPqcAccount(null);
+            setIdentityPublicKey(null);
             setMlkemKey(null);
             vaultService.clearKeyCache();
         }
@@ -144,14 +148,25 @@ export const PQCProvider = ({ children }) => {
         setModalConfig({ ...modalConfig, isOpen: false, resolve: null, reject: null });
     };
 
+    // The one way this context takes on an identity: its address, the key
+    // that address names, and its encryption key, always together.
+    const adoptIdentity = (identityKey, encryptionKey) => {
+        setPqcAccount(addressOf(identityKey));
+        setIdentityPublicKey(identityKey);
+        setMlkemKey(encryptionKey);
+    };
+
     // `signLogin({ nonce, origin, deployment, encryptionKey })` returns the login
     // signature, `attestFn()` the key attestation. Not "sign this string": the
     // extension no longer signs a login body a page hands it (audit 2026-10-12
     // K-03) — it builds the body itself, with the origin the BROWSER reports,
     // so a page cannot obtain a login meant for another site.
-    const performServerLogin = async (accountId, encryptionKey, signLogin, username = null, inviteCode = null, attestFn = null) => {
+    const performServerLogin = async (identityKey, encryptionKey, signLogin, username = null, inviteCode = null, attestFn = null) => {
+        // The server checks that the key is the one the address names (3.3.0).
+        const address = addressOf(identityKey);
+
         // 1. Get Nonce
-        const nonceRes = await fetch(API_ENDPOINTS.AUTH.NONCE(accountId));
+        const nonceRes = await fetch(API_ENDPOINTS.AUTH.NONCE(address));
         if (!nonceRes.ok) throw new Error("Failed to fetch nonce");
         // The deployment id comes with the nonce: both go into the signed body,
         // so the signature is a login HERE and nowhere else (crypto-core 3.0.0,
@@ -184,7 +199,8 @@ export const PQCProvider = ({ children }) => {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
-                address: accountId,
+                address,
+                identity_public_key: identityKey,
                 signature,
                 nonce,
                 origin,
@@ -237,14 +253,14 @@ export const PQCProvider = ({ children }) => {
             await window.trustkeys.handshake();
         }
 
+        // The extension answers with the account's identity key and encryption
+        // key under their own names (3.3.0), deployed together with this page:
+        // no fallback to an older extension's field names.
         const tkAccount = await window.trustkeys.getAccount();
-        // Accept the current field names, falling back to the legacy ones so a
-        // newer SPA still works with an older installed TrustKeys build.
-        const accountId = tkAccount.mldsaPublicKey || tkAccount.dilithiumPublicKey;
-        const encryptionKey = tkAccount.mlkemPublicKey || tkAccount.kyberPublicKey;
+        const identityKey = tkAccount.identityPublicKey;
+        const encryptionKey = tkAccount.encryptionPublicKey;
 
-        setPqcAccount(accountId);
-        setMlkemKey(encryptionKey);
+        adoptIdentity(identityKey, encryptionKey);
 
         // inviteCode is only consulted server-side when this is a new identity and
         // invites are required (audit §5); harmless otherwise.
@@ -253,7 +269,7 @@ export const PQCProvider = ({ children }) => {
         // the attestation signs a fixed, self-referential message. No fallback
         // to the generic sign(): it refuses login bodies now (K-03).
         return performServerLogin(
-            accountId,
+            identityKey,
             encryptionKey,
             ({ nonce, deployment }) => window.trustkeys.signLogin({ nonce, deployment }),
             tkAccount.name,
@@ -272,40 +288,37 @@ export const PQCProvider = ({ children }) => {
         if (!success) throw new Error("Incorrect password");
 
         const account = vaultService.getActiveAccount();
-        const accountId = account.mldsa.publicKey;
+        const identityKey = account.mldsa.publicKey;
         const encryptionKey = account.mlkem.publicKey;
 
-        setPqcAccount(accountId);
-        setMlkemKey(encryptionKey);
+        adoptIdentity(identityKey, encryptionKey);
 
         // Pass known password
-        return performServerLogin(accountId, encryptionKey, vaultSignLogin(password), account.name, inviteCode, vaultAttest(password, encryptionKey));
+        return performServerLogin(identityKey, encryptionKey, vaultSignLogin(password), account.name, inviteCode, vaultAttest(password, encryptionKey));
     };
 
     const createLocalVault = async (name, password, inviteCode = null) => {
         const account = await vaultService.setup(name, password);
-        const accountId = account.mldsa.publicKey;
+        const identityKey = account.mldsa.publicKey;
         const encryptionKey = account.mlkem.publicKey;
 
         setHasLocalVault(true);
 
-        setPqcAccount(accountId);
-        setMlkemKey(encryptionKey);
+        adoptIdentity(identityKey, encryptionKey);
 
-        return performServerLogin(accountId, encryptionKey, vaultSignLogin(password), name, inviteCode, vaultAttest(password, encryptionKey));
+        return performServerLogin(identityKey, encryptionKey, vaultSignLogin(password), name, inviteCode, vaultAttest(password, encryptionKey));
     };
 
     const importLocalVault = async (json, password, inviteCode = null) => {
         // Create a new local vault from an exported backup, then log in with it.
         const account = await vaultService.importNewVault(json, password);
-        const accountId = account.mldsa.publicKey;
+        const identityKey = account.mldsa.publicKey;
         const encryptionKey = account.mlkem.publicKey;
 
         setHasLocalVault(true);
-        setPqcAccount(accountId);
-        setMlkemKey(encryptionKey);
+        adoptIdentity(identityKey, encryptionKey);
 
-        return performServerLogin(accountId, encryptionKey, vaultSignLogin(password), account.name, inviteCode, vaultAttest(password, encryptionKey));
+        return performServerLogin(identityKey, encryptionKey, vaultSignLogin(password), account.name, inviteCode, vaultAttest(password, encryptionKey));
     };
 
     // --- Device-to-device transfer ---
@@ -321,12 +334,11 @@ export const PQCProvider = ({ children }) => {
     // create a local vault under a NEW device password, then log in.
     const receiveVault = async (blobString, transferPassphrase, newLocalPassword, inviteCode = null) => {
         const account = await vaultService.importEncryptedBlob(blobString, transferPassphrase, newLocalPassword);
-        const accountId = account.mldsa.publicKey;
+        const identityKey = account.mldsa.publicKey;
         const encryptionKey = account.mlkem.publicKey;
 
         setHasLocalVault(true);
-        setPqcAccount(accountId);
-        setMlkemKey(encryptionKey);
+        adoptIdentity(identityKey, encryptionKey);
 
         // The same two helpers as every other local-vault login. This path used
         // to pass `(msg) => vaultService.sign(msg, pw)` — which received the
@@ -334,7 +346,7 @@ export const PQCProvider = ({ children }) => {
         // attestation at all, so the login threw only after the vault had been
         // written: a device transfer could never finish signing in.
         return performServerLogin(
-            accountId, encryptionKey, vaultSignLogin(newLocalPassword), account.name, inviteCode,
+            identityKey, encryptionKey, vaultSignLogin(newLocalPassword), account.name, inviteCode,
             vaultAttest(newLocalPassword, encryptionKey),
         );
     };
@@ -525,11 +537,10 @@ export const PQCProvider = ({ children }) => {
         const password = await requestPassword("Enter password to switch account:");
         const account = await vaultService.switchAccount(id, password);
 
-        const accountId = account.mldsa.publicKey;
+        const identityKey = account.mldsa.publicKey;
         const encryptionKey = account.mlkem.publicKey;
 
-        setPqcAccount(accountId);
-        setMlkemKey(encryptionKey);
+        adoptIdentity(identityKey, encryptionKey);
 
         authLogout();
         // explicit logout forces user to re-login with new identity attempt
@@ -615,8 +626,7 @@ export const PQCProvider = ({ children }) => {
             await vaultService.deleteAccount(active.id, pw);
             const next = vaultService.getActiveAccount();
             if (next) {
-                setPqcAccount(next.mldsa.publicKey);
-                setMlkemKey(next.mlkem.publicKey);
+                adoptIdentity(next.mldsa.publicKey, next.mlkem.publicKey);
             }
             return 'identity';
         }
@@ -816,8 +826,7 @@ export const PQCProvider = ({ children }) => {
 
         const current = vaultService.getActiveAccount();
         if (current) {
-            setPqcAccount(current.mldsa.publicKey);
-            setMlkemKey(current.mlkem.publicKey);
+            adoptIdentity(current.mldsa.publicKey, current.mlkem.publicKey);
         }
     };
 
@@ -847,6 +856,7 @@ export const PQCProvider = ({ children }) => {
     return (
         <PQCContext.Provider value={{
             pqcAccount,
+            identityPublicKey,
             mlkemKey,
             isExtensionAvailable,
             hasLocalVault,
@@ -915,15 +925,14 @@ export const PQCProvider = ({ children }) => {
                 }
 
                 const account = vaultService.getActiveAccount();
-                const accountId = account.mldsa.publicKey;
+                const identityKey = account.mldsa.publicKey;
                 const encryptionKey = account.mlkem.publicKey;
 
-                setPqcAccount(accountId);
-                setMlkemKey(encryptionKey);
+                adoptIdentity(identityKey, encryptionKey);
 
                 // performServerLogin needs a signing function and vaultService.sign
                 // needs the password, so the one we already hold signs the challenge.
-                return performServerLogin(accountId, encryptionKey, vaultSignLogin(password), account.name, null, vaultAttest(password, encryptionKey));
+                return performServerLogin(identityKey, encryptionKey, vaultSignLogin(password), account.name, null, vaultAttest(password, encryptionKey));
             },
             hasBiometrics: () => biometricsEnabled
         }}>

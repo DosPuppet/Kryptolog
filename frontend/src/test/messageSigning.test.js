@@ -3,7 +3,7 @@ import {
     accountDeletionBody,
     generateMlDsaKeyPair,
     signMessagePQC,
-    verifySignaturePQC,
+    verifySignature,
     messageSigningBody,
     MESSAGE_SIGNING_PREFIX,
     SIGNING_CONTEXT,
@@ -26,7 +26,7 @@ describe('message signing (S1)', () => {
         const { publicKey, privateKey } = await generateMlDsaKeyPair();
         const body = await messageSigningBody({ ts: 1, seq: 0, from: publicKey, conv: 'recipient', sid: 'sid1', ct: 'deadbeef' });
         const sig = await signMessagePQC(body, privateKey);
-        expect(await verifySignaturePQC(body, sig, publicKey)).toBe(true);
+        expect(await verifySignature(body, sig, publicKey)).toBe(true);
     });
 
     it('verification fails if the ciphertext is tampered (re-attribution/forgery)', async () => {
@@ -34,7 +34,7 @@ describe('message signing (S1)', () => {
         const body = await messageSigningBody({ ts: 1, seq: 0, from: publicKey, conv: 'recipient', sid: 'sid1', ct: 'deadbeef' });
         const sig = await signMessagePQC(body, privateKey);
         const tampered = await messageSigningBody({ ts: 1, seq: 0, from: publicKey, conv: 'recipient', sid: 'sid1', ct: 'deadbe00' });
-        expect(await verifySignaturePQC(tampered, sig, publicKey)).toBe(false);
+        expect(await verifySignature(tampered, sig, publicKey)).toBe(false);
     });
 
     it('binds the real ciphertext object — a swapped same-session ct does NOT verify', async () => {
@@ -46,10 +46,10 @@ describe('message signing (S1)', () => {
         const ct = { iv: 'aabbccdd', content: '0011223344' };
         const body = await messageSigningBody({ ts: 1, seq: 0, from: publicKey, conv: 'recipient', sid: 'sid1', ct });
         const sig = await signMessagePQC(body, privateKey);
-        expect(await verifySignaturePQC(body, sig, publicKey)).toBe(true);
+        expect(await verifySignature(body, sig, publicKey)).toBe(true);
         // Server swaps the ciphertext content for another value -> must fail now.
         const swapped = await messageSigningBody({ ts: 1, seq: 0, from: publicKey, conv: 'recipient', sid: 'sid1', ct: { iv: 'aabbccdd', content: 'deadbeef99' } });
-        expect(await verifySignaturePQC(swapped, sig, publicKey)).toBe(false);
+        expect(await verifySignature(swapped, sig, publicKey)).toBe(false);
     });
 
     it("verification fails against a different sender's key (server can't forge as Alice)", async () => {
@@ -58,7 +58,7 @@ describe('message signing (S1)', () => {
         const body = await messageSigningBody({ ts: 1, seq: 0, from: alice.publicKey, conv: 'r', sid: 's', ct: 'cc' });
         const sig = await signMessagePQC(body, alice.privateKey);
         // Server swaps the claimed author to Mallory's key → signature no longer verifies.
-        expect(await verifySignaturePQC(body, sig, mallory.publicKey)).toBe(false);
+        expect(await verifySignature(body, sig, mallory.publicKey)).toBe(false);
     });
 
     it('a message signature cannot be replayed as a login signature (domain separation)', async () => {
@@ -67,7 +67,7 @@ describe('message signing (S1)', () => {
         const body = await messageSigningBody({ ts: 1, seq: 0, from: publicKey, conv: 'r', sid: 's', ct });
         const sig = await signMessagePQC(body, publicKey ? privateKey : privateKey);
         const loginBody = domainSeparate(SIGNING_CONTEXT.LOGIN, `from=${publicKey}\nconv=r\nsid=s\nts=1\nseq=0\nct=${ct}`);
-        expect(await verifySignaturePQC(loginBody, sig, publicKey)).toBe(false);
+        expect(await verifySignature(loginBody, sig, publicKey)).toBe(false);
     });
 });
 
@@ -92,7 +92,7 @@ describe('group message channel binding (F-1)', () => {
         const { publicKey, privateKey } = await generateMlDsaKeyPair();
         const sid = 's1', ct = 'deadbeef';
         const sig = await signGroupMessage(privateKey, publicKey, channelA, sid, ct);
-        const msg = { sender_address: publicKey.toLowerCase(), channel_id: channelA };
+        const msg = { sender_address: publicKey.toLowerCase(), sender: { identity_public_key: publicKey }, channel_id: channelA };
         const payload = { v: 2, sid, gid: channelA, ts: 1, seq: 0, ct, sig };
         expect(await verifyMessageAuthenticity(msg, payload, 'group')).toBe(true);
     });
@@ -102,7 +102,7 @@ describe('group message channel binding (F-1)', () => {
         const sid = 's1', ct = 'deadbeef';
         const sig = await signGroupMessage(privateKey, publicKey, channelA, sid, ct);
         // Malicious server serves the channel-A message inside channel B's history.
-        const msg = { sender_address: publicKey.toLowerCase(), channel_id: channelB };
+        const msg = { sender_address: publicKey.toLowerCase(), sender: { identity_public_key: publicKey }, channel_id: channelB };
         const payload = { v: 2, sid, gid: channelA, ts: 1, seq: 0, ct, sig };
         expect(await verifyMessageAuthenticity(msg, payload, 'group')).toBe(false);
     });
@@ -113,7 +113,7 @@ describe('group message channel binding (F-1)', () => {
         const sig = await signGroupMessage(privateKey, publicKey, channelA, sid, ct);
         // gid rewritten to B too — conv now binds to channel_id, so the sig (over
         // conv=A) still fails to verify under channel B.
-        const msg = { sender_address: publicKey.toLowerCase(), channel_id: channelB };
+        const msg = { sender_address: publicKey.toLowerCase(), sender: { identity_public_key: publicKey }, channel_id: channelB };
         const payload = { v: 2, sid, gid: channelB, ts: 1, seq: 0, ct, sig };
         expect(await verifyMessageAuthenticity(msg, payload, 'group')).toBe(false);
     });
@@ -139,7 +139,7 @@ describe('group message channel binding (F-1)', () => {
             const { publicKey, privateKey } = await generateMlDsaKeyPair();
             const sid = 's1', ct = 'deadbeef';
             const sig = await signGroupMessage(privateKey, publicKey, channelA, sid, ct, keys);
-            const msg = { sender_address: publicKey.toLowerCase(), channel_id: channelA };
+            const msg = { sender_address: publicKey.toLowerCase(), sender: { identity_public_key: publicKey }, channel_id: channelA };
             return verifyMessageAuthenticity(msg, { v: 2, sid, gid: channelA, ts: 1, seq: 0, keys: servedKeys, ct, sig }, 'group');
         };
 
@@ -197,7 +197,7 @@ describe('the signed position (crypto-core 3.0.0)', () => {
             from: publicKey.toLowerCase(), conv: channel, gid: channel, keys: null, ...signed,
         });
         const sig = await signMessagePQC(body, privateKey);
-        const msg = { sender_address: publicKey.toLowerCase(), channel_id: channel };
+        const msg = { sender_address: publicKey.toLowerCase(), sender: { identity_public_key: publicKey }, channel_id: channel };
         return verifyMessageAuthenticity(msg, { v: 2, gid: channel, ...signed, ...served, sig }, 'group');
     };
 

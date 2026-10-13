@@ -7,6 +7,7 @@ from conftest import (
     auth_header,
     do_login,
     get_nonce,
+    identity_key_of,
     server_deployment,
     synthetic_address,
 )
@@ -45,6 +46,7 @@ class TestNonce:
             "/auth/login",
             json={
                 "address": TEST_USER_ADDRESS,
+                "identity_public_key": identity_key_of(TEST_USER_ADDRESS),
                 "signature": "fake_signature_for_testing",
                 "nonce": victims_nonce,
                 "origin": TEST_ORIGIN,
@@ -66,6 +68,7 @@ class TestNonce:
                 "/auth/login",
                 json={
                     "address": TEST_USER_ADDRESS,
+                    "identity_public_key": identity_key_of(TEST_USER_ADDRESS),
                     "signature": "fake_signature_for_testing",
                     "nonce": nonce,
                     "origin": TEST_ORIGIN,
@@ -85,6 +88,7 @@ class TestNonce:
             "/auth/login",
             json={
                 "address": synthetic_address("nonce-thief"),
+                "identity_public_key": identity_key_of(synthetic_address("nonce-thief")),
                 "signature": "fake_signature_for_testing",
                 "nonce": victims_nonce,
                 "origin": TEST_ORIGIN,
@@ -122,6 +126,7 @@ class TestLogin:
             "/auth/login",
             json={
                 "address": TEST_USER_ADDRESS,
+                "identity_public_key": identity_key_of(TEST_USER_ADDRESS),
                 "signature": "fake",
                 "nonce": nonce,
                 "origin": TEST_ORIGIN,
@@ -139,6 +144,7 @@ class TestLogin:
             "/auth/login",
             json={
                 "address": TEST_USER_ADDRESS,
+                "identity_public_key": identity_key_of(TEST_USER_ADDRESS),
                 "signature": "fake",
                 "nonce": "wrong_nonce_value",
                 "origin": TEST_ORIGIN,
@@ -152,6 +158,7 @@ class TestLogin:
             "/auth/login",
             json={
                 "address": TEST_USER_ADDRESS,
+                "identity_public_key": identity_key_of(TEST_USER_ADDRESS),
                 "signature": "fake",
                 "nonce": "whatever",
                 "origin": TEST_ORIGIN,
@@ -165,6 +172,7 @@ class TestLogin:
         nonce = get_nonce(client, TEST_USER_ADDRESS)
         body = {
             "address": TEST_USER_ADDRESS,
+            "identity_public_key": identity_key_of(TEST_USER_ADDRESS),
             "signature": "fake",
             "nonce": nonce,
             "origin": TEST_ORIGIN,
@@ -228,6 +236,7 @@ class TestRegistrationUsernameCollision:
             "/auth/login",
             json={
                 "address": self.OTHER_ADDRESS,
+                "identity_public_key": identity_key_of(self.OTHER_ADDRESS),
                 "signature": "fake",
                 "nonce": nonce,
                 "origin": TEST_ORIGIN,

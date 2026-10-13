@@ -1,5 +1,6 @@
 import API_ENDPOINTS from '../../config';
-import { verifySignaturePQC, domainSeparate, SIGNING_CONTEXT, decryptSymmetric } from '../../utils/crypto';
+import { decryptSymmetric } from '../../utils/crypto';
+import { verifySignedDocument } from '../../utils/secretContent';
 import { downloadChunkedFile, downloadFileByRange } from '../../utils/fileChunks';
 
 // Envelope model: the workflow's secret is AES-encrypted under a fileKey, and
@@ -75,8 +76,7 @@ export const interpretDecryptedContent = async ({ contentString, fileKey, workfl
 
     // Signed Document Wrapper. The creator signed the `content`-domain-
     // separated bytes, not the raw content (H1) — verify against those.
-    const signedBody = domainSeparate(SIGNING_CONTEXT.CONTENT, parsed.content);
-    const isValid = await verifySignaturePQC(signedBody, parsed.signature, parsed.signerPublicKey);
+    const { valid: isValid, signerAddress } = await verifySignedDocument(parsed);
 
     // ...but verifying against a key taken FROM THE BLOB proves only that
     // whoever wrote the blob held some key — not that it was this workflow's
@@ -87,14 +87,15 @@ export const interpretDecryptedContent = async ({ contentString, fileKey, workfl
     // 'mismatch' is deliberately distinct from 'failed': the signature is
     // cryptographically sound, it just does not belong to who the UI is about
     // to attribute it to, and those need different words in front of a user.
-    const claimedSigner = (parsed.signerPublicKey || '').toLowerCase();
+    // Compared as ADDRESSES: the one the embedded key names, against the
+    // owner's (crypto-core 3.3.0) — never the key against an address.
     const ownerAddress = (workflow?.owner_address || '').toLowerCase();
-    const attributionHolds = Boolean(ownerAddress) && claimedSigner === ownerAddress;
+    const attributionHolds = Boolean(ownerAddress) && signerAddress === ownerAddress;
 
     const result = {
         verificationStatus: !isValid ? 'failed' : (attributionHolds ? 'verified' : 'mismatch'),
         signerMatchesOwner: attributionHolds,
-        claimedSigner: parsed.signerPublicKey,
+        claimedSigner: signerAddress,
         creatorSignature: parsed.signature,
         creatorSignedContent: parsed.content,
         rawDecryptedContent: contentString,

@@ -360,7 +360,7 @@ def _redactable_row(db: Session, address: str, key: str, scope: Scope = None):
 
 
 def _verified_redactions(
-    db: Session, address: str, signatures: dict[str, str], scope: Scope = None
+    db: Session, author: models.User, signatures: dict[str, str], scope: Scope = None
 ) -> list:
     """Verify every redaction in this round before applying any of them.
 
@@ -370,6 +370,7 @@ def _verified_redactions(
     to interrupt — each one only ever turns carriers into redacted carriers,
     and the erase does not complete until none are left.
     """
+    address = author.address
     pending = []
     for key in sorted(signatures):
         signature = signatures[key]
@@ -401,7 +402,7 @@ def _verified_redactions(
             # modules: this one must fail closed whatever that one lets past.
             raise RedactionRefused(f"{key} cannot be signed for redaction: {exc}") from exc
 
-        if not auth.verify_message_signature(address, body, signature):
+        if not auth.verify_identity_signature(author.identity_public_key, body, signature):
             raise RedactionRefused(f"invalid redaction signature for {key}")
 
         pending.append((kind, row, _redacted_content(kind, payload, signature, signed_gid)))
@@ -409,7 +410,7 @@ def _verified_redactions(
 
 
 def apply_redactions(
-    db: Session, address: str, signatures: dict[str, str], scope: Scope = None
+    db: Session, author: models.User, signatures: dict[str, str], scope: Scope = None
 ) -> int:
     """Apply ONE round of author-signed redactions. Returns how many landed.
 
@@ -422,7 +423,7 @@ def apply_redactions(
     holding a silent-signing grant in the extension, since a redaction body is
     `message`-context and auto-signed; the deletion signature is not.
     """
-    pending = _verified_redactions(db, address, signatures, scope)
+    pending = _verified_redactions(db, author, signatures, scope)
     for _kind, row, content in pending:
         row.content = content
         db.add(row)
@@ -639,6 +640,8 @@ def _strip_identity(user: models.User, mode: str) -> None:
     The address is an ML-DSA public key that is already embedded in every
     message this identity ever signed, so keeping it discloses nothing new —
     and dropping it would break the signatures on the rows both modes retain.
+    `identity_public_key` stays for the same reason: it is what a reader
+    verifies those signatures and redactions against (crypto-core 3.3.0).
 
     **The username survives a `leave`, and only a `leave`.** Freeing it the
     moment someone stepped away made the reversibility this mode promises

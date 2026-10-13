@@ -9,9 +9,9 @@ import { uploadChunkedFile, downloadChunkedFile, uploadMultipleChunkedFiles, dow
 import { apiFetch } from '../services/api';
 import { buildFileMetadata } from '../utils/secretPayload';
 
-export function useSecrets(encryptionPublicKey, pqcAccount, options = {}) {
+export function useSecrets(encryptionPublicKey, options = {}) {
     const { token } = useAuth();
-    const { encrypt: encryptPQC, decrypt: decryptPQC, decryptMany: decryptManyPQC, sign: signPQC } = usePQC();
+    const { encrypt: encryptPQC, decrypt: decryptPQC, decryptMany: decryptManyPQC, sign: signPQC, identityPublicKey } = usePQC();
     const { onProgress } = options;
 
     const [secrets, setSecrets] = useState([]);
@@ -313,7 +313,10 @@ export function useSecrets(encryptionPublicKey, pqcAccount, options = {}) {
                 const signedPayload = {
                     content: payloadToEncrypt,
                     signature: signature,
-                    signerPublicKey: pqcAccount
+                    // The identity KEY, not the address (crypto-core 3.3.0):
+                    // the document verifies offline, and the address is
+                    // derived from this by whoever reads it.
+                    signerPublicKey: identityPublicKey
                 };
                 payloadToEncrypt = JSON.stringify(signedPayload);
                 secretType = 'signed_document';

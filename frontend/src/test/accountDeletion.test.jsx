@@ -510,8 +510,9 @@ describe('an erase performed with the keys in the extension', () => {
         window.trustkeys = {
             connect: vi.fn(async () => true),
             getAccount: vi.fn(async () => ({
-                mldsaPublicKey: EXTENSION_ADDRESS,
-                mlkemPublicKey: 'f'.repeat(64),
+                address: EXTENSION_ADDRESS,
+                identityPublicKey: EXTENSION_ADDRESS,
+                encryptionPublicKey: 'f'.repeat(64),
                 name: 'ext-user',
             })),
             sign: vi.fn(async () => 'extension-signature'),

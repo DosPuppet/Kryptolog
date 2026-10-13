@@ -1,7 +1,7 @@
 """Tests for /users endpoints — user CRUD, authorization, and directory auth."""
 
 import pytest
-from conftest import TEST_ENCRYPTION_KEY, auth_header, synthetic_address
+from conftest import TEST_ENCRYPTION_KEY, auth_header, identity_key_of, synthetic_address
 
 import models
 
@@ -133,7 +133,12 @@ class TestListUsers:
         token, _ = user1
         address = synthetic_address("short-name")
         db_session.add(
-            models.User(address=address, username="Jo", encryption_public_key=TEST_ENCRYPTION_KEY)
+            models.User(
+                address=address,
+                identity_public_key=identity_key_of(address),
+                username="Jo",
+                encryption_public_key=TEST_ENCRYPTION_KEY,
+            )
         )
         db_session.commit()
         found = client.get("/users?search=jo", headers=auth_header(token)).json()

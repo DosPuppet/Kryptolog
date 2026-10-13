@@ -11,6 +11,7 @@ from conftest import (
     TEST_USER_ADDRESS,
     auth_header,
     do_login,
+    identity_key_of,
     server_deployment,
     synthetic_address,
 )
@@ -77,6 +78,7 @@ class TestOversizedInputRejected:
             "/auth/login",
             json={
                 "address": "a" * (schemas.MAX_ADDRESS_LEN + 1),
+                "identity_public_key": identity_key_of("a" * (schemas.MAX_ADDRESS_LEN + 1)),
                 "signature": "sig",
                 "nonce": "n",
                 "origin": TEST_ORIGIN,
@@ -148,7 +150,10 @@ class TestGroupMemberCap:
             addr = synthetic_address(f"cap-member-{i}")
             db_session.add(
                 models.User(
-                    address=addr, username=f"cap{i}", encryption_public_key=TEST_ENCRYPTION_KEY
+                    address=addr,
+                    identity_public_key=identity_key_of(addr),
+                    username=f"cap{i}",
+                    encryption_public_key=TEST_ENCRYPTION_KEY,
                 )
             )
             addrs.append(addr)

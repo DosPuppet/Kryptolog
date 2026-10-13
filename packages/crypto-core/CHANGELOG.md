@@ -181,3 +181,29 @@ itself only switches callers:
 - Pinned by the specifications' own vectors, copied verbatim with their
   provenance into `tests/fixtures/composite_mldsa65_ed25519_vectors.json` and
   `tests/fixtures/xwing_vectors.json` (`test/hybrid.test.js`).
+
+## 3.3.0
+
+ADDITIVE on the wire — nothing stored or signed changes, every vector is
+unchanged — but an API break for callers, and the HTTP API breaks with it:
+deploy the SPA, the extension and the server together. The identity-key seam
+4.0.0 needs (audit 2026-10-12 K-10), introduced while it is still trivial.
+
+- **`identity.js`**: `addressOf(identityPublicKey)`, `isAddressOf(address,
+  key)`, `verifyIdentitySignature({ address, identityPublicKey, message,
+  signature })`. In 3.x an address IS its ML-DSA-44 key, so `addressOf` is the
+  identity function, pinned as such; 4.0.0 makes it a hash. A verifier checks
+  the binding itself and refuses a key that is not the address's — the key
+  comes from the server, and a server free to serve any key for an address
+  could forge any author.
+- **`verifyEncryptionKeyAttestation({ address, identityPublicKey,
+  encryptionPublicKey, attestation })`**: the positional form is gone; the
+  attestation verifies through the same binding.
+- The server stores the key apart from the address (`users.identity_public_key`),
+  checks the binding at login before the signature, verifies every signature
+  against the stored key, and embeds the key in every user record it serves.
+  Deleted identities keep it, so their messages still verify.
+- The SPA's message verifier also binds the KIND of conversation: a group
+  message must declare the channel it was delivered under, a DM none. Channel
+  ids are server-minted, so a server could otherwise mint one equal to an
+  address and replay a DM into a group as verified, or the reverse.

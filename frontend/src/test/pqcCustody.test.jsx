@@ -159,6 +159,8 @@ describe('receiving a vault from another device', () => {
         expect(signed.every((b) => typeof b === 'string')).toBe(true);
         expect(posted[0]).toMatchObject({
             signature: 'vault-signature', encryption_key_attestation: 'vault-signature',
+            // The key travels with the address it names (crypto-core 3.3.0).
+            address: 'aa'.repeat(16), identity_public_key: 'aa'.repeat(16),
         });
     });
 });

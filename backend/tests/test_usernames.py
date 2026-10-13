@@ -13,6 +13,7 @@ from conftest import (
     auth_header,
     do_login,
     get_nonce,
+    identity_key_of,
     server_deployment,
     synthetic_address,
 )
@@ -119,6 +120,7 @@ class TestNormalizeThroughTheApi:
             "/auth/login",
             json={
                 "address": other,
+                "identity_public_key": identity_key_of(other),
                 "signature": "fake",
                 "nonce": get_nonce(client, other),
                 "origin": TEST_ORIGIN,
@@ -136,6 +138,7 @@ class TestNormalizeThroughTheApi:
             "/auth/login",
             json={
                 "address": other,
+                "identity_public_key": identity_key_of(other),
                 "signature": "fake",
                 "nonce": get_nonce(client, other),
                 "origin": TEST_ORIGIN,

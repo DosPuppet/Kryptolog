@@ -74,7 +74,7 @@ export default function Dashboard({ view = 'secrets' }) {
         shareSecret,
         revokeGrant,
         fetchSharedSecrets
-    } = useSecrets(encryptionPublicKey, currentDisplayAccount, { onProgress: updateProgress });
+    } = useSecrets(encryptionPublicKey, { onProgress: updateProgress });
 
     const {
         workflows,

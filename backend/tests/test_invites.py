@@ -13,6 +13,7 @@ from conftest import (
     TEST_USER_ADDRESS_2,
     do_login,
     get_nonce,
+    identity_key_of,
     server_deployment,
     synthetic_address,
 )
@@ -48,6 +49,7 @@ def _login_with(client, address, code=None, encryption_key=TEST_ENCRYPTION_KEY):
     nonce = get_nonce(client, address)
     body = {
         "address": address,
+        "identity_public_key": identity_key_of(address),
         "signature": "fake_signature_for_testing",
         "nonce": nonce,
         "origin": TEST_ORIGIN,
@@ -122,6 +124,7 @@ class TestInvitesRequired:
                 "/auth/login",
                 json={
                     "address": occupier,
+                    "identity_public_key": identity_key_of(occupier),
                     "signature": "fake",
                     "nonce": nonce,
                     "origin": TEST_ORIGIN,
@@ -142,6 +145,7 @@ class TestInvitesRequired:
             "/auth/login",
             json={
                 "address": clash,
+                "identity_public_key": identity_key_of(clash),
                 "signature": "fake",
                 "nonce": get_nonce(client, clash),
                 "origin": TEST_ORIGIN,

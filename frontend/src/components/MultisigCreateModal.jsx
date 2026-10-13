@@ -14,7 +14,7 @@ import { buildFileMetadata } from '../utils/secretPayload';
 
 export default function MultisigCreateModal({ isOpen, onClose, onCreated }) {
     const { user, token } = useAuth();
-    const { pqcAccount, encrypt: encryptPQC, mlkemKey, sign: signPQC } = usePQC(); // PQC Hook
+    const { pqcAccount, identityPublicKey, encrypt: encryptPQC, mlkemKey, sign: signPQC } = usePQC(); // PQC Hook
 
     // Step 0: Secret Content
     // Step 1: Add Signers
@@ -162,7 +162,8 @@ export default function MultisigCreateModal({ isOpen, onClose, onCreated }) {
             payloadToEncrypt = JSON.stringify({
                 content: rawContent,
                 signature: signature,
-                signerPublicKey: pqcAccount
+                // The identity KEY, not the address (crypto-core 3.3.0).
+                signerPublicKey: identityPublicKey
             });
             secretType = 'signed_document';
 

@@ -19,7 +19,7 @@ import typing
 
 import annotated_types
 import pytest
-from conftest import TEST_USER_ADDRESS
+from conftest import TEST_USER_ADDRESS, identity_key_of
 from fastapi.routing import APIRoute
 from pydantic import BaseModel
 from pydantic.fields import FieldInfo
@@ -134,7 +134,11 @@ def test_the_database_refuses_an_unknown_secret_type(db_session):
     """The CHECK constraint behind schemas.SecretType (migration d0e1f2a3b4c5):
     a writer that skips the request model still cannot store a label."""
 
-    db_session.add(models.User(address=TEST_USER_ADDRESS))
+    db_session.add(
+        models.User(
+            address=TEST_USER_ADDRESS, identity_public_key=identity_key_of(TEST_USER_ADDRESS)
+        )
+    )
     db_session.commit()
     db_session.add(models.Secret(owner_address=TEST_USER_ADDRESS, name="n", type="x" * 10))
     with pytest.raises(IntegrityError):

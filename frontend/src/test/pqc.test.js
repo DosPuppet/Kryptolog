@@ -22,7 +22,7 @@ import { ml_kem768 } from '@noble/post-quantum/ml-kem.js';
 import { ml_dsa44 } from '@noble/post-quantum/ml-dsa.js';
 import {
   signMessagePQC,
-  verifySignaturePQC,
+  verifySignature,
   encryptMessagePQC,
   decryptMessagePQC,
   generateSessionKey,
@@ -64,8 +64,8 @@ describe('ML-DSA-44 sign/verify', () => {
     const msg = 'Sign in to Kryptolog with nonce: 0123456789abcdef';
     const sig = await signMessagePQC(msg, privateKey);
     expect(fromB64Local(sig).length).toBe(2420);
-    expect(await verifySignaturePQC(msg, sig, publicKey)).toBe(true);
-    expect(await verifySignaturePQC(msg + ' ', sig, publicKey)).toBe(false);
+    expect(await verifySignature(msg, sig, publicKey)).toBe(true);
+    expect(await verifySignature(msg + ' ', sig, publicKey)).toBe(false);
   });
 
   it('verifies an OpenSSL-produced signature (server -> client interop)', async () => {
@@ -73,12 +73,12 @@ describe('ML-DSA-44 sign/verify', () => {
     // noble's key for that seed — so it verifies under noble's public key.
     const message = Buffer.from(vec.message, 'hex').toString('utf8');
     const signature = hexToB64(vec.openssl_dsa_signature);
-    expect(await verifySignaturePQC(message, signature, vec.noble_dsa_publicKey)).toBe(true);
-    expect(await verifySignaturePQC(message + '!', signature, vec.noble_dsa_publicKey)).toBe(false);
+    expect(await verifySignature(message, signature, vec.noble_dsa_publicKey)).toBe(true);
+    expect(await verifySignature(message + '!', signature, vec.noble_dsa_publicKey)).toBe(false);
   });
 
-  it('verifySignaturePQC returns false on malformed input instead of throwing', async () => {
-    await expect(verifySignaturePQC('x', 'zz', 'zz')).resolves.toBe(false);
+  it('verifySignature returns false on malformed input instead of throwing', async () => {
+    await expect(verifySignature('x', 'zz', 'zz')).resolves.toBe(false);
   });
 });
 
@@ -119,16 +119,16 @@ describe('domain separation (audit H1)', () => {
     );
 
     // The harvested signature is valid for the content it covers...
-    expect(await verifySignaturePQC(
+    expect(await verifySignature(
       domainSeparate(SIGNING_CONTEXT.CONTENT, loginBody), contentSig, publicKey
     )).toBe(true);
 
     // ...but is NOT a valid signature over the login challenge (replay blocked).
-    expect(await verifySignaturePQC(
+    expect(await verifySignature(
       domainSeparate(SIGNING_CONTEXT.LOGIN, loginBody), contentSig, publicKey
     )).toBe(false);
     // ...nor over the raw, unwrapped login body (the pre-fix attack target).
-    expect(await verifySignaturePQC(loginBody, contentSig, publicKey)).toBe(false);
+    expect(await verifySignature(loginBody, contentSig, publicKey)).toBe(false);
   });
 });
 
@@ -152,12 +152,12 @@ describe('multisig ciphertext-bound approval (audit M1)', () => {
     const ciphertext = JSON.stringify({ iv: 'aa', ciphertext: 'deadbeef' });
     const msg = multisigApprovalMessage(3, 9, await sha256Hex(ciphertext));
     const sig = await signMessagePQC(msg, privateKey);
-    expect(await verifySignaturePQC(msg, sig, publicKey)).toBe(true);
+    expect(await verifySignature(msg, sig, publicKey)).toBe(true);
 
     // A signature bound to one ciphertext does not verify against another (the
     // server recomputes the hash from its stored ciphertext, so a swap fails).
     const tampered = multisigApprovalMessage(3, 9, await sha256Hex('other'));
-    expect(await verifySignaturePQC(tampered, sig, publicKey)).toBe(false);
+    expect(await verifySignature(tampered, sig, publicKey)).toBe(false);
   });
 });
 

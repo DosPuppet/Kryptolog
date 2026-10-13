@@ -231,21 +231,21 @@ const Dashboard = () => {
           <div className="key-section">
             <div className="key-header">
               <span>ML-KEM (Kyber)</span>
-              <button onClick={() => copyToClipboard(activeAccount.mlkemPublicKey, 'mlkem')} className={copyFeedback === 'mlkem' ? 'copied' : ''}>
+              <button onClick={() => copyToClipboard(activeAccount.encryptionPublicKey, 'mlkem')} className={copyFeedback === 'mlkem' ? 'copied' : ''}>
                 {copyFeedback === 'mlkem' ? 'COPIED' : 'COPY'}
               </button>
             </div>
-            <div className="key-box">{activeAccount.mlkemPublicKey}</div>
+            <div className="key-box">{activeAccount.encryptionPublicKey}</div>
           </div>
 
           <div className="key-section">
             <div className="key-header">
               <span>ML-DSA (Dilithium)</span>
-              <button onClick={() => copyToClipboard(activeAccount.mldsaPublicKey, 'mldsa')} className={copyFeedback === 'mldsa' ? 'copied' : ''}>
+              <button onClick={() => copyToClipboard(activeAccount.identityPublicKey, 'mldsa')} className={copyFeedback === 'mldsa' ? 'copied' : ''}>
                 {copyFeedback === 'mldsa' ? 'COPIED' : 'COPY'}
               </button>
             </div>
-            <div className="key-box">{activeAccount.mldsaPublicKey}</div>
+            <div className="key-box">{activeAccount.identityPublicKey}</div>
           </div>
         </div>
       ) : (

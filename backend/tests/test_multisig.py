@@ -263,7 +263,7 @@ class TestSignWorkflow:
         token2, u2 = user2
         wf_id = _create_workflow(client, token1, [u2["address"]]).json()["id"]
 
-        monkeypatch.setattr("auth.verify_message_signature", lambda *a, **k: False)
+        monkeypatch.setattr("auth.verify_identity_signature", lambda *a, **k: False)
         resp = client.post(
             f"/multisig/workflow/{wf_id}/sign",
             json={

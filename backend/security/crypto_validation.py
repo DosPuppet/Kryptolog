@@ -109,6 +109,31 @@ def is_valid_ml_dsa_public_key(value: str | None) -> bool:
     return is_valid_hex_of_length(value, ML_DSA_44_PUBLIC_KEY_HEX_LEN)
 
 
+# --- Addresses and the keys they name (crypto-core 3.3.0) --------------------
+#
+# Until 4.0.0 an address IS the identity's ML-DSA-44 public key; the cutover
+# makes it a hash of a composite key (audit 2026-10-12 K-10). These three are
+# the only places the server answers "what is an address", so the cutover
+# changes them and nothing that calls them. Mirrors identity.js in crypto-core.
+
+
+def is_valid_address(value: str | None) -> bool:
+    """True if `value` has the shape of an address. 3.x: an ML-DSA-44 key."""
+    return is_valid_ml_dsa_public_key(value)
+
+
+def address_of(identity_public_key: str) -> str:
+    """The address an identity public key is known by. 3.x: the key itself."""
+    return identity_public_key
+
+
+def identity_binds_address(identity_public_key: str | None, address: str | None) -> bool:
+    """Is `identity_public_key` the key `address` names? Never raises."""
+    if not isinstance(identity_public_key, str) or not isinstance(address, str):
+        return False
+    return is_valid_address(address) and address_of(identity_public_key) == address
+
+
 def is_valid_ml_dsa_signature(value: str | None) -> bool:
     """True if `value` is a well-formed base64 ML-DSA-44 signature."""
     return is_valid_b64_of_length(value, ML_DSA_44_SIGNATURE_B64_LEN)

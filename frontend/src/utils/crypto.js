@@ -21,7 +21,6 @@ import {
 // PQC-suffixed aliases for the SPA's call sites (see note above).
 export {
     signMessage as signMessagePQC,
-    verifySignature as verifySignaturePQC,
     encryptMessage as encryptMessagePQC,
     decryptMessage as decryptMessagePQC,
 } from '@kryptolog/crypto-core';

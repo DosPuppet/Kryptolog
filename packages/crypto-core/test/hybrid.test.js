@@ -235,3 +235,31 @@ describe('noble <-> OpenSSL interop (tests/fixtures/hybrid_interop.json)', () =>
         expect(actual).toBe(expected);
     });
 });
+
+// The identity seam (3.3.0). In 3.x an address IS the identity key, so the
+// binding is the identity function — pinned here so that 4.0.0, which makes
+// the address a hash of the key, is visibly the change that moves it.
+describe('identity keys and addresses (3.3.0)', () => {
+    it('addressOf is the identity on 3.x keys, and refuses what is not lowercase hex', async () => {
+        const { publicKey } = await core.generateMlDsaKeyPair();
+        expect(core.addressOf(publicKey)).toBe(publicKey);
+        expect(() => core.addressOf(publicKey.toUpperCase())).toThrow(TypeError);
+        expect(() => core.addressOf('abc')).toThrow(TypeError);
+        expect(() => core.addressOf(null)).toThrow(TypeError);
+    });
+
+    it('verifyIdentitySignature needs the address and the key to agree', async () => {
+        const me = await core.generateMlDsaKeyPair();
+        const other = await core.generateMlDsaKeyPair();
+        const signature = await core.signMessage('hello', me.privateKey);
+        const verify = (address, identityPublicKey, message = 'hello') =>
+            core.verifyIdentitySignature({ address, identityPublicKey, message, signature });
+        expect(await verify(me.publicKey, me.publicKey)).toBe(true);
+        expect(await verify(me.publicKey, me.publicKey, 'hellO')).toBe(false);
+        // The right key under another address: the binding refuses it.
+        expect(await verify(other.publicKey, me.publicKey)).toBe(false);
+        expect(await verify(me.publicKey, other.publicKey)).toBe(false);
+        expect(core.isAddressOf(me.publicKey, undefined)).toBe(false);
+        expect(core.isAddressOf(undefined, me.publicKey)).toBe(false);
+    });
+});

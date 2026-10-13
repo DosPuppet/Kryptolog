@@ -55,6 +55,12 @@ class User(Base):
     __tablename__ = "users"
 
     address = Column(String, primary_key=True)  # Identity public key (ML-DSA-44, lowercase hex)
+    # The key `address` names, which every signature by this identity is
+    # verified against (crypto-core 3.3.0). Equal to the address until 4.0.0
+    # makes the address a hash of a composite key (audit 2026-10-12 K-10); the
+    # login route checks the binding before it stores one. Survives account
+    # deletion: readers still verify a deleted identity's messages.
+    identity_public_key = Column(String, nullable=False)
     username = Column(String, nullable=True)
     encryption_public_key = Column(String, nullable=True)  # ML-KEM-768 public key (hex)
     # Stamped whenever encryption_public_key changes for an existing identity
@@ -283,7 +289,11 @@ class FileChunk(Base):
 class GroupChannel(Base):
     __tablename__ = "group_channels"
 
-    id = Column(String, primary_key=True)  # UUID (generated client-side)
+    # A UUID minted by the SERVER (routers/groups.py), not the client — which is
+    # why clients must not trust a channel id to look like one: a malicious
+    # server could mint an id equal to an address, and verifyMessage.js binds
+    # the kind of conversation into what a message signature proves.
+    id = Column(String, primary_key=True)
     name = Column(String, nullable=False)
     owner_address = Column(String, ForeignKey("users.address"))
     created_at = Column(DateTime, default=utcnow_naive)

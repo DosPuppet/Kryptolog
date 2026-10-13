@@ -317,14 +317,14 @@ def test_multisig_approval_message_is_domain_separated():
 
 # Captured at import time, before the autouse conftest fixture can stub it —
 # this unit test exercises the REAL verifier (the endpoint tests use the stub).
-_real_verify_message_signature = auth.verify_message_signature
+_real_verify_identity_signature = auth.verify_identity_signature
 
 
-def test_verify_message_signature_pqc():
+def test_verify_identity_signature_pqc():
     """M1: the generic verifier accepts a real ML-DSA-44 signature over the exact
     multisig approval message and rejects tampering, wrong key, and bad hex —
     this is what the /sign endpoint relies on to gate `has_signed`."""
-    verify = _real_verify_message_signature
+    verify = _real_verify_identity_signature
     ct_hash = hashlib_sha256_hex("encrypted_payload")
     msg = auth.multisig_approval_message(1, 1, ct_hash)
     signer = MLDSA44Signer()

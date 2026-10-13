@@ -7,7 +7,8 @@
 import { sha256Hex, canonicalJson } from './encoding.js';
 // The attestation helpers below sign and verify, so this module leans on pqc.js.
 // One-directional: pqc.js does not import signing.js, so there is no cycle.
-import { signMessage, verifySignature } from './pqc.js';
+import { signMessage } from './pqc.js';
+import { verifyIdentitySignature } from './identity.js';
 
 // --- Domain separation (audit H1) ---
 // Every signed payload is wrapped with a context tag *before* it is signed, so a
@@ -252,9 +253,19 @@ export const encryptionKeyAttestationBody = (mlkemPublicKeyHex) =>
 export const attestEncryptionKey = async (mlkemPublicKeyHex, mldsaPrivateKeyHex) =>
     signMessage(encryptionKeyAttestationBody(mlkemPublicKeyHex), mldsaPrivateKeyHex);
 
-export const verifyEncryptionKeyAttestation = async (addressHex, mlkemPublicKeyHex, signatureHex) => {
-    if (!addressHex || !mlkemPublicKeyHex || !signatureHex) return false;
-    return verifySignature(encryptionKeyAttestationBody(mlkemPublicKeyHex), signatureHex, addressHex);
+// Verified as the identity `address`, with the key the address names
+// (3.3.0, identity.js): a directory that serves a key under somebody else's
+// address does not get an attestation accepted on that key's word.
+export const verifyEncryptionKeyAttestation = async ({
+    address, identityPublicKey, encryptionPublicKey, attestation,
+}) => {
+    if (!encryptionPublicKey || !attestation) return false;
+    return verifyIdentitySignature({
+        address,
+        identityPublicKey,
+        message: encryptionKeyAttestationBody(encryptionPublicKey),
+        signature: attestation,
+    });
 };
 
 // Safety-number fingerprint of an identity + its encryption key, for manual

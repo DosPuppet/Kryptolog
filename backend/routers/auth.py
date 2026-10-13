@@ -12,7 +12,11 @@ from database import get_db
 from dependencies import get_current_user, limiter
 from security import authorization
 from security.audit_log import audit_event
-from security.crypto_validation import is_valid_ml_dsa_public_key, is_valid_ml_kem_public_key
+from security.crypto_validation import (
+    identity_binds_address,
+    is_valid_address,
+    is_valid_ml_kem_public_key,
+)
 from security.usernames import InvalidUsername, normalize_username, username_taken
 from utils.clock import utcnow_naive
 from websocket_manager import SESSION_REVOKED, manager
@@ -30,11 +34,10 @@ def get_nonce(request: Request, address: str, db: Session = Depends(get_db)):
     may be live at once for one address, so a stranger cannot cancel someone
     else's login by asking for a new one (audit H-1).
     """
-    # The address IS an ML-DSA-44 public key, so anything that is not one can
-    # never produce a verifying signature and can never complete a login
-    # (audit L-5). Checking the shape here stops an unauthenticated endpoint
+    # Anything not shaped like an address names no key that could produce a
+    # verifying signature, so it can never complete a login (audit L-5). Checking the shape here stops an unauthenticated endpoint
     # from writing a row for every distinct string it is handed.
-    if not is_valid_ml_dsa_public_key(address):
+    if not is_valid_address(address):
         raise HTTPException(status_code=400, detail="Invalid address")
 
     # Cleanup expired nonces first (lazy cleanup). Naive UTC throughout to
@@ -119,8 +122,18 @@ def _verify_login_payload(login_req: schemas.LoginRequest, address: str) -> None
     """
     check_signed_for_this_server(login_req.origin, login_req.deployment)
 
+    # The key must be the one the address names, checked before the signature
+    # and outside the verifier the suite stubs (crypto-core 3.3.0). Without it
+    # a login would prove possession of SOME key and register it under any
+    # address — the server would then serve it as that identity's, and every
+    # reader verifying against it would accept a forger's messages.
+    if not identity_binds_address(login_req.identity_public_key, address):
+        raise HTTPException(
+            status_code=400, detail="This identity key is not the one the address names."
+        )
+
     if not auth.verify_signature(
-        address,
+        login_req.identity_public_key,
         login_req.signature,
         nonce=login_req.nonce,
         origin=login_req.origin,
@@ -160,7 +173,7 @@ def _verify_login_payload(login_req: schemas.LoginRequest, address: str) -> None
         if not login_req.encryption_public_key:
             raise HTTPException(status_code=400, detail="Attestation without an encryption key")
         att_msg = auth.encryption_key_attestation_message(login_req.encryption_public_key)
-        if not auth.verify_message_signature(address, att_msg, attestation):
+        if not auth.verify_identity_signature(login_req.identity_public_key, att_msg, attestation):
             raise HTTPException(status_code=400, detail="Invalid encryption key attestation")
 
 
@@ -230,6 +243,7 @@ def _revive_user(
     username = _claim_username(db, login_req, address, current=user.username)
 
     user.username = username
+    user.identity_public_key = login_req.identity_public_key
     user.encryption_public_key = login_req.encryption_public_key
     user.encryption_key_attestation = attestation
     # A return is a key-directory event, and the server cannot tell whether the
@@ -261,6 +275,7 @@ def _register_user(
 
     user = models.User(
         address=address,
+        identity_public_key=login_req.identity_public_key,
         encryption_public_key=login_req.encryption_public_key,
         encryption_key_attestation=attestation,
         username=default_username,

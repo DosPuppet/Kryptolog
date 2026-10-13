@@ -29,6 +29,7 @@ from conftest import (
     auth_header,
     do_login,
     get_nonce,
+    identity_key_of,
     server_deployment,
     synthetic_address,
 )
@@ -373,6 +374,7 @@ class TestComingBack:
             "/auth/login",
             json={
                 "address": u1["address"],
+                "identity_public_key": identity_key_of(u1["address"]),
                 "signature": "fake_signature_for_testing",
                 "nonce": nonce,
                 "origin": TEST_ORIGIN,
@@ -705,6 +707,7 @@ class TestAuthorizingTheDeletion:
             "/auth/login",
             json={
                 "address": address,
+                "identity_public_key": identity_key_of(address),
                 "signature": cls._sign(
                     auth._login_message(
                         nonce,
@@ -1247,6 +1250,7 @@ class TestALeaveReservesTheName:
         what this class checks must not be."""
         body = {
             "address": address,
+            "identity_public_key": identity_key_of(address),
             "signature": "fake_signature_for_testing",
             "nonce": get_nonce(client, address),
             "origin": TEST_ORIGIN,
@@ -1491,7 +1495,7 @@ class TestTheOneEventThatCannotBeReconstructed:
         could not prove they hold the key."""
         token1, u1 = user1
         with caplog.at_level("WARNING", logger="kryptolog.account"):
-            with patch("auth.verify_message_signature", return_value=False):
+            with patch("auth.verify_identity_signature", return_value=False):
                 assert _delete(client, token1, u1["address"], "leave").status_code == 401
 
         assert any("refused" in r.getMessage() for r in caplog.records)

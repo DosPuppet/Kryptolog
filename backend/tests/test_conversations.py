@@ -122,7 +122,7 @@ class TestEraseADirectConversation:
             seen.append(message)
             return True
 
-        with patch("auth.verify_message_signature", side_effect=capture):
+        with patch("auth.verify_identity_signature", side_effect=capture):
             _erase_round(client, token, me["address"], "dm", bob["address"].upper(), [])
         assert seen and seen[0].split("\n")[1] == "context=conversation-erase"
         assert f"\nconversation=dm:{bob['address']}\n" in seen[0]
@@ -131,7 +131,7 @@ class TestEraseADirectConversation:
         token, me = user1
         _, bob = user2
         carrier = _send_dm(client, token, bob["address"], _dm_content("s-1"))
-        with patch("auth.verify_message_signature", return_value=False):
+        with patch("auth.verify_identity_signature", return_value=False):
             resp = _erase_round(
                 client, token, me["address"], "dm", bob["address"], [f"dm:{carrier['id']}"]
             )

@@ -11,6 +11,7 @@ import { assessFreshness } from './freshness';
 // the open chat.
 export const useMessageSessions = ({
     user,
+    token,
     unwrapSessionKey,
     unwrapManySessionKeys,
     activeConversationRef,
@@ -80,7 +81,7 @@ export const useMessageSessions = ({
         const prepared = await Promise.all(rawMsgs.map(async msg => {
             let parsed = null;
             try { parsed = JSON.parse(msg.content); } catch { /* legacy/plain content */ }
-            const verified = await verifyMessageAuthenticity(msg, parsed, mode);
+            const verified = await verifyMessageAuthenticity(msg, parsed, mode, token);
             const payload = parsed && parsed.v === version && parsed.sid ? parsed : null;
             // Content the author removed on their way out of the app: the key
             // envelope survives (other people's messages in this session depend
@@ -209,7 +210,7 @@ export const useMessageSessions = ({
             // Unwrapping a new key from this message IS an adoption, so it takes
             // the same gate as processMessages (audit H-1) — otherwise the
             // "decrypt" button in the UI is the way around it.
-            const verified = await verifyMessageAuthenticity(msg, payload, mode);
+            const verified = await verifyMessageAuthenticity(msg, payload, mode, token);
             if (!mayAdoptSession(msg, verified, mode, myAddr)) return;
 
             // Look up the key blob for this user

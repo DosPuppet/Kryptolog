@@ -20,6 +20,7 @@ from conftest import (
     MLDSA44Signer,
     auth_header,
     get_nonce,
+    identity_key_of,
     server_deployment,
 )
 
@@ -43,6 +44,7 @@ class Identity:
             "/auth/login",
             json={
                 "address": self.address,
+                "identity_public_key": identity_key_of(self.address),
                 "signature": self.sign(
                     auth._login_message(
                         nonce,
@@ -234,7 +236,7 @@ class TestConversationErase:
             ct=None,
             keys=stored["keys"],
         )
-        assert auth.verify_message_signature(alice.address, body, stored["sig"])
+        assert auth.verify_identity_signature(alice.address, body, stored["sig"])
 
     def test_an_approval_for_another_conversation_is_refused(self, client, people):
         alice, bob = people

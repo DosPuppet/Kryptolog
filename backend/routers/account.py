@@ -191,7 +191,7 @@ def _perform_deletion(db: Session, current_user: models.User, req: schemas.Accou
         origin=req.origin,
         deployment=req.deployment,
     )
-    if not auth.verify_message_signature(address, message, req.signature):
+    if not auth.verify_identity_signature(current_user.identity_public_key, message, req.signature):
         # The one refusal worth a line of its own: somebody holding a live
         # session for this account asked to destroy it and could not prove they
         # hold the key. Nothing about the attempt is secret — the address is a
@@ -205,7 +205,7 @@ def _perform_deletion(db: Session, current_user: models.User, req: schemas.Accou
             raise HTTPException(status_code=400, detail="Leaving redacts nothing")
     else:
         try:
-            redacted = account_deletion.apply_redactions(db, address, signatures)
+            redacted = account_deletion.apply_redactions(db, current_user, signatures)
         except account_deletion.RedactionRefused as exc:
             db.rollback()
             logger.warning("Account deletion refused for %s: %s", address, exc)

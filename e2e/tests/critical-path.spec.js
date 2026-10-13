@@ -78,6 +78,10 @@ test('two people, two custody modes, one conversation', async ({ alice, bob }) =
         await bob.page.getByText('Alice').first().click();
         await shot(bob.page, 'bob-conversation');
         await expect(bob.page.getByText('Hello Bob, this is post-quantum.')).toBeVisible();
+        // Verified against the identity key Alice's address names, embedded in
+        // the history the server served (crypto-core 3.3.0) — and signed by
+        // the extension, the other custody mode from Bob's own.
+        await expect(bob.page.getByTitle('Signature verified')).toBeVisible();
         await send(bob.page, 'Received, Alice.');
     });
 
@@ -87,6 +91,9 @@ test('two people, two custody modes, one conversation', async ({ alice, bob }) =
         // decrypts, rather than opening a window per incoming message.
         await alice.page.getByRole('button', { name: /Click to Decrypt/ }).click();
         await expect(alice.page.getByText('Received, Alice.')).toBeVisible();
+        // A live frame carries Bob's address only, so this one is verified
+        // with the key looked up for it — and signed by a local vault.
+        await expect(alice.page.getByTitle('Signature verified')).toBeVisible();
         expect(alice.approvals.at(-1)).toContain('Decrypt');
         await shot(alice.page, 'alice-reply');
     });

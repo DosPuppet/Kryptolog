@@ -20,6 +20,7 @@ from conftest import (
     MLDSA44Signer,
     auth_header,
     get_nonce,
+    identity_key_of,
     server_deployment,
 )
 
@@ -32,6 +33,7 @@ def login_with_attestation(client, address, enc_key, attestation, username=None)
     nonce = get_nonce(client, address)
     body = {
         "address": address,
+        "identity_public_key": identity_key_of(address),
         "signature": "fake_signature_for_testing",
         "nonce": nonce,
         "origin": TEST_ORIGIN,
@@ -68,6 +70,7 @@ class TestAttestationStorage:
         nonce = get_nonce(client, TEST_USER_ADDRESS)
         body = {
             "address": TEST_USER_ADDRESS,
+            "identity_public_key": identity_key_of(TEST_USER_ADDRESS),
             "signature": "fake_signature_for_testing",
             "nonce": nonce,
             "origin": TEST_ORIGIN,
@@ -87,6 +90,7 @@ class TestAttestationStorage:
             "/auth/login",
             json={
                 "address": TEST_USER_ADDRESS,
+                "identity_public_key": identity_key_of(TEST_USER_ADDRESS),
                 "signature": "fake_signature_for_testing",
                 "nonce": nonce,
                 "origin": TEST_ORIGIN,
@@ -103,7 +107,11 @@ class TestAttestationStorage:
         import models
 
         db_session.add(
-            models.User(address=TEST_USER_ADDRESS, encryption_public_key=TEST_ENCRYPTION_KEY)
+            models.User(
+                address=TEST_USER_ADDRESS,
+                identity_public_key=identity_key_of(TEST_USER_ADDRESS),
+                encryption_public_key=TEST_ENCRYPTION_KEY,
+            )
         )
         db_session.commit()
         # …gets one the first time its client logs in with it.
@@ -140,6 +148,7 @@ class TestAttestationStorage:
             "/auth/login",
             json={
                 "address": TEST_USER_ADDRESS,
+                "identity_public_key": identity_key_of(TEST_USER_ADDRESS),
                 "signature": "fake_signature_for_testing",
                 "nonce": nonce,
                 "origin": TEST_ORIGIN,
@@ -156,7 +165,7 @@ class TestAttestationStorage:
 
 class TestAttestationRejection:
     def test_invalid_attestation_rejected(self, client, monkeypatch):
-        monkeypatch.setattr("auth.verify_message_signature", lambda *a, **k: False)
+        monkeypatch.setattr("auth.verify_identity_signature", lambda *a, **k: False)
         resp = login_with_attestation(
             client, TEST_USER_ADDRESS, TEST_ENCRYPTION_KEY, FAKE_ATTESTATION, "BadAtt"
         )
@@ -169,6 +178,7 @@ class TestAttestationRejection:
             "/auth/login",
             json={
                 "address": TEST_USER_ADDRESS,
+                "identity_public_key": identity_key_of(TEST_USER_ADDRESS),
                 "signature": "fake_signature_for_testing",
                 "nonce": nonce,
                 "origin": TEST_ORIGIN,
@@ -185,7 +195,7 @@ class TestRealCrypto:
         accepted and stored; a signature over a DIFFERENT key is rejected."""
 
         # Restore the real verifier (conftest mocks it for endpoint tests).
-        monkeypatch.setattr("auth.verify_message_signature", _REAL_VERIFY)
+        monkeypatch.setattr("auth.verify_identity_signature", _REAL_VERIFY)
 
         signer = MLDSA44Signer()
         address = signer.address
@@ -210,4 +220,4 @@ class TestRealCrypto:
 # moved to base64 (audit L-12): the test kept passing because both halves of the
 # TEST agreed, while neither matched the server. A duplicate of the thing under
 # test cannot detect a change to it.
-_REAL_VERIFY = auth_module.verify_message_signature
+_REAL_VERIFY = auth_module.verify_identity_signature
