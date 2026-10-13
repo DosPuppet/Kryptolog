@@ -59,9 +59,16 @@ codes for the accounts below (`cd backend && python generate_invites.py 6`) or
 set `KRYPTOLOG_REQUIRE_INVITE=false` for the pass.
 
 **Browser state survives `down -v`.** Local vaults (`localStorage`), `.kvault`
-backups and TrustKeys vaults made before crypto-core 3.0.0 do not open any more,
-and refuse with "older Kryptolog version". Clear them (or use fresh browser
-profiles) and recreate.
+backups and TrustKeys vaults made before crypto-core 4.0.0 do not open any more,
+and refuse with "older Kryptolog version". The SPA's login screen offers to
+remove an old local vault ("Remove the old vault and start fresh"); clear
+TrustKeys' storage (or use fresh browser profiles) and recreate. Proof files
+exported before 4.0.0 are refused by Proof Audit the same way.
+
+**A database that held 3.x identities refuses the 4.0.0 migration** — on
+purpose: the new keys exist only in browsers, so there is nothing to migrate
+to. `down -v` above is the way through; on a database worth keeping, back it
+up first (`scripts/backup.sh`).
 
 Confirm before starting:
 

@@ -1,48 +1,52 @@
 # TrustKeys - Post-Quantum Cryptography (PQC) Extension
 
-TrustKeys is a quantum-resistant browser extension designed to secure interactions against future quantum computing threats. It implements the **Module-Lattice-based Key Encapsulation Mechanism (ML-KEM)** and **Digital Signature Algorithm (ML-DSA)** standards.
+TrustKeys is a quantum-resistant browser extension designed to secure interactions against future quantum computing threats. Every key it holds is **hybrid**: a post-quantum algorithm paired with a classical one, so each holds while either half does.
 
 > **Status**: Beta (Production Functional)
-> **Algorithms**: ML-KEM-768 (FIPS 203) & ML-DSA-44 (FIPS 204)
+> **Algorithms**: composite ML-DSA-65 + Ed25519 signatures, X-Wing (ML-KEM-768 + X25519) encryption — crypto-core 4.0.0
 > **Role**: Primary PQC Authentication Provider for Kryptolog.
 
 ---
 
 ## Architecture & Security
 
-### 1. Quantum-Proof Algorithms
-TrustKeys utilizes the NIST multi-round selected algorithms for post-quantum security:
-- **Encryption**: ML-KEM-768 (FIPS 203) via `@noble/post-quantum`
-  - Used for securely establishing shared secrets (Key Encapsulation).
-  - Hybrid Encryption: ML-KEM produces a shared secret, which is run through
-    **HKDF-SHA-256** (with a fixed context label) to derive the **AES-256-GCM**
-    key that encrypts the message/session payload.
-- **Signing**: ML-DSA-44 (FIPS 204) via `@noble/post-quantum`
-  - Used for generating unforgeable digital signatures.
+### 1. Hybrid Post-Quantum Algorithms
+NIST category 3 throughout, the level ANSSI asks for:
+- **Encryption**: X-Wing (ML-KEM-768 + X25519, draft-connolly-cfrg-xwing-kem) via
+  `@noble/post-quantum`
+  - The shared secret stays secret while either ML-KEM-768 or X25519 holds.
+  - It is run through **HKDF-SHA-384** (with a fixed context label) to derive the
+    **AES-256-GCM** key that encrypts the message/session payload; the envelope's
+    version and algorithm id are its associated data.
+- **Signing**: composite ML-DSA-65 + Ed25519 (`id-MLDSA65-Ed25519-SHA512`,
+  draft-ietf-lamps-pq-composite-sigs) via `@noble/post-quantum` and `@noble/curves`
+  - A signature is valid only if both halves verify.
+- **Address**: the SHA-384 of the identity key, 96 hex characters — the account's id.
 
 These primitives are not implemented in the extension directly: they live in the
 shared **`@kryptolog/crypto-core`** package (see below), which the extension and the
 Kryptolog web app both consume so their wire/storage formats stay byte-identical.
 
 ### Shared crypto core (`@kryptolog/crypto-core`)
-All client-side crypto (ML-KEM/ML-DSA, hybrid encryption, session-key wrapping, the
+All client-side crypto (composite signatures, X-Wing, session-key wrapping, the
 AES-GCM vault, domain separation) lives in **one** versioned package at
 [`../packages/crypto-core`](../packages/crypto-core), consumed by both this extension
 and the web app via a `file:` dependency. This replaced the two formerly duplicated
 `crypto.js` copies and their hand-maintained "KEEP IN SYNC" comment.
 
-`src/utils/crypto.js` is now a thin shim that `export *`s from the package and adds
-only extension-local glue — `generateAccount()`, whose account `id` is a random UUID
-(the web app instead uses the ML-DSA public key as its id). Because there is a single
-source, byte-compatibility between the two builds is **structural** and enforced by the
-package's `test/byte-compat.test.js` (golden formats, round-trips, an ML-DSA FIPS-204
-server-interop guard, and a `CRYPTO_CORE_VERSION` check) rather than by a comment.
+`src/utils/crypto.js` is a thin shim that `export *`s from the package, and nothing
+else since 4.0.0: an account's `id` is its address in both apps (the extension used
+random UUIDs, so one identity was two accounts depending on who exported it). Because
+there is a single source, byte-compatibility between the two builds is **structural**
+and enforced by the package's suites (the drafts' vectors, golden bodies and
+envelopes, a noble <-> OpenSSL fixture, and a `CRYPTO_CORE_VERSION` check) rather than
+by a comment.
 
 ### 2. The Secure Vault
 - **Zero-Knowledge Architecture**: Your private keys never leave the extension.
 - **Encryption**: The vault is encrypted at rest using **AES-GCM (256-bit)**.
 - **Key Derivation**: Your password derives the encryption key using **Argon2id** (46 MiB, one pass — the parameters travel in the vault, so they can be raised without a format change). The password must be at least 12 characters and not a sequence or a well-known password; the same rule applies to backup passphrases.
-- **Format**: crypto-core 3.x. A vault or backup made before 3.0.0 is refused by name ("older Kryptolog version"); recreate it.
+- **Format**: crypto-core 4.x — accounts stored as their seeds, every public value re-derived and checked on unlock. A vault or backup made before 4.0.0 is refused by name ("older Kryptolog version", on the unlock screen too); recreate it.
 - **Memory-Only Decryption**: Private keys are decrypted into memory *only* when the vault is unlocked.
 - **Session Persistence**: The vault remains unlocked for **1 Hour** of inactivity, via a session secret in `chrome.storage.session` (in-memory), which is **automatically wiped** when the browser is closed.
 
@@ -163,15 +167,16 @@ Get the active account's public keys.
 const account = await window.trustkeys.getAccount();
 // Returns {
 //   name: "My PQC Key",
-//   mlkemPublicKey: "hex...",   // ML-KEM-768 encryption key
-//   mldsaPublicKey: "hex..."    // ML-DSA-44 identity key (= the Kryptolog address)
+//   address: "hex...",              // the Kryptolog address: SHA-384 of the identity key
+//   identityPublicKey: "hex...",    // composite ML-DSA-65 + Ed25519 key
+//   encryptionPublicKey: "hex..."   // X-Wing key
 // }
 ```
 
-### Digital Signatures (ML-DSA)
+### Digital Signatures (composite ML-DSA-65 + Ed25519)
 
 #### `sign(message)`
-Sign a document with the active account's ML-DSA-44 private key. Accepts a
+Sign a document with the active account's identity key. Accepts a
 Kryptolog `content`-context body (a signed document, whose text the approval
 window shows) or text that is not a Kryptolog body at all. **Refuses every other
 Kryptolog context** — login, key attestation, multisig approval, account
@@ -193,30 +198,24 @@ const signature = await window.trustkeys.signLogin({ nonce, deployment });
 ```
 
 #### `getKeyAttestation()`
-The active account's self-signed ML-KEM key attestation. No popup: the signed
-message is fixed and names nothing the page chose.
+The active account's self-signed encryption-key attestation, naming its address. No
+popup: the signed message is fixed and names nothing the page chose.
 
 #### `signAccountDeletion({ nonce, mode, redactionKeys, deployment })`
 Authorize deleting the account on this origin. `mode` is `"leave"` or `"erase"`;
-the window states which, and how many messages an erase redacts.
+the window states which, the account's address, and how many messages an erase
+redacts.
 
 #### `signConversationErase({ nonce, kind, conversation, redactionKeys, deployment })`
 Authorize erasing your own messages in one conversation on this origin. `kind` is
 `"dm"` (conversation = partner address) or `"group"` (conversation = channel id);
 the window names the conversation and how many messages are redacted.
 
-#### `signMultisigApproval({ workflowId, secretId, ciphertextSha256 })`
+#### `signMultisigApproval({ workflowId, secretId, ciphertextSha384 })`
 Approve a multisig workflow; the window names the workflow.
 
-#### `verify(message, signature, publicKey)`
-Verify an ML-DSA-44 signature against a public key.
-```javascript
-const valid = await window.trustkeys.verify(message, signature, publicKey);
-// Returns boolean.
-```
-
 #### `signMessage(message)`
-Sign a **chat message** with the active account's ML-DSA-44 key. Unlike `sign()`,
+Sign a **chat message** with the active account's identity key. Unlike `sign()`,
 this can sign **without** a per-message popup — but only for payloads in the
 `message` domain (the call is refused otherwise), and only if the user enabled
 "Allow silent message signing" for the site (default off; dev origins always
@@ -227,7 +226,7 @@ const signature = await window.trustkeys.signMessage(messageDomainPayload);
 // Returns a base64 signature. (Used by the messenger to authenticate messages.)
 ```
 
-### Encryption (ML-KEM + AES)
+### Encryption (X-Wing + AES)
 
 #### `encrypt(message, [publicKey])`
 Encrypt data. If `publicKey` is omitted, encrypts for the active account (self).
@@ -293,8 +292,8 @@ const keys = await window.trustkeys.unwrapManySessionKeys([blob1, blob2, blob3])
 | UI | React 18, Manifest V3 |
 | Build | Vite + @crxjs/vite-plugin |
 | Crypto core | `@kryptolog/crypto-core` (shared with the web app, `file:` dep) |
-| PQC Encryption | @noble/post-quantum — ML-KEM-768 (FIPS 203) |
-| PQC Signatures | @noble/post-quantum — ML-DSA-44 (FIPS 204) |
+| PQC Encryption | @noble/post-quantum — X-Wing (ML-KEM-768 + X25519) |
+| PQC Signatures | @noble/post-quantum + @noble/curves — composite ML-DSA-65 + Ed25519 |
 | Vault | AES-256-GCM under Argon2id |
 | Dynamic Scripts | chrome.scripting API |
 

@@ -20,9 +20,9 @@ file instead of stderr). Fields:
     ...         event-specific fields
 
 What is NEVER logged: content, ciphertext, wrapped keys, signatures, tokens,
-usernames, or a full address. An address is a 2 624-character public key; the
-first 16 hex characters identify it for an investigator without turning the
-log into a copy of the directory.
+usernames, or a full address. An address is 96 hex characters (the SHA-384 of
+an identity key, crypto-core 4.0.0); the first 16 identify it for an
+investigator without turning the log into a copy of the directory.
 """
 
 import json

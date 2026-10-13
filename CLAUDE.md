@@ -10,10 +10,10 @@ Monorepo, four parts:
 
 | Path | What |
 |---|---|
-| `backend/` | FastAPI + SQLAlchemy + Alembic, PostgreSQL. Routers in `routers/`, shared security rules in `security/` (`authorization.py`, `crypto_validation.py`, `url_guard.py`, `usernames.py`, `quota.py`, `body_limit.py`, `audit_log.py`, `request_audit.py`). Deletion of history in `account_deletion.py` and `retention.py`. |
+| `backend/` | FastAPI + SQLAlchemy + Alembic, PostgreSQL. Routers in `routers/`, shared security rules in `security/` (`authorization.py`, `crypto_validation.py`, `ed25519_subgroup.py`, `url_guard.py`, `usernames.py`, `quota.py`, `body_limit.py`, `audit_log.py`, `request_audit.py`). Deletion of history in `account_deletion.py` and `retention.py`. |
 | `frontend/` | React 19 SPA (Vite). Messenger state is split under `src/context/messenger/`. |
 | `trustkeys/` | MV3 browser extension — the key custodian. Service worker under `src/background/`. |
-| `packages/crypto-core/` | `@kryptolog/crypto-core`: one copy of every crypto primitive, consumed by **both** clients via a `file:` dependency. Split into `encoding`/`signing`/`pqc`/`aead`/`vault`/`webauthn`, all re-exported from `src/index.js` — import the package root, never a submodule. |
+| `packages/crypto-core/` | `@kryptolog/crypto-core`: one copy of every crypto primitive, consumed by **both** clients via a `file:` dependency. Split into `encoding`/`signing`/`pqc`/`identity`/`account`/`composite`/`kem`/`aead`/`vault`/`webauthn`, all re-exported from `src/index.js` — import the package root, never a submodule. |
 | `e2e/` | Playwright suite: the real SPA, backend and TrustKeys (unpacked) in Chromium, on its own database. |
 | `scripts/` | `init_env.sh` (generates `backend/.env`), `backup.sh` / `restore.sh`, `load_env.sh`. |
 
@@ -544,7 +544,8 @@ names go through the M-3 encrypted-name path, which is a different mechanism.
   The stack on the dev box is re-seeded and ready for it (empty database,
   persistent JWT secret, `REDIS_URL` set).
 - **The cutovers are cumulative, and there are six of them.** *(Seven since
-  crypto-core 3.0.0, lot 4 of the 2026-10-12 remediation; 3.1.0 is additive.)* `CRYPTO_CORE_VERSION`
+  crypto-core 3.0.0, lot 4 of the 2026-10-12 remediation; eight since 4.0.0,
+  lot 11, the hybrid cutover. 3.1.0, 3.2.0 and 3.3.0 are additive.)* `CRYPTO_CORE_VERSION`
   went 1.3.0 → 2.0.0, and the count is one higher than the version list suggests:
   the HKDF derivation of the AES key from the ML-KEM shared secret (audit S5,
   `KEM_KDF_INFO` in `pqc.js`) was a wire break that landed before `CHANGELOG.md`
@@ -1242,7 +1243,7 @@ single crypto-core **3.0.0** cutover (lots 4–6); hybridization is a later **4.
 | 8 | Realtime and push availability | P1 | done — `4967000` |
 | 9 | Operations: audit log, retention, backup, health, conversation deletion | P2 | done — `9bbcc05` |
 | 10 | Assurance and documentation | P2 | done — `3d9421c` |
-| 11 | Hybridization, crypto-core 4.0.0 | P3 | **postponed** (2026-10-12, user's decision) — with lot 12's budget items |
+| 11 | Hybridization, crypto-core 4.0.0 | P3 | done on `dev` — `e31b0c0`..`e96e5e1` + docs (un-postponed 2026-10-13; see "Lot 11" below) |
 
 ### Lot 1 — supply chain
 
@@ -1738,9 +1739,10 @@ Backend 661 → **668**, extension 127 → **128**.
 
 Lots 1–10 are committed on `remediation-2026-10` (`bd12c2b`..`3d9421c`), each
 with every suite, both builds, every lint/format/drift gate — and, from lot 10,
-the browser suite — green. Lot 11 (hybrid crypto-core 4.0.0) is postponed at
+the browser suite — green. Lot 11 (hybrid crypto-core 4.0.0) was postponed at
 the user's decision, with lot 12's budget items (forward secrecy, code-delivery
-integrity, an external audit). Final counts: backend **668**, frontend **270**,
+integrity, an external audit). *(Lot 11 un-postponed and done on 2026-10-13,
+branch `dev` — see the end of this file. Lot 12 is still postponed.)* Final counts: backend **668**, frontend **270**,
 crypto-core **67**, extension **128**, e2e **1** (the critical path).
 
 **Merged to `main` on 2026-10-12** (fast-forward, `238ee15`..`c347d2a`: lots
@@ -1834,3 +1836,98 @@ tests across five files; dropping the startup probe fails its gate.
 **Merged to `main` on 2026-10-13** (fast-forward, `210e4ed`..`26b2f2f`; the
 branch `pqc-pyca-2026-10` is still around at the merged commit). **Not pushed** —
 the first CI run without liboqs has not happened yet.
+
+## Lot 11 — hybrid cryptography, crypto-core 4.0.0 — 2026-10-13, branch `dev`
+
+The 2026-10-12 audit's **K-10**, un-postponed, and ANSSI's level with it: its
+December 2023 follow-up paper asks for NIST category 3 or 5, and ML-DSA-44 was
+category 2. **Every identity is a composite ML-DSA-65 + Ed25519 key, every
+encryption key X-Wing (ML-KEM-768 + X25519), every address the SHA-384 of an
+identity key** — each primitive holds while either half does. Plan:
+`~/.claude/plans/ok-there-s-a-new-shimmying-toast.md` (not in the repo).
+
+**User decisions (2026-10-13):** level 3 everywhere; the IETF composite
+`id-MLDSA65-Ed25519-SHA512` (draft-ietf-lamps-pq-composite-sigs-19); X-Wing
+(draft-connolly-cfrg-xwing-kem-10); the address is a HASH of the composite key
+(not the key itself); proofs made before are refused by name. SHA-384 for every
+digest the cutover introduced follows from ANSSI's hash guidance.
+
+| Sub-lot | Scope | Commit |
+|---|---|---|
+| 11.0 | `receiveVault` could never finish signing in (pre-existing) | `e31b0c0` |
+| 11a | crypto-core 3.2.0: `composite.js`, `kem.js`, the drafts' vectors (additive) | `7d7a4c4` |
+| 11b | backend `_verify_composite`, `security/ed25519_subgroup.py`, noble <-> OpenSSL fixture (additive) | `927b00a` |
+| 11c | crypto-core 3.3.0: verify against the identity KEY the address names; `users.identity_public_key` | `a8f1004` |
+| 11d | crypto-core 4.0.0: the cutover, one commit | `e96e5e1` |
+| 11e | documentation | this commit |
+
+**Why 11d is one commit:** the apps import crypto-core live and the fixtures
+and size constants are shared across languages, so no intermediate state of the
+wire switch builds green. Everything else went before it as additions or a
+no-op seam (11c, where the address and the key were still the same string).
+
+Things worth knowing before touching any of it:
+
+- **Ed25519 is verified differently by the two libraries.** noble's strict
+  mode still checks the COFACTORED equation, OpenSSL the cofactorless one; they
+  disagree on signatures whose R or A carries a small-order component — which
+  only the key's owner can build, but which would let a signer have an approval
+  count on the server that Proof Audit calls invalid. Closed on both sides:
+  `compositeVerify` also requires R and A torsion-free, and the login route
+  refuses an identity key whose Ed25519 half is not of order L
+  (`is_valid_identity_key`, pure-Python RFC 8032 arithmetic, ~1 ms, once per
+  key). Measured, and pinned in `tests/fixtures/hybrid_interop.json`.
+- **Addresses are 96 hex; channel ids at most 64 characters.** The alphabets
+  are disjoint, so a DM can no longer be replayed into a group "named after"
+  an address (it cannot even be signed). `verifyMessage.js`'s gid rule (11c)
+  stays as the second layer.
+- **The envelope markers are associated data now.** `v` and `alg` were stored
+  beside the ciphertext unauthenticated. No round-trip catches a change both
+  sides make, so `packages/crypto-core/test/golden-envelopes.json` is
+  decrypt-only, sealed once — never regenerate it to make a test pass.
+- **Accounts are seeds, `id` = address, in both apps.** `parseAccount`
+  re-derives every public value and refuses a stored key or id that disagrees.
+  The extension used UUIDs, which made one identity two accounts.
+- **A 3.x vault was reported as "Incorrect password" — forever.** Both vault
+  services turned every unlock failure into `false`. A `FormatError` now
+  reaches the screen; the SPA offers to remove the old vault.
+- **`vite` (dev mode) served a stale crypto-core.** It pre-bundles deps and
+  only re-bundles when the lockfile changes, which a `file:` package's source
+  never touches: e2e loaded a blank page. `frontend/vite.config.js` now
+  excludes crypto-core from `optimizeDeps`. Anyone running `vite` across a
+  crypto-core change had this.
+- **jsdom's `TextEncoder` returns a `Uint8Array` from another realm**, so
+  `instanceof Uint8Array` refused real bytes in the SPA's tests;
+  `isUint8Array` checks the way noble does.
+- **The migration refuses a database that holds identities**
+  (`b4c5d6e7f8a9`): the new keys exist only in browsers, there is nothing to
+  migrate to. Verified on a restored copy of the 3.x dev data: 3.3.0's
+  migration applied, the cutover refused with its message. **The dev database
+  was backed up** to `backups/kryptolog-20261013T190542Z.dump` (gitignored) and
+  recreated empty.
+- **X-Wing is not one of ANSSI's named combiners** (ETSI CatKDF / CasKDF); it
+  has its own proof. THREAT_MODEL.md says so rather than claim a match.
+- **Measured** on this box: X-Wing unwrap 2.6 ms, composite sign ~10 ms and
+  verify ~4 ms in the client; 1 000 server verifications (a full erase round)
+  0.17 s. No caching was needed.
+- **On this WSL box (`networkingMode=mirrored`), a connect to a CLOSED
+  127.0.0.1 port hangs ~134 s** instead of being refused, unless the port was
+  bound recently. Playwright probes 8002 and 5174 before starting the servers,
+  so a cold `cd e2e && npm test` took 5 minutes (13 s warm). Not the project;
+  CI is unaffected. Bind and release the two ports first to warm them.
+
+Every new gate mutation-tested; the commit messages list each mutant and the
+equivalent ones. Counts: backend **720**, frontend **289**, crypto-core
+**108**, extension **129**, e2e **1** — all green, with every lint/format/drift
+gate, at `e96e5e1`.
+
+**Not done, and needed before relying on it:**
+- **Not merged, not pushed.** No CI run has seen lots 1–11.
+- **Deploy all three together on an empty database** (DEPLOYMENT.md). Every
+  user recreates their identity; proofs exported before are refused.
+- **The approval windows and the TrustKeys Dashboard on 4.0.0 have not been
+  looked at in a browser**, and `E2E-RECIPE.md` §1–2 and §8–9 have not been
+  walked on 4.0.0. The automated browser suite covers login, messaging both
+  ways (with the verified badge on both receivers) and a share.
+- The drafts may still change before they become RFCs; that would be a further
+  cutover.

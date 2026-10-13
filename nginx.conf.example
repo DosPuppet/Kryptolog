@@ -65,10 +65,11 @@ server {
     root  /var/www/kryptolog/frontend/dist;
     index index.html;
 
-    # Request-header buffers, sized for ML-DSA addresses: 2624 hex characters,
-    # and they travel in URLs (GET /auth/nonce/{address}). The default 1k
-    # header buffer rejects those with a 414 before the request ever reaches
-    # FastAPI.
+    # Request-header buffers. They were sized for the 2624-character ML-DSA-44
+    # addresses that travelled in URLs (GET /auth/nonce/{address}), which the
+    # default 1k buffer rejected with a 414. Since crypto-core 4.0.0 an address
+    # is 96 hex characters and the defaults would do; 16k is kept as headroom,
+    # since raising it again is the failure nobody notices until a 414.
     #
     # These live in `server`, not in `location /api/`. nginx only accepts them
     # in http/server context, so the previous placement inside the location
@@ -138,8 +139,8 @@ server {
     # when the client actually asked for an upgrade, so a hardcoded
     # `Connection: upgrade` on every API request would be wrong.
     #
-    # ML-DSA addresses are 2624 hex chars and travel in URLs (e.g.
-    # /auth/nonce/{address}), so the header buffers are sized for them.
+    # Addresses travel in URLs (e.g. /auth/nonce/{address}); see the header
+    # buffers above.
     location /api/ {
         rewrite ^/api/(.*) /$1 break;
         proxy_pass http://127.0.0.1:8000;

@@ -30,11 +30,21 @@ public keys and metadata.
 
 ## Identity and custody
 
-An identity is an **ML-DSA-44 key pair**; its public key, lowercase hex, *is*
-the address. Each identity also has an **ML-KEM-768** encryption key, which it
-**attests** — signs with its identity key — so a client can check that the
-directory is serving the key the identity chose. A login submitting a key
-without its attestation is refused.
+An identity is a **composite ML-DSA-65 + Ed25519 key pair**
+(`id-MLDSA65-Ed25519-SHA512`): a signature is valid only if both halves verify.
+Its **address** is the SHA-384 of the identity key — 96 lowercase hex
+characters — and every verifier, client and server, checks that the key it is
+given is the one the address names. Each identity also has an **X-Wing**
+(ML-KEM-768 + X25519) encryption key, which it **attests** — signs with its
+identity key, naming its address — so a client can check that the directory is
+serving the key the identity chose. A login submitting a key without its
+attestation is refused. Every primitive is NIST category 3, the level ANSSI
+asks for, and holds while either of its halves does (crypto-core 4.0.0, audit
+2026-10-12 K-10).
+
+An account is stored as its two **seeds** (64 bytes for the composite key, 32
+for X-Wing), with the address as its id in both custodians; everything public
+is re-derived from the seeds on load.
 
 Keys live in one of two custodians:
 
@@ -47,21 +57,26 @@ Keys live in one of two custodians:
   itself, with the origin Chrome reports, and shows what each one does. Only
   chat-message signatures may be silent, and only for a site granted it.
 
-## Formats (crypto-core 3.1.0)
+## Formats (crypto-core 4.0.0)
 
 - **Signed bodies** are domain-separated: `Kryptolog Signed Message v1`, a
   `context=` line (`login`, `message`, `account-deletion`,
   `conversation-erase`, `multisig-approval`, `key-attestation`, `content`),
   then `key=value` lines whose interpolated identifiers are checked against
   their alphabet on both sides, so a body has exactly one meaning. Login and
-  deletion bodies name the SPA **origin** and the server **deployment**.
-- **Envelopes** carry `v: 3` and an algorithm id; decoders refuse anything else
-  by name.
-- **Session keys**: AES-256-GCM, wrapped per recipient with ML-KEM-768 + HKDF.
+  deletion bodies name the SPA **origin** and the server **deployment**. Every
+  digest in a body is SHA-384.
+- **Envelopes** carry `v: 4` and an algorithm id, which are also their AES-GCM
+  associated data; decoders refuse anything else by name.
+- **Session keys**: AES-256-GCM, wrapped per recipient with X-Wing and
+  HKDF-SHA-384 (`XWING-HKDF384-A256GCM`).
 - **Opaque payloads are base64, identifiers are hex.**
 
 The backend mirrors exactly the bodies it verifies (`backend/auth.py`), pinned
-against crypto-core by `tests/fixtures/signed_bodies.json`.
+against crypto-core by `tests/fixtures/signed_bodies.json`, and verifies the
+composite signature with OpenSSL (pyca/cryptography). The primitives are pinned
+to their specifications' own vectors in both languages, and noble and OpenSSL
+check each other's output in both directions (`tests/fixtures/`).
 
 ## Flows
 
@@ -88,7 +103,7 @@ secret and index.
 
 **Multisig.** A workflow wraps the secret's key for each signer (who must be
 able to read what they approve) and for each recipient; the server withholds
-the recipients' keys until `threshold` signers have signed the SHA-256 of the
+the recipients' keys until `threshold` signers have signed the SHA-384 of the
 stored ciphertext.
 
 **Deletion.** An account can *leave* (reversible) or *erase* (final); a

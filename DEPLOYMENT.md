@@ -115,11 +115,17 @@ A malformed `KRYPTOLOG_MESSAGE_RETENTION_DAYS` refuses to start in every mode.
 - **Migrations run before serving**: both `serve.sh` and `start_all.sh` apply
   `alembic upgrade head` and refuse to start if it fails. Back up first
   (`scripts/backup.sh`).
-- **crypto-core 3.0.0 was a clean break** (October 2026): nothing written by an
-  earlier version opens or verifies — messages, wrapped keys, file chunks, local
-  and extension vaults, `.kvault` backups. There is no migration path; a
-  deployment holding 2.x data starts from an empty database, and users recreate
-  their vaults. 3.1.0 is additive.
+- **crypto-core 4.0.0 is a clean break** (October 2026), as 3.0.0 was before
+  it: every key, address, signature and envelope became hybrid (composite
+  ML-DSA-65 + Ed25519, X-Wing, SHA-384 addresses). Nothing written by an
+  earlier version opens or verifies — messages, wrapped keys, local and
+  extension vaults, `.kvault` backups, proofs — and the clients say so by name
+  rather than failing as a wrong password. There is no migration path, because
+  the new keys exist only on users' devices: **a deployment holding 3.x data
+  starts from an empty database**, and users recreate their identities. The
+  backend's migration `b4c5d6e7f8a9` refuses to run on a database that still
+  holds identities and says so; back up, then recreate the database. 3.2.0 and
+  3.3.0 led up to it (3.3.0 adds `users.identity_public_key`).
 - **TrustKeys production build** injects into no site by default: each user adds
   the SPA's HTTPS origin under Settings → Manage Trusted Sites. The `build:dev`
   variant (localhost trusted, silent chat signing) is for development only.
@@ -135,10 +141,10 @@ account can do, not what all of them can.
 ### Native dependencies
 
 None to build. Python packages come from the hashed lock:
-`pip install --require-hashes -r backend/requirements.txt`. ML-DSA-44 comes from
-the `cryptography` wheel and the OpenSSL it bundles; the backend refuses to
-import on a `cryptography` without it (older than 48, or a source build against
-OpenSSL < 3.5), rather than failing every login later. Wheels exist for Linux
+`pip install --require-hashes -r backend/requirements.txt`. ML-DSA-65 and Ed25519
+come from the `cryptography` wheel and the OpenSSL it bundles; the backend refuses
+to import on a `cryptography` without them (older than 48, or a source build
+against OpenSSL < 3.5), rather than failing every login later. Wheels exist for Linux
 x86_64/aarch64; on another platform the lock falls back to a source build.
 
 ### Rotating the Postgres password
