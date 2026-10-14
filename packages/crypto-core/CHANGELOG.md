@@ -290,3 +290,32 @@ which ANSSI accepts for certification, agree no X25519 and agree only
 CatKDF/CasKDF as hybrid combiners; ANSSI's PQC FAQ recommends the two by name;
 PG-083 v3.00 recommends ≥ 384-bit digests for post-quantum security. X-Wing's
 SHA3-256 combiner misses all three.
+
+## 4.2.0
+
+ADDITIVE — nothing on the wire or in storage changes; every vector is
+unchanged. Lot 12b: the identity signature 5.0.0 will switch to, beside the
+current one behind a registry.
+
+- **`SIGNATURE_SUITES`**, keyed by algorithm id, one shape for every suite:
+  `keygen`, `publicKey`, `sign(message, sk, ctx?)`, `verify(sig, message, pk,
+  ctx?)`, with `lengths.signature` a maximum.
+- **`MLDSA65-ECDSA-P384-SHA512`** (draft-ietf-lamps-pq-composite-sigs-19, now
+  in the RFC Editor queue): `mldsa65P384Keygen`, `mldsa65P384PublicKey`,
+  `mldsa65P384Sign`, `mldsa65P384Verify`, `mldsa65P384Message`,
+  `MLDSA65_P384_LENGTHS`. A 2 049-byte public key (ML-DSA-65 key || SEC1
+  uncompressed P-384 point), an 80-byte secret key (ML-DSA seed || P-384
+  scalar, drawn independently), a signature of 3 317 to 3 413 bytes (ML-DSA-65
+  || DER ECDSA-with-SHA-384). ML-DSA-65 stays: it is ECCG-agreed. Ed25519 is
+  not, nor named by ANSSI's PG-083 v3.00, and P-384 is the curve the 4.1.0 KEM
+  uses too.
+- **Low-S and canonical DER are required**, beyond the draft: ECDSA is not
+  strongly unforgeable ((r, n-s) is a second valid signature anyone can make),
+  PG-083 warns about it, and RecoSignature.2 asks a hybrid to keep the
+  properties of both halves — ML-DSA is SUF-CMA. The draft's own vector shows
+  the case: `sWithContext` has a high s, valid under the draft and refused
+  here, while its low-S twin verifies. The signer always writes low-S, and
+  both halves are hedged (ECDSA with RFC 6979 §3.6 extra entropy).
+- Pinned by the draft's vector, copied verbatim into
+  `tests/fixtures/composite_mldsa65_ecdsa_p384_vectors.json`. Its ECDSA is
+  randomized upstream, so M' is pinned by verifying upstream's signatures.

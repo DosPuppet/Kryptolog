@@ -150,6 +150,150 @@ describe('composite ML-DSA-65 + Ed25519 (draft-ietf-lamps-pq-composite-sigs-19)'
     });
 });
 
+// The suite 5.0.0 switches the identity to (lot 12b). ECDSA is randomized
+// upstream, so the vector pins M' by VERIFYING the published signatures: a
+// wrong prefix, label, context byte or digest would make upstream's ECDSA half
+// fail under our message as surely as its ML-DSA half.
+describe('composite ML-DSA-65 + ECDSA-P384 (draft-ietf-lamps-pq-composite-sigs-19)', () => {
+    const V = fixture('composite_mldsa65_ecdsa_p384_vectors.json');
+    const [m, ctx, pk, skDraft, s, sCtx] = [V.m, V.ctx, V.pk, V.sk, V.s, V.sWithContext].map(b64);
+    // The draft's secret key carries the scalar inside an RFC 5915 ECPrivateKey;
+    // ours is the ML-DSA seed and the bare scalar.
+    const sk = Uint8Array.from([...skDraft.subarray(0, 32), ...skDraft.subarray(32 + 7, 32 + 7 + 48)]);
+    const ML_SIG = 3309;
+    const N = p384.Point.Fn.ORDER;
+    const P384_LABEL = 'CompositeAlgorithmSignatures2025COMPSIG-MLDSA65-ECDSA-P384-SHA512';
+
+    // A composite signature with its ECDSA half rebuilt from (r, s) — to make
+    // the high-S twin of a valid signature, or a non-canonical spelling of it.
+    const derParts = (sig) => p384.Signature.fromBytes(sig.subarray(ML_SIG), 'der');
+    const withEcdsa = (sig, der) => Uint8Array.from([...sig.subarray(0, ML_SIG), ...der]);
+    const der = (r, sv) => new p384.Signature(r, sv).toBytes('der');
+
+    it('has the sizes the formats are built on', () => {
+        expect(core.MLDSA65_P384_LENGTHS).toEqual({ publicKey: 2049, secretKey: 80, signature: 3413 });
+        expect(core.MLDSA65_P384_SIG_ALG).toBe('MLDSA65-ECDSA-P384-SHA512');
+        expect(pk.length).toBe(2049);
+        expect(Buffer.from(skDraft.subarray(32, 39)).toString('hex')).toBe('303e0201010430'); // where the scalar sits
+    });
+
+    it('derives the published public key from the published secret', () => {
+        expect(core.mldsa65P384PublicKey(sk)).toEqual(pk);
+        expect(core.mldsa65P384Keygen(sk).publicKey).toEqual(pk);
+    });
+
+    it('verifies the low-S published signature, under its own context only', () => {
+        expect(core.mldsa65P384Verify(s, m, pk)).toBe(true);
+        expect(core.mldsa65P384Verify(s, m, pk, ctx)).toBe(false);
+        expect(core.mldsa65P384Verify(s, flip(m, 0), pk)).toBe(false);
+    });
+
+    it("refuses the draft's own high-S signature, and accepts its low-S twin", () => {
+        // Valid under the draft (noble with lowS:false agrees), refused here
+        // ONLY for its s: the same r with n - s, every other byte unchanged,
+        // verifies — which is also what proves M' for the context case.
+        const { r, s: high } = derParts(sCtx);
+        expect(high > N / 2n).toBe(true);
+        const M = core.mldsa65P384Message(m, ctx);
+        expect(p384.verify(sCtx.subarray(ML_SIG), M, pk.subarray(1952), { format: 'der', lowS: false })).toBe(true);
+        expect(core.mldsa65P384Verify(sCtx, m, pk, ctx)).toBe(false);
+        expect(core.mldsa65P384Verify(withEcdsa(sCtx, der(r, N - high)), m, pk, ctx)).toBe(true);
+    });
+
+    it('turning a valid signature high-S is a refusal: one valid s per signature', () => {
+        const { r, s: low } = derParts(s);
+        expect(core.mldsa65P384Verify(withEcdsa(s, der(r, N - low)), m, pk)).toBe(false);
+    });
+
+    it('refuses a non-canonical DER spelling of the same (r, s)', () => {
+        const canonical = s.subarray(ML_SIG);
+        // A superfluous leading zero on r: same integer, longer encoding.
+        const rLen = canonical[3];
+        const r = canonical.subarray(4, 4 + rLen);
+        const rest = canonical.subarray(4 + rLen);
+        const padded = Uint8Array.from([0x30, canonical[1] + 1, 0x02, rLen + 1, 0x00, ...r, ...rest]);
+        expect(core.mldsa65P384Verify(withEcdsa(s, padded), m, pk)).toBe(false);
+        // A trailing byte after a valid encoding.
+        expect(core.mldsa65P384Verify(Uint8Array.from([...s, 0]), m, pk)).toBe(false);
+        // A long-form length where the short form fits.
+        const longForm = Uint8Array.from([0x30, 0x81, canonical[1], ...canonical.subarray(2)]);
+        expect(core.mldsa65P384Verify(withEcdsa(s, longForm), m, pk)).toBe(false);
+    });
+
+    it("pins M' byte for byte", () => {
+        const empty = core.mldsa65P384Message(new Uint8Array(0));
+        expect(Buffer.from(empty.subarray(0, P384_LABEL.length)).toString('latin1')).toBe(P384_LABEL);
+        expect(empty[P384_LABEL.length]).toBe(0);
+        expect(Buffer.from(empty.subarray(P384_LABEL.length + 1)).toString('hex'))
+            .toBe(createHash('sha512').update('').digest('hex'));
+    });
+
+    it('needs BOTH halves, and the uncompressed key form', () => {
+        expect(core.mldsa65P384Verify(flip(s, 10), m, pk)).toBe(false); // ML-DSA half
+        expect(core.mldsa65P384Verify(flip(s, ML_SIG + 20), m, pk)).toBe(false); // ECDSA half
+        expect(core.mldsa65P384Verify(s, m, flip(pk, 10))).toBe(false);
+        expect(core.mldsa65P384Verify(s, m, flip(pk, 2000))).toBe(false);
+        const compressedPrefix = pk.slice(); compressedPrefix[1952] = 0x02;
+        expect(core.mldsa65P384Verify(s, m, compressedPrefix)).toBe(false);
+    });
+
+    it('refuses wrong lengths and junk without throwing', () => {
+        expect(core.mldsa65P384Verify(s.subarray(0, ML_SIG + 7), m, pk)).toBe(false);
+        expect(core.mldsa65P384Verify(new Uint8Array(ML_SIG + 105), m, pk)).toBe(false);
+        expect(core.mldsa65P384Verify(s, m, pk.subarray(1))).toBe(false);
+        expect(core.mldsa65P384Verify('not bytes', m, pk)).toBe(false);
+        expect(core.mldsa65P384Verify(s, m, pk, new Uint8Array(256))).toBe(false);
+        expect(() => core.mldsa65P384Sign(m, sk, new Uint8Array(256))).toThrow(/255/);
+        expect(() => core.mldsa65P384Sign(m, sk.subarray(1))).toThrow(/80 bytes/);
+        expect(() => core.mldsa65P384PublicKey(new Uint8Array(80))).toThrow(/out of range/);
+    });
+
+    it('signs low-S, hedged, with a fresh key whose halves are independent', () => {
+        const a = core.mldsa65P384Keygen();
+        const b = core.mldsa65P384Keygen();
+        for (let i = 0; i < 8; i++) {
+            const sig = core.mldsa65P384Sign(m, a.secretKey);
+            expect(core.mldsa65P384Verify(sig, m, a.publicKey)).toBe(true);
+            expect(core.mldsa65P384Verify(sig, m, b.publicKey)).toBe(false);
+            expect(derParts(sig).s <= N / 2n).toBe(true);
+        }
+        // Hedged: the same message twice gives two different ECDSA halves.
+        const one = core.mldsa65P384Sign(m, a.secretKey).subarray(ML_SIG);
+        const two = core.mldsa65P384Sign(m, a.secretKey).subarray(ML_SIG);
+        expect(one).not.toEqual(two);
+        expect(a.secretKey.subarray(32)).not.toEqual(b.secretKey.subarray(32));
+        expect(core.mldsa65P384PublicKey(a.secretKey)).toEqual(a.publicKey);
+    });
+});
+
+describe('signature registry', () => {
+    it('holds both composites, each under its own id', () => {
+        expect(Object.keys(core.SIGNATURE_SUITES).sort())
+            .toEqual([core.COMPOSITE_SIG_ALG, core.MLDSA65_P384_SIG_ALG].sort());
+        for (const [alg, suite] of Object.entries(core.SIGNATURE_SUITES)) expect(suite.alg).toBe(alg);
+        expect(Object.isFrozen(core.SIGNATURE_SUITES)).toBe(true);
+    });
+
+    it.each(Object.keys(core.SIGNATURE_SUITES))('%s: signs and verifies within its maximum length', (alg) => {
+        const suite = core.SIGNATURE_SUITES[alg];
+        const { publicKey, secretKey } = suite.keygen();
+        expect(suite.publicKey(secretKey)).toEqual(publicKey);
+        const message = new TextEncoder().encode('hello');
+        const sig = suite.sign(message, secretKey);
+        expect(sig.length).toBeLessThanOrEqual(suite.lengths.signature);
+        expect(suite.verify(sig, message, publicKey)).toBe(true);
+    });
+
+    it('a signature from one suite never verifies under the other', () => {
+        const ed = core.SIGNATURE_SUITES[core.COMPOSITE_SIG_ALG];
+        const ec = core.SIGNATURE_SUITES[core.MLDSA65_P384_SIG_ALG];
+        const message = new TextEncoder().encode('hello');
+        const edKey = ed.keygen(); const ecKey = ec.keygen();
+        expect(ec.verify(ed.sign(message, edKey.secretKey), message, ecKey.publicKey)).toBe(false);
+        expect(ed.verify(ec.sign(message, ecKey.secretKey), message, edKey.publicKey)).toBe(false);
+    });
+});
+
 describe('X-Wing (draft-connolly-cfrg-xwing-kem-10)', () => {
     const { vectors } = fixture('xwing_vectors.json');
 
