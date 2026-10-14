@@ -5,8 +5,7 @@
 // associated data is mandatory (audit M-2).
 
 import { toHex, fromHex, toB64, fromB64, ENC, DEC } from './encoding.js';
-import { kemAesKey, FORMAT_VERSION, KEM_ENVELOPE_ALG, assertFormat, formatAad } from './pqc.js';
-import { xwingEncapsulate, xwingDecapsulate } from './kem.js';
+import { FORMAT_VERSION, assertFormat, formatAad, kemSeal, kemOpen } from './pqc.js';
 
 // The symmetric envelope's algorithm id (see pqc.js for why every envelope
 // carries one). A session or content key is always a fresh 256-bit AES-GCM key.
@@ -57,38 +56,15 @@ const aeadDecrypt = async (envelope, keyHex, field) => {
     return DEC.decode(decrypted);
 };
 
-// A session key, wrapped to one recipient's X-Wing key (crypto-core 4.0.0).
-// The envelope's markers are its AES-GCM associated data (pqc.js formatAad).
-export const wrapSessionKey = async (sessionKeyHex, encryptionPublicKeyHex) => {
-    const { cipherText, sharedSecret } = xwingEncapsulate(fromHex(encryptionPublicKeyHex));
-    const iv = crypto.getRandomValues(new Uint8Array(12));
-    const kek = await kemAesKey(sharedSecret, ["encrypt"]);
-    const encryptedKey = await crypto.subtle.encrypt(
-        { name: "AES-GCM", iv, additionalData: formatAad(KEM_ENVELOPE_ALG) },
-        kek,
-        fromHex(sessionKeyHex)
-    );
-    return {
-        v: FORMAT_VERSION,
-        alg: KEM_ENVELOPE_ALG,
-        kem: toB64(cipherText),
-        iv: toB64(iv),
-        encKey: toB64(new Uint8Array(encryptedKey)),
-    };
-};
+// A session key, wrapped to one recipient's encryption key: the KEM envelope
+// with the key bytes as plaintext and `encKey` as the ciphertext's name
+// (pqc.js kemSeal, whichever KEM suite is in use).
+export const wrapSessionKey = (sessionKeyHex, encryptionPublicKeyHex) =>
+    kemSeal(fromHex(sessionKeyHex), encryptionPublicKeyHex, 'encKey');
 
-export const unwrapSessionKey = async (wrappedKey, encryptionSeedHex) => {
-    // wrappedKey: { v, alg, kem, iv, encKey } — the three blobs base64
-    assertFormat(wrappedKey, KEM_ENVELOPE_ALG, 'wrapped key');
-    const sharedSecret = xwingDecapsulate(fromB64(wrappedKey.kem), fromHex(encryptionSeedHex));
-    const kek = await kemAesKey(sharedSecret, ["decrypt"]);
-    const decryptedKeyBytes = await crypto.subtle.decrypt(
-        { name: "AES-GCM", iv: fromB64(wrappedKey.iv), additionalData: formatAad(KEM_ENVELOPE_ALG) },
-        kek,
-        fromB64(wrappedKey.encKey)
-    );
-    return toHex(new Uint8Array(decryptedKeyBytes));
-};
+// wrappedKey: { v, alg, kem, iv, encKey } — the three blobs base64
+export const unwrapSessionKey = async (wrappedKey, encryptionSeedHex) =>
+    toHex(await kemOpen(wrappedKey, encryptionSeedHex, 'encKey', 'wrapped key'));
 
 export const encryptWithSessionKey = (message, sessionKeyHex) =>
     aeadEncrypt(message, sessionKeyHex, "content");

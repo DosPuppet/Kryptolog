@@ -319,3 +319,28 @@ current one behind a registry.
 - Pinned by the draft's vector, copied verbatim into
   `tests/fixtures/composite_mldsa65_ecdsa_p384_vectors.json`. Its ECDSA is
   randomized upstream, so M' is pinned by verifying upstream's signatures.
+
+## 4.3.0
+
+NO WIRE CHANGE — every golden envelope, signed body and vector is unchanged,
+and that is the proof this release is a seam and nothing more (lot 12d). The
+envelope layer stops naming algorithms and goes through the 4.1.0/4.2.0
+registries, so the 5.0.0 cutover is a change of WHICH suites, not of HOW
+envelopes are built.
+
+- **`SIGNATURE_ALG` and `KEM_ALG`** (pqc.js) name the suites in use, and
+  **`SIGNATURE_SUITE` / `KEM_SUITE`** are those registry entries. Every key,
+  signature and envelope operation uses them; `KEM_ENVELOPE_ALG` is spelled
+  `${KEM_ALG}-A256GCM`, which is the 4.0.0 `XWING-HKDF384-A256GCM` exactly.
+  Only the named suites are written or accepted: a registry entry is not a
+  fallback (ANSSI crypto-agility note, Rec. 6).
+- **`kemSeal` / `kemOpen`**: one sealing path for the two KEM envelopes,
+  which differed only in their ciphertext field's name (`content` for
+  `encryptMessage`, `encKey` for `wrapSessionKey`). `kemAesKey` is gone: the
+  KEM suite now returns the final AES key (4.1.0), and nothing outside this
+  package called it.
+- The address prefix is spelled from `FORMAT_VERSION` and `SIGNATURE_ALG`
+  (`Kryptolog address v4\nalg=MLDSA65-Ed25519-SHA512\n`, unchanged), and the
+  account seed patterns from the suites' secret-key lengths.
+- The backend mirrors the seam: `auth.SIGNATURE_VERIFIERS[SIG_ALG]` is what
+  every verification path calls.

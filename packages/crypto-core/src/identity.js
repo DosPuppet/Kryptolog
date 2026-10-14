@@ -20,12 +20,15 @@
 // the key: a key comes from the directory, i.e. from the server, and a server
 // that could serve any key for an address could forge any author.
 
-import { COMPOSITE_LENGTHS, compositeVerify } from './composite.js';
+import { FORMAT_VERSION, SIGNATURE_ALG, SIGNATURE_SUITE } from './pqc.js';
 import { ENC, fromHex, fromB64, sha384HexBytes } from './encoding.js';
 
-const ADDRESS_DOMAIN = ENC.encode('Kryptolog address v4\nalg=MLDSA65-Ed25519-SHA512\n');
+// The prefix is spelled from the format version and the signature suite in
+// use (4.3.0), so a change of either changes every address — deliberately: an
+// address must never be read as the hash of a key of another kind.
+const ADDRESS_DOMAIN = ENC.encode(`Kryptolog address v${FORMAT_VERSION}\nalg=${SIGNATURE_ALG}\n`);
 export const ADDRESS_HEX_LENGTH = 96;
-export const IDENTITY_KEY_HEX_LENGTH = COMPOSITE_LENGTHS.publicKey * 2;
+export const IDENTITY_KEY_HEX_LENGTH = SIGNATURE_SUITE.lengths.publicKey * 2;
 
 const ADDRESS_RE = new RegExp(`^[0-9a-f]{${ADDRESS_HEX_LENGTH}}$`);
 const IDENTITY_KEY_RE = new RegExp(`^[0-9a-f]{${IDENTITY_KEY_HEX_LENGTH}}$`);
@@ -64,7 +67,7 @@ export const isAddressOf = (address, identityPublicKey) => {
 export const verifyIdentitySignature = async ({ address, identityPublicKey, message, signature }) => {
     if (!isAddressOf(address, identityPublicKey)) return false;
     try {
-        return compositeVerify(fromB64(signature), ENC.encode(message), fromHex(identityPublicKey));
+        return SIGNATURE_SUITE.verify(fromB64(signature), ENC.encode(message), fromHex(identityPublicKey));
     } catch {
         return false;
     }

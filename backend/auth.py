@@ -548,8 +548,11 @@ def _verify_composite_p384(
 
 
 # Every composite the server can verify, by algorithm id — the registry
-# crypto-core's SIGNATURE_SUITES mirrors. Which one an identity uses is decided
-# where identities are read, not here.
+# crypto-core's SIGNATURE_SUITES mirrors. Which one identities USE is SIG_ALG,
+# the one name the verification paths below look up (lot 12d, the agility
+# seam): a change of algorithm is SIG_ALG and the key checks, not a rewrite of
+# every verifier. Only that one is accepted — a registry entry is not a
+# fallback.
 SIGNATURE_VERIFIERS = {
     SIG_ALG: _verify_composite,
     SIG_ALG_P384: _verify_composite_p384,
@@ -565,7 +568,7 @@ def verify_identity_signature(identity_public_key: str, message: str, signature:
     the exact UTF-8 string signed.
     """
     try:
-        return _verify_composite(
+        return SIGNATURE_VERIFIERS[SIG_ALG](
             bytes.fromhex(identity_public_key), message.encode("utf-8"), _sig_bytes(signature)
         )
     except Exception as e:
@@ -595,7 +598,7 @@ def verify_pqc_signature(
         ).encode("utf-8")
         sig_bytes = _sig_bytes(signature)
         pk_bytes = bytes.fromhex(public_key)
-        return _verify_composite(pk_bytes, message, sig_bytes)
+        return SIGNATURE_VERIFIERS[SIG_ALG](pk_bytes, message, sig_bytes)
     except Exception as e:
         logger.debug("PQC verification error: %s", e)
         return False

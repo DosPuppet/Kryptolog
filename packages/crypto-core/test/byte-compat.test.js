@@ -661,7 +661,7 @@ describe('encryption-key attestation (audit M-1, v1.3.0)', () => {
 
 describe('single-source / version guard', () => {
     it('exports a version both app builds can assert against', () => {
-        expect(core.CRYPTO_CORE_VERSION).toBe('4.2.0');
+        expect(core.CRYPTO_CORE_VERSION).toBe('4.3.0');
     });
 });
 

@@ -14,10 +14,16 @@
 // transfer cannot carry a key pair that does not belong together, and nothing
 // downstream ever has to wonder whether `publicKey` is the seed's.
 
-import { FormatError, generateIdentityKeyPair, generateEncryptionKeyPair, identityPublicKeyOf, encryptionPublicKeyOf } from './pqc.js';
+import {
+    FormatError, generateIdentityKeyPair, generateEncryptionKeyPair, identityPublicKeyOf, encryptionPublicKeyOf,
+    SIGNATURE_SUITE, KEM_SUITE,
+} from './pqc.js';
 import { addressOf } from './identity.js';
 
-const SEED_RE = { identity: /^[0-9a-f]{128}$/, encryption: /^[0-9a-f]{64}$/ };
+// A seed is as long as its suite's secret key, in hex (4.3.0: taken from the
+// registries rather than spelled out, so it follows the suites in use).
+const seedPattern = (suite) => new RegExp(`^[0-9a-f]{${suite.lengths.secretKey * 2}}$`);
+const SEED_RE = { identity: seedPattern(SIGNATURE_SUITE), encryption: seedPattern(KEM_SUITE) };
 const LEGACY_FIELDS = ['mldsa', 'mlkem', 'dilithium', 'kyber'];
 
 /** A new account: fresh, independent identity and encryption seeds. */

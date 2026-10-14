@@ -10,8 +10,8 @@
 // FIPS 204/203 and the IETF drafts define as the private key, and what any
 // other library (WebCrypto, OpenSSL) can import.
 
-import { compositeKeygen, compositePublicKey, compositeSign, compositeVerify, COMPOSITE_SIG_ALG } from './composite.js';
-import { xwingKeygen, xwingPublicKey, xwingEncapsulate, xwingDecapsulate } from './kem.js';
+import { SIGNATURE_SUITES, COMPOSITE_SIG_ALG } from './composite.js';
+import { KEM_SUITES, XWING_KEM_ALG } from './kem.js';
 import { toHex, fromHex, toB64, fromB64, ENC, DEC } from './encoding.js';
 
 // --- Format markers (crypto-core 3.0.0, audit 2026-10-12 K-10) ---
@@ -26,8 +26,23 @@ import { toHex, fromHex, toB64, fromB64, ENC, DEC } from './encoding.js';
 // nothing authenticated them: the day a second algorithm exists, a marker an
 // attacker can rewrite is a downgrade lever.
 export const FORMAT_VERSION = 4;
-export const KEM_ENVELOPE_ALG = 'XWING-HKDF384-A256GCM';
+
+// --- The suites in use (4.3.0, lot 12d: the agility seam) ---
+//
+// Which signature identities use and which KEM encryption keys use, by
+// registry id — the one place either is named. Everything below goes through
+// the registries (composite.js SIGNATURE_SUITES, kem.js KEM_SUITES), so the
+// next change of algorithm is these two lines and a format version, not a
+// rewrite of every call site. The registries hold more than one suite; this
+// package WRITES and ACCEPTS only the ones named here, which is the line
+// ANSSI's crypto-agility note draws (Rec. 6): coexisting algorithms must
+// never let a negotiation, or an attacker-chosen marker, pick an undesired
+// one.
 export const SIGNATURE_ALG = COMPOSITE_SIG_ALG;
+export const KEM_ALG = XWING_KEM_ALG;
+export const KEM_ENVELOPE_ALG = `${KEM_ALG}-A256GCM`;
+export const SIGNATURE_SUITE = SIGNATURE_SUITES[SIGNATURE_ALG];
+export const KEM_SUITE = KEM_SUITES[KEM_ALG];
 
 export class FormatError extends Error {
     constructor(message) {
@@ -60,41 +75,29 @@ export const assertFormat = (envelope, alg, what) => {
 /** The associated data binding an envelope's markers to its ciphertext (4.0.0). */
 export const formatAad = (alg) => ENC.encode(`Kryptolog envelope\nv=${FORMAT_VERSION}\nalg=${alg}`);
 
-// The AES key from an X-Wing shared secret: HKDF-SHA-384 under a label that
-// names the KEM and the version (audit S5 introduced the HKDF step; 4.0.0 moved
-// it to SHA-384 with the rest of the format). X-Wing's secret is already a
-// SHA3-256 output, so this is domain binding, not a fix for a weakness.
-const KEM_KDF_INFO = 'Kryptolog/X-Wing/AES-GCM/v4';
-export const kemAesKey = async (sharedSecret, usage) => {
-    const ikm = await crypto.subtle.importKey('raw', sharedSecret, 'HKDF', false, ['deriveKey']);
-    return crypto.subtle.deriveKey(
-        { name: 'HKDF', hash: 'SHA-384', salt: new Uint8Array(0), info: ENC.encode(KEM_KDF_INFO) },
-        ikm,
-        { name: 'AES-GCM', length: 256 },
-        false,
-        usage
-    );
-};
+// The KEM suite hands back the final 256-bit AES-GCM key (kem.js); this only
+// imports it, non-extractable, for the one operation it is for.
+const importKemKey = (key, usage) => crypto.subtle.importKey('raw', key, 'AES-GCM', false, usage);
 
 // --- Keys ---
 
 /** A fresh identity key pair: `{ publicKey, seed }`, both lowercase hex. */
 export const generateIdentityKeyPair = () => {
-    const { publicKey, secretKey } = compositeKeygen();
+    const { publicKey, secretKey } = SIGNATURE_SUITE.keygen();
     return { publicKey: toHex(publicKey), seed: toHex(secretKey) };
 };
 
 /** A fresh encryption key pair: `{ publicKey, seed }`, both lowercase hex. */
 export const generateEncryptionKeyPair = () => {
-    const { publicKey, secretKey } = xwingKeygen();
+    const { publicKey, secretKey } = KEM_SUITE.keygen();
     return { publicKey: toHex(publicKey), seed: toHex(secretKey) };
 };
 
 /** The identity public key a stored seed names. */
-export const identityPublicKeyOf = (seedHex) => toHex(compositePublicKey(fromHex(seedHex)));
+export const identityPublicKeyOf = (seedHex) => toHex(SIGNATURE_SUITE.publicKey(fromHex(seedHex)));
 
 /** The encryption public key a stored seed names. */
-export const encryptionPublicKeyOf = (seedHex) => toHex(xwingPublicKey(fromHex(seedHex)));
+export const encryptionPublicKeyOf = (seedHex) => toHex(KEM_SUITE.publicKey(fromHex(seedHex)));
 
 // --- Signatures ---
 
@@ -102,47 +105,58 @@ export const encryptionPublicKeyOf = (seedHex) => toHex(xwingPublicKey(fromHex(s
 // The application context is empty: domain separation lives inside the
 // message (signing.js), as it always has.
 export const signMessage = async (message, identitySeedHex) =>
-    toB64(compositeSign(ENC.encode(message), fromHex(identitySeedHex)));
+    toB64(SIGNATURE_SUITE.sign(ENC.encode(message), fromHex(identitySeedHex)));
 
 // The raw primitive: true iff BOTH halves verify over exactly this message
 // (audit H4). Application code verifies through identity.js's
 // verifyIdentitySignature, which also checks the key against an address.
 export const verifySignature = async (message, signatureB64, identityPublicKeyHex) => {
     try {
-        return compositeVerify(fromB64(signatureB64), ENC.encode(message), fromHex(identityPublicKeyHex));
+        return SIGNATURE_SUITE.verify(fromB64(signatureB64), ENC.encode(message), fromHex(identityPublicKeyHex));
     } catch {
         return false;
     }
 };
 
 // --- The KEM envelope ---
+//
+// One sealing path for both envelopes that open with an encryption key: the
+// message envelope (`content`, a string) and the wrapped session key
+// (`encKey`, key bytes) differ in the NAME of their ciphertext field and in
+// nothing else, so they share it — two copies of a format are two chances to
+// drift. The markers are the associated data (formatAad).
 
-export const encryptMessage = async (message, encryptionPublicKeyHex) => {
-    const { cipherText, sharedSecret } = xwingEncapsulate(fromHex(encryptionPublicKeyHex));
+/** `{ v, alg, kem, iv, [field] }`: `plaintext` (bytes) sealed to one encryption key. */
+export const kemSeal = async (plaintext, encryptionPublicKeyHex, field) => {
+    const { cipherText, key } = KEM_SUITE.encapsulate(fromHex(encryptionPublicKeyHex));
     const iv = crypto.getRandomValues(new Uint8Array(12));
-    const key = await kemAesKey(sharedSecret, ["encrypt"]);
-    const content = await crypto.subtle.encrypt(
-        { name: "AES-GCM", iv, additionalData: formatAad(KEM_ENVELOPE_ALG) },
-        key,
-        ENC.encode(message)
+    const sealed = await crypto.subtle.encrypt(
+        { name: 'AES-GCM', iv, additionalData: formatAad(KEM_ENVELOPE_ALG) },
+        await importKemKey(key, ['encrypt']),
+        plaintext
     );
     return {
         v: FORMAT_VERSION,
         alg: KEM_ENVELOPE_ALG,
         kem: toB64(cipherText),
         iv: toB64(iv),
-        content: toB64(new Uint8Array(content)),
+        [field]: toB64(new Uint8Array(sealed)),
     };
 };
 
-export const decryptMessage = async (encryptedData, encryptionSeedHex) => {
-    assertFormat(encryptedData, KEM_ENVELOPE_ALG, 'KEM envelope');
-    const sharedSecret = xwingDecapsulate(fromB64(encryptedData.kem), fromHex(encryptionSeedHex));
-    const key = await kemAesKey(sharedSecret, ["decrypt"]);
-    const plain = await crypto.subtle.decrypt(
-        { name: "AES-GCM", iv: fromB64(encryptedData.iv), additionalData: formatAad(KEM_ENVELOPE_ALG) },
-        key,
-        fromB64(encryptedData.content)
-    );
-    return DEC.decode(plain);
+/** The plaintext bytes of a kemSeal envelope, for the holder of the seed. */
+export const kemOpen = async (envelope, encryptionSeedHex, field, what) => {
+    assertFormat(envelope, KEM_ENVELOPE_ALG, what);
+    const key = KEM_SUITE.decapsulate(fromB64(envelope.kem), fromHex(encryptionSeedHex));
+    return new Uint8Array(await crypto.subtle.decrypt(
+        { name: 'AES-GCM', iv: fromB64(envelope.iv), additionalData: formatAad(KEM_ENVELOPE_ALG) },
+        await importKemKey(key, ['decrypt']),
+        fromB64(envelope[field])
+    ));
 };
+
+export const encryptMessage = (message, encryptionPublicKeyHex) =>
+    kemSeal(ENC.encode(message), encryptionPublicKeyHex, 'content');
+
+export const decryptMessage = async (encryptedData, encryptionSeedHex) =>
+    DEC.decode(await kemOpen(encryptedData, encryptionSeedHex, 'content', 'KEM envelope'));
