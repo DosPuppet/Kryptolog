@@ -10,14 +10,14 @@ import DeleteAccountSection from './DeleteAccountSection';
 
 const ProfileModal = ({ isOpen, onClose }) => {
     const { user, setUser, token } = useAuth();
-    const { pqcAccount, mlkemKey } = usePQC();
+    const { pqcAccount, ownEncryptionKey } = usePQC();
 
     const [username, setUsername] = useState(user?.username || '');
     const [updating, setUpdating] = useState(false);
     const [error, setError] = useState('');
 
-    // PQC identity (ML-KEM encryption key + ML-DSA account id).
-    const encryptionPublicKey = mlkemKey;
+    // PQC identity (hybrid encryption key + composite identity's address).
+    const encryptionPublicKey = ownEncryptionKey;
     const accountId = pqcAccount;
 
     // Your verifiable safety number (audit S1) — read it out to a contact so

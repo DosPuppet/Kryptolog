@@ -120,7 +120,7 @@ export const importTrustStores = (data) => {
 
 // --- Encryption-key attestation (audit M-1) ---
 // TOFU above detects a key CHANGE; the attestation proves the key BINDING:
-// the contact self-signed their ML-KEM key with their identity (ML-DSA) key,
+// the contact self-signed their encryption key with their identity key,
 // and that key is checked to be the one their address names (crypto-core
 // 3.3.0), so verification needs no trusted third party. A directory that
 // substitutes a KEM key it controls cannot forge this signature, and one that

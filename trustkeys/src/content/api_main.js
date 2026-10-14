@@ -57,7 +57,7 @@
                 type: 'TRUSTKEYS_SIGN_MULTISIG_APPROVAL', workflowId, secretId, ciphertextSha384,
             });
         },
-        // Self-signed binding of the active account's ML-KEM key to its identity
+        // Self-signed binding of the active account's encryption key to its identity
         // (audit M-1). Popup-free: the signed message is fixed and self-referential —
         // the page supplies nothing.
         getKeyAttestation: async () => {

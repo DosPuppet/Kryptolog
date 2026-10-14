@@ -1,42 +1,35 @@
-// The hybrid KEMs, behind one registry (crypto-core 4.1.0, lot 12a).
+// The hybrid KEM, behind a registry (crypto-core 4.1.0, lot 12; the only suite
+// since 5.0.0):
 //
-// Two suites, each holding while EITHER of its halves does (audit 2026-10-12
-// K-10):
-//
-//   XWING-HKDF384                        X-Wing, ML-KEM-768 + X25519
-//                                        (draft-connolly-cfrg-xwing-kem-10),
-//                                        the KEM every 4.x envelope uses.
 //   HKDFwSHA384_P384_ML-KEM-768_CatKDF   ETSI TS 103 744 V1.2.2 CatKDF over
-//                                        P-384 ECDH + ML-KEM-768, the one
-//                                        5.0.0 will switch to.
+//                                        P-384 ECDH + ML-KEM-768
 //
-// Why a second suite (lot 12, ANSSI 2026). X-Wing is a fixed instance with its
-// own published proof, but the references ANSSI now accepts for certification
-// do not cover it twice over: the ECCG Agreed Cryptographic Mechanisms v2
-// (April 2025) agree P-256/384/521 and brainpool curves only — no X25519 — and
-// agree ETSI TS 103 744's CatKDF/CasKDF as the combiners, where X-Wing's is a
-// bare SHA3-256 (ENISA's 2026-04-30 report files it as "not allowed" for that
-// reason). ANSSI's PQC FAQ recommends CatKDF/CasKDF by name, and PG-083 v3.00
-// (2026-03-20) recommends digests of at least 384 bits once post-quantum
-// security is the goal (RecoPQHachage). The CatKDF suite is an ETSI parameter
-// set verbatim — §7.7.2 lists HKDFwSHA384_P384_ML-KEM-768, and only P-384 goes
-// with SHA-384 there — so nothing here is a construction of our own beyond the
-// encoding of the transcript, which the standard leaves to the application.
+// It holds while EITHER of its halves does (audit 2026-10-12 K-10), and it is
+// what the references ANSSI accepts for certification name. The ECCG Agreed
+// Cryptographic Mechanisms v2 (April 2025) agree P-256/384/521 and brainpool
+// curves only and ETSI TS 103 744's CatKDF/CasKDF as the combiners; ANSSI's
+// PQC FAQ recommends CatKDF/CasKDF by name; PG-083 v3.00 (2026-03-20)
+// recommends digests of at least 384 bits once post-quantum security is the
+// goal (RecoPQHachage). X-Wing — the 4.x KEM, ML-KEM-768 + X25519 under a
+// SHA3-256 combiner — missed all three; ENISA's 2026-04-30 report files its
+// combiner as "not allowed" next to CatKDF. The suite here is an ETSI
+// parameter set verbatim — §7.7.2 lists HKDFwSHA384_P384_ML-KEM-768, and only
+// P-384 goes with SHA-384 there — so nothing is a construction of our own
+// beyond the encoding of the transcript, which the standard leaves to the
+// application.
 //
 // A suite is a value, not a code path: `encapsulate(publicKey)` gives
 // `{ cipherText, key }` and `decapsulate(cipherText, secretKey)` gives `key`,
-// a 256-bit AES-GCM key bound to the suite, so the envelope layer (pqc.js,
-// aead.js) never needs to know which KEM it is talking to. Adding a suite is
-// one entry and its vectors — that is the algorithmic crypto-agility ANSSI's
-// note of 2026-01-19 asks for first (Rec. 1). Accepting several suites for NEW
-// data is a different thing, and this registry does not do it: which suite is
-// written, and which ones are read, is decided where envelopes are built.
+// a 256-bit AES-GCM key bound to the suite, so the envelope layer (pqc.js)
+// never needs to know which KEM it is talking to. Adding a suite is one entry
+// and its vectors — the algorithmic crypto-agility ANSSI's note of 2026-01-19
+// asks for first (Rec. 1). Accepting several suites for NEW data is a
+// different thing, and this registry does not do it: which suite is written
+// and read is decided once, in pqc.js.
 //
-// Secret keys are SEEDS throughout, as for the composite identity: X-Wing's is
-// its 32-byte seed, CatKDF's the P-384 scalar and the ML-KEM-768 seed side by
+// Secret keys are SEEDS: the P-384 scalar and the ML-KEM-768 seed side by
 // side. Bytes in, bytes out; the wire encodings are pqc.js's.
 
-import { ml_kem768_x25519 } from '@noble/post-quantum/hybrid.js';
 import { ml_kem768 } from '@noble/post-quantum/ml-kem.js';
 import { p384 } from '@noble/curves/nist.js';
 import { hkdf } from '@noble/hashes/hkdf.js';
@@ -58,49 +51,6 @@ const need = (bytes, length, what) => {
     if (!isUint8Array(bytes) || bytes.length !== length) {
         throw new RangeError(`${what} must be ${length} bytes`);
     }
-};
-
-// --- X-Wing ---
-//
-// The shared secret is SHA3-256 over both component secrets, the X25519
-// ciphertext and public key, and a fixed label. noble ships it as
-// `ml_kem768_x25519`. The secret key IS the 32-byte seed — X-Wing re-expands
-// it with SHAKE256 on every decapsulation — so a vault stores 32 bytes, not
-// ML-KEM's 2 400-byte expanded key.
-
-export const XWING_LENGTHS = Object.freeze({
-    publicKey: 1216, // ML-KEM-768 pk (1184) || X25519 pk (32)
-    secretKey: 32,
-    cipherText: 1120, // ML-KEM-768 ct (1088) || X25519 ephemeral pk (32)
-    sharedSecret: 32,
-});
-
-/** The X-Wing public key of a 32-byte secret key (seed). */
-export const xwingPublicKey = (secretKey) => {
-    need(secretKey, XWING_LENGTHS.secretKey, 'X-Wing secret key');
-    return ml_kem768_x25519.getPublicKey(secretKey.slice());
-};
-
-/** A new key pair, or the one a stored 32-byte secret key (seed) names. */
-export const xwingKeygen = (secretKey = crypto.getRandomValues(new Uint8Array(XWING_LENGTHS.secretKey))) => {
-    const copy = secretKey.slice(); // noble's keygen(seed) keeps a reference to its argument
-    return { publicKey: xwingPublicKey(copy), secretKey: copy };
-};
-
-// Deliberately no way to pass the encapsulation randomness: a caller that
-// could would sooner or later pass a constant. The draft's vectors pin
-// encapsulation through decapsulation instead (see test/hybrid.test.js).
-/** Encapsulate to `publicKey`: `{ cipherText, sharedSecret }`. */
-export const xwingEncapsulate = (publicKey) => {
-    need(publicKey, XWING_LENGTHS.publicKey, 'X-Wing public key');
-    return ml_kem768_x25519.encapsulate(publicKey);
-};
-
-/** The shared secret `cipherText` carries for the holder of `secretKey`. */
-export const xwingDecapsulate = (cipherText, secretKey) => {
-    need(cipherText, XWING_LENGTHS.cipherText, 'X-Wing ciphertext');
-    need(secretKey, XWING_LENGTHS.secretKey, 'X-Wing secret key');
-    return ml_kem768_x25519.decapsulate(cipherText, secretKey.slice());
 };
 
 // --- ETSI TS 103 744 V1.2.2 building blocks ---
@@ -251,27 +201,10 @@ export const catkdfDecapsulate = (cipherText, secretKey) => {
 // --- The registry ---
 //
 // One shape for every suite: `{ alg, lengths, publicKey(sk), keygen(sk?),
-// encapsulate(pk) -> { cipherText, key }, decapsulate(ct, sk) -> key }`.
-// `key` is always the final 256-bit AES-GCM key, so the X-Wing entry carries
-// the HKDF step pqc.js applied to its shared secret since audit S5 — the same
-// bytes, under the same label, which the 4.x golden envelopes pin.
-
-export const XWING_KEM_ALG = 'XWING-HKDF384';
-const XWING_KDF_INFO = ENC.encode('Kryptolog/X-Wing/AES-GCM/v4');
-const xwingKey = (sharedSecret) => hkdf(sha384, sharedSecret, EMPTY, XWING_KDF_INFO, 32);
+// encapsulate(pk) -> { cipherText, key }, decapsulate(ct, sk) -> key }`, where
+// `key` is always the final 256-bit AES-GCM key.
 
 export const KEM_SUITES = Object.freeze({
-    [XWING_KEM_ALG]: Object.freeze({
-        alg: XWING_KEM_ALG,
-        lengths: XWING_LENGTHS,
-        publicKey: xwingPublicKey,
-        keygen: xwingKeygen,
-        encapsulate: (publicKey) => {
-            const { cipherText, sharedSecret } = xwingEncapsulate(publicKey);
-            return { cipherText, key: xwingKey(sharedSecret) };
-        },
-        decapsulate: (cipherText, secretKey) => xwingKey(xwingDecapsulate(cipherText, secretKey)),
-    }),
     [CATKDF_KEM_ALG]: Object.freeze({
         alg: CATKDF_KEM_ALG,
         lengths: CATKDF_LENGTHS,

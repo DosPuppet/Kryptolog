@@ -11,35 +11,34 @@ import jwt
 from cryptography.exceptions import InvalidSignature, UnsupportedAlgorithm
 
 import config
-from security.crypto_validation import is_valid_address
+from security.crypto_validation import KEM_ALG, SIGNATURE_ALG, is_valid_address
 
 logger = logging.getLogger("kryptolog.auth")
 
-# --- Hybrid signatures (crypto-core 4, audit 2026-10-12 K-10) ---
-# pyca/cryptography (ML-DSA-65 and Ed25519, on the OpenSSL >= 3.5 its wheels
+# --- Hybrid signatures (crypto-core 5, audit 2026-10-12 K-10, lot 12) ---
+# pyca/cryptography (ML-DSA-65 and ECDSA-P384, on the OpenSSL >= 3.5 its wheels
 # bundle) verifies CLIENT login challenges, multisig approvals and the other
 # signed bodies in-process — the only place the server needs these at all (the
 # old Node `pqc_service.js` sidecar, audit A1/M1, is gone). Every signature is
 # a composite: both halves must verify. Byte encodings are pinned to the IETF
 # draft's vectors and interop-checked against the clients' noble in both
 # directions (tests/test_hybrid_primitives.py).
-SIG_ALG = "MLDSA65-Ed25519-SHA512"
-# The composite 5.0.0 switches identities to (lot 12b/12c): Ed25519 is not an
-# ECCG-agreed curve, P-384 is. Verified here already, used nowhere yet.
-SIG_ALG_P384 = "MLDSA65-ECDSA-P384-SHA512"
+# The composite every identity uses since crypto-core 5.0.0 (lot 12): its
+# Ed25519 predecessor is not an ECCG-agreed curve, P-384 is. One name, shared
+# with the address prefix in security/crypto_validation.py.
+SIG_ALG = SIGNATURE_ALG
 
 # Refuse to import rather than fail every login at runtime: a server that
 # cannot verify its signature algorithms cannot authenticate anybody. This is
 # reachable only off the hashed lock — cryptography < 48 (no `mldsa` module at
 # all), or a source build linked against an OpenSSL older than 3.5 — and is
 # the check `serve.sh` used to run against the liboqs build. ML-DSA-65 and
-# Ed25519 are the two halves of the composite signature (ECDSA P-384 those of
-# the one lot 12 adds); each is probed on its own so the message names the one
-# that is missing.
+# ECDSA P-384 are the two halves of the composite signature; each is probed on
+# its own so the message names the one that is missing.
 _REQUIREMENT = "install backend/requirements.txt (cryptography >= 48 built against OpenSSL >= 3.5)"
 try:
     from cryptography.hazmat.primitives import hashes
-    from cryptography.hazmat.primitives.asymmetric import ec, ed25519, mldsa
+    from cryptography.hazmat.primitives.asymmetric import ec, mldsa
     from cryptography.hazmat.primitives.asymmetric.utils import (
         decode_dss_signature,
         encode_dss_signature,
@@ -48,7 +47,6 @@ except ImportError as e:
     raise RuntimeError(f"cryptography lacks ML-DSA: {_REQUIREMENT}") from e
 for _name, _make in (
     ("ML-DSA-65", mldsa.MLDSA65PrivateKey.generate),
-    ("Ed25519", ed25519.Ed25519PrivateKey.generate),
     ("ECDSA P-384", lambda: ec.generate_private_key(ec.SECP384R1())),
 ):
     try:
@@ -158,9 +156,11 @@ def _login_message(
     from this server and open a session here. The login route refuses an origin
     it does not serve and a deployment that is not its own.
 
-    The encryption key is folded in so the identity's signature authorizes it (M-2);
-    the line is always present, empty without a key, so the body has one shape.
-    Domain-separated under `login` (H1). Must be byte-identical to the clients'.
+    The encryption key is folded in so the identity's signature authorizes it (M-2),
+    and since crypto-core 5.0.0 its suite with it, as in the attestation: a key
+    is only ever authorized as a key of the suite named. Both lines are always
+    present, empty without a key, so the body has one shape. Domain-separated
+    under `login` (H1). Must be byte-identical to the clients'.
     """
     if not _is_hex(nonce):
         raise NonCanonicalSignedBody("login: invalid nonce")
@@ -170,6 +170,7 @@ def _login_message(
         raise NonCanonicalSignedBody("login: invalid encryption key")
     body = (
         f"Sign in to Kryptolog\norigin={origin}\ndeployment={deployment}\nnonce={nonce}"
+        f"\nencryption-key-alg={KEM_ALG if encryption_public_key else ''}"
         f"\nencryption-key={encryption_public_key or ''}"
     )
     return _domain_separate(_CTX_LOGIN, body)
@@ -185,12 +186,16 @@ def encryption_key_attestation_message(address: str, encryption_public_key: str)
     controls. The server verifies it at login too (never store a bad one).
 
     Names the ADDRESS too since crypto-core 4.0.0: the statement is "this key
-    is <address>'s", so it cannot be lifted onto another identity's record.
-    Must be byte-identical to crypto-core's encryptionKeyAttestationBody()."""
+    is <address>'s", so it cannot be lifted onto another identity's record. And
+    the key's SUITE since 5.0.0: these bytes are attested AS a key of that
+    suite, so they cannot be served as a key of another one under the same
+    attestation. Must be byte-identical to crypto-core's
+    encryptionKeyAttestationBody()."""
     if not is_valid_address(address) or not _is_hex(encryption_public_key):
         raise NonCanonicalSignedBody("key attestation: invalid address or encryption key")
     return _domain_separate(
-        _CTX_KEY_ATTESTATION, f"address={address}\nencryption={encryption_public_key}"
+        _CTX_KEY_ATTESTATION,
+        f"address={address}\nencryption-alg={KEM_ALG}\nencryption={encryption_public_key}",
     )
 
 
@@ -435,65 +440,28 @@ def _sig_bytes(signature: str) -> bytes:
     return decoded
 
 
-# --- Composite ML-DSA-65 + Ed25519 (crypto-core 4, audit 2026-10-12 K-10) ---
-# id-MLDSA65-Ed25519-SHA512 (draft-ietf-lamps-pq-composite-sigs-19), the same
-# construction as packages/crypto-core/src/composite.js, both pinned to the
-# draft's own vectors (tests/test_hybrid_primitives.py). Every signature the
+# --- Composite ML-DSA-65 + ECDSA-P384 (crypto-core 5, lot 12) ---
+# id-MLDSA65-ECDSA-P384-SHA512 (draft-ietf-lamps-pq-composite-sigs-19), the
+# same construction as packages/crypto-core/src/composite.js, both pinned to
+# the draft's own vector (tests/test_hybrid_primitives.py). Every signature the
 # server verifies goes through it.
-#
-# Ed25519 is OpenSSL's: strict RFC 8032, cofactorless. The clients' noble
-# checks the cofactored equation and so additionally requires R and A to be
-# torsion-free; with an identity key whose Ed25519 half lies in the prime-order
-# subgroup the two rules accept exactly the same signatures. That is why the
-# server checks the KEY once, where it enters
-# (security.crypto_validation.is_valid_composite_identity_key), rather than
-# every point on every verification.
 _COMPOSITE_PREFIX = b"CompositeAlgorithmSignatures2025"
-_COMPOSITE_LABEL = b"COMPSIG-MLDSA65-Ed25519-SHA512"
 _ML_DSA_65_PUBLIC_KEY_BYTES = 1952
 _ML_DSA_65_SIGNATURE_BYTES = 3309
-COMPOSITE_PUBLIC_KEY_BYTES = _ML_DSA_65_PUBLIC_KEY_BYTES + 32
-COMPOSITE_SIGNATURE_BYTES = _ML_DSA_65_SIGNATURE_BYTES + 64
+_COMPOSITE_P384_LABEL = b"COMPSIG-MLDSA65-ECDSA-P384-SHA512"
 
 
-def _composite_message(message: bytes, ctx: bytes = b"", label: bytes = _COMPOSITE_LABEL) -> bytes:
+def _composite_message(
+    message: bytes, ctx: bytes = b"", label: bytes = _COMPOSITE_P384_LABEL
+) -> bytes:
     """M' = Prefix || Label || len(ctx) || ctx || SHA-512(M): what both halves sign."""
     if len(ctx) > 255:
         raise ValueError("composite context longer than 255 bytes")
     return _COMPOSITE_PREFIX + label + bytes([len(ctx)]) + ctx + hashlib.sha512(message).digest()
 
 
-def _verify_composite(
-    public_key: bytes, message: bytes, signature: bytes, ctx: bytes = b""
-) -> bool:
-    """True only if BOTH halves verify over M'. Lengths are checked before any
-    split, so a short input cannot move where one half ends. A malformed key
-    raises ValueError, which each caller turns into False."""
-    if len(public_key) != COMPOSITE_PUBLIC_KEY_BYTES or len(signature) != COMPOSITE_SIGNATURE_BYTES:
-        return False
-    m = _composite_message(message, ctx)
-    ml_pk, ed_pk = (
-        public_key[:_ML_DSA_65_PUBLIC_KEY_BYTES],
-        public_key[_ML_DSA_65_PUBLIC_KEY_BYTES:],
-    )
-    ml_sig, ed_sig = (
-        signature[:_ML_DSA_65_SIGNATURE_BYTES],
-        signature[_ML_DSA_65_SIGNATURE_BYTES:],
-    )
-    try:
-        # The label is ML-DSA's FIPS 204 context here, as the draft specifies.
-        mldsa.MLDSA65PublicKey.from_public_bytes(ml_pk).verify(ml_sig, m, _COMPOSITE_LABEL)
-        ed25519.Ed25519PublicKey.from_public_bytes(ed_pk).verify(ed_sig, m)
-    except InvalidSignature:
-        return False
-    return True
-
-
-# --- Composite ML-DSA-65 + ECDSA-P384 (lot 12b/12c, additive) ---
-# id-MLDSA65-ECDSA-P384-SHA512, the same construction as crypto-core's
-# mldsa65P384Verify, pinned to the draft's vector. The ECDSA half is
-# ecdsa-with-SHA384 over M', a DER Ecdsa-Sig-Value — so the signature's length
-# varies, 3 309 bytes of ML-DSA then 8 to 104 of DER.
+# The ECDSA half is ecdsa-with-SHA384 over M', a DER Ecdsa-Sig-Value — so the
+# signature's length varies, 3 309 bytes of ML-DSA then 8 to 104 of DER.
 #
 # Two rules beyond the draft, exactly as the clients apply them, because the
 # server must never accept a signature Proof Audit would refuse nor the other
@@ -503,7 +471,6 @@ def _verify_composite(
 #     PG-083 v3.00 warns about it), and a composite would inherit that.
 #   * CANONICAL DER. decode_dss_signature is strict already; re-encoding and
 #     comparing says so in the code rather than in a library's changelog.
-_COMPOSITE_P384_LABEL = b"COMPSIG-MLDSA65-ECDSA-P384-SHA512"
 _P384_POINT_BYTES = 97
 _P384_ORDER = ec.SECP384R1().group_order
 _DER_MIN, _DER_MAX = 8, 104
@@ -554,8 +521,7 @@ def _verify_composite_p384(
 # every verifier. Only that one is accepted — a registry entry is not a
 # fallback.
 SIGNATURE_VERIFIERS = {
-    SIG_ALG: _verify_composite,
-    SIG_ALG_P384: _verify_composite_p384,
+    SIG_ALG: _verify_composite_p384,
 }
 
 

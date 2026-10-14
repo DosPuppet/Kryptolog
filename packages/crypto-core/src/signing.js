@@ -7,7 +7,7 @@
 import { sha384Hex, canonicalJson } from './encoding.js';
 // The attestation helpers below sign and verify, so this module leans on pqc.js.
 // One-directional: pqc.js does not import signing.js, so there is no cycle.
-import { signMessage } from './pqc.js';
+import { signMessage, KEM_ALG } from './pqc.js';
 import { verifyIdentitySignature, isAddress } from './identity.js';
 
 // --- Domain separation (audit H1) ---
@@ -164,10 +164,13 @@ export const loginChallengeBody = ({ nonce, origin, deployment, encryptionKey = 
     need(isCanonicalOrigin(origin), 'origin');
     need(isSignedIdentifier(deployment), 'deployment');
     need(encryptionKey == null || encryptionKey === '' || HEX_RE.test(encryptionKey), 'encryption key');
+    // The key's ALGORITHM is signed with it (5.0.0, lot 12), as in the
+    // attestation: a key is only ever authorized as a key of the suite named,
+    // so no party can present the same bytes as a key of another suite.
     return domainSeparate(
         SIGNING_CONTEXT.LOGIN,
         `Sign in to Kryptolog\norigin=${origin}\ndeployment=${deployment}\nnonce=${nonce}` +
-        `\nencryption-key=${encryptionKey || ''}`
+        `\nencryption-key-alg=${encryptionKey ? KEM_ALG : ''}\nencryption-key=${encryptionKey || ''}`
     );
 };
 
@@ -254,11 +257,16 @@ export const conversationEraseBody = async ({
 // Since 4.0.0 it names the ADDRESS as well: the statement is "this encryption
 // key is <address>'s", not merely "I hold this key", so an attestation cannot
 // be lifted onto another identity's record even by a key that signs for both.
+// Since 5.0.0 it names the key's ALGORITHM too (lot 12): an attestation is
+// for these bytes AS a key of this suite. Without it the same bytes could be
+// served as a key of another suite under a valid attestation the day a second
+// suite exists — the registries (kem.js) make that day an entry away.
 export const encryptionKeyAttestationBody = ({ address, encryptionPublicKey }) => {
     need(isAddress(address), 'address');
     need(typeof encryptionPublicKey === 'string' && HEX_RE.test(encryptionPublicKey), 'encryption key');
     return domainSeparate(
-        SIGNING_CONTEXT.KEY_ATTESTATION, `address=${address}\nencryption=${encryptionPublicKey}`
+        SIGNING_CONTEXT.KEY_ATTESTATION,
+        `address=${address}\nencryption-alg=${KEM_ALG}\nencryption=${encryptionPublicKey}`
     );
 };
 
@@ -286,11 +294,13 @@ export const verifyEncryptionKeyAttestation = async ({
 // it's a digest of the contact's keys, not of the pair of participants).
 // SHA-384 over a labelled, versioned statement of the two → 60 decimal digits
 // in 12 groups of 5, Signal-style: digits are easier to read aloud / compare
-// than hex. 4.0.0 changed the number for every contact, deliberately: the keys
-// it summarises changed too.
+// than hex. 4.0.0 and 5.0.0 changed the number for every contact,
+// deliberately: the keys it summarises changed too, and since 5.0.0 it names
+// the encryption key's suite like the attestation does.
 export const keyFingerprint = async (address, encryptionPublicKey) => {
     const hex = await sha384Hex(
-        `Kryptolog safety number v4\naddress=${address}\nencryption=${encryptionPublicKey}`
+        `Kryptolog safety number v5\naddress=${address}` +
+        `\nencryption-alg=${KEM_ALG}\nencryption=${encryptionPublicKey}`
     );
     const groups = [];
     for (let i = 0; i < 12; i++) {

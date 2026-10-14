@@ -23,10 +23,10 @@ const PASSWORD = 'correct horse battery staple';
 const CODE = 'INVITE-1234';
 
 const account = {
-    id: addressOf('a'.repeat(3968)),
+    id: addressOf('a'.repeat(4098)),
     name: 'Alice',
-    identity: { publicKey: 'a'.repeat(3968) },
-    encryption: { publicKey: 'b'.repeat(2432) },
+    identity: { publicKey: 'a'.repeat(4098) },
+    encryption: { publicKey: 'b'.repeat(2562) },
 };
 const vault = {
     isLocked: false,

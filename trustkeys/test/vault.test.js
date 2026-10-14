@@ -41,10 +41,10 @@ describe('setup and unlock', () => {
         // non-empty string".
         const blob = Object.fromEntries(h.localStore).vaultData;
         // crypto-core 3.0.0: versioned, with the Argon2id parameters stored next
-        // to the data so the next unlock derives with exactly these. Format 4
-        // since 4.0.0 — a format-3 vault is refused by name.
+        // to the data so the next unlock derives with exactly these. Format 5
+        // since 5.0.0 — older vaults are refused by name.
         expect(blob).toMatchObject({
-            v: 4,
+            v: 5,
             kdf: {
                 alg: 'argon2id', m: 46 * 1024, t: 1, p: 1,
                 salt: expect.stringMatching(/^[A-Za-z0-9+/]+={0,2}$/),

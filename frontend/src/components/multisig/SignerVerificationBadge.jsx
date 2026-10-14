@@ -8,7 +8,7 @@ import { identityKeyFor } from '../../services/identityKeys';
 //   { kind: 'content', content }  — the CREATOR's signature over the plaintext
 //      document (CONTENT domain, embedded in the secret; server can't see it).
 //   { kind: 'approval', workflowId, secretId, encryptedData } — an explicit
-//      SIGNER's server-verifiable approval over sha256(ciphertext) (M1).
+//      SIGNER's server-verifiable approval over sha384(ciphertext) (M1).
 const SignerVerificationBadge = ({ signer, verifyTarget }) => {
     const [status, setStatus] = useState('idle'); // idle, verifying, valid, invalid
     const { token } = useAuth();

@@ -52,10 +52,10 @@ export const getActiveAccount = (checkOrigin) => {
 };
 
 // The currently-active account (with key material), or throws. Export is scoped
-// to this single account: the extension uses random-UUID account ids, so a
-// multi-account export loses the active selection when imported elsewhere (ids
-// get remapped to the ML-DSA public key and the old activeAccountId no longer
-// matches). Exporting just the active key keeps the imported identity unambiguous.
+// to this single account, which keeps the imported identity unambiguous. (It
+// began as a workaround for the extension's random-UUID account ids, gone
+// since crypto-core 4.0.0 made an account's id its address in both apps; the
+// scope stayed because one identity per export is still the clearer artifact.)
 // Deliberately not state.requireActiveAccount: this one falls back to the
 // first account and says "to export", because a vault whose active selection
 // was somehow lost should still be recoverable through a backup.

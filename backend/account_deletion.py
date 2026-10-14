@@ -661,8 +661,7 @@ def _strip_identity(user: models.User, mode: str) -> None:
     """
     if mode == MODE_ERASE:
         user.username = None
-    user.encryption_public_key = None
-    user.encryption_key_attestation = None
+    user.set_encryption_key(None, None)
     user.key_changed_at = None
     user.token_version = (user.token_version or 0) + 1
     user.deleted_at = utcnow_naive()

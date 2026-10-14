@@ -4,7 +4,7 @@ import { verifySignedDocument } from '../../utils/secretContent';
 import { downloadChunkedFile, downloadFileByRange } from '../../utils/fileChunks';
 
 // Envelope model: the workflow's secret is AES-encrypted under a fileKey, and
-// the fileKey is ML-KEM-wrapped separately for the owner, each signer, and
+// the fileKey is KEM-wrapped separately for the owner, each signer, and
 // (once completed) each recipient. Viewing = unwrap MY copy of the fileKey,
 // then decrypt the content with it.
 
@@ -44,7 +44,7 @@ export const decryptWorkflowSecret = async ({ workflow, user, isOwner, isSigner,
 
     onProgress(40, "Decrypting Key...");
 
-    // Decrypt the wrapped AES file key (ML-KEM envelope).
+    // Decrypt the wrapped AES file key (KEM envelope).
     const fileKey = await decryptPQC(JSON.parse(myEncryptedKey));
 
     onProgress(60, "Decrypting Content...");

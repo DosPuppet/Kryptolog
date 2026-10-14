@@ -3,16 +3,18 @@ import {
     SIGNATURE_ALG, FormatError,
 } from '../../utils/crypto';
 
-// The proof format (crypto-core 4.0.0). 2.0 carries each signer's address AND
-// identity key, and its algorithm is the composite one; a 1.x proof holds
-// ML-DSA-44 signatures under bare addresses, which no 4.0.0 client can check,
-// and is refused by name rather than reported as a set of failed signatures.
-export const PROOF_VERSION = '2.0';
+// The proof format (crypto-core 5.0.0). 3.0 carries each signer's address AND
+// identity key, and its algorithm is the composite ML-DSA-65 + ECDSA-P384 one.
+// A 2.x proof holds ML-DSA-65 + Ed25519 signatures under v4 addresses and a
+// 1.x proof ML-DSA-44 signatures under bare ones; no 5.0.0 client can check
+// either, and both are refused by name rather than reported as a set of
+// failed signatures.
+export const PROOF_VERSION = '3.0';
 export const PROOF_ALGORITHM = SIGNATURE_ALG;
 
-/** Refuse a proof that is not format 2.x, saying so. */
+/** Refuse a proof that is not format 3.x, saying so. */
 export const assertProofVersion = (proof) => {
-    if (!String(proof?.version ?? '').startsWith('2.')) {
+    if (!String(proof?.version ?? '').startsWith('3.')) {
         throw new FormatError(
             `This proof was made by an older Kryptolog version (format ${proof?.version ?? 'unknown'}) ` +
             'and cannot be verified by this one.'
@@ -22,7 +24,7 @@ export const assertProofVersion = (proof) => {
 
 // Build and download the offline verification proof for a workflow: the
 // document content plus every signature an auditor needs to re-verify it
-// without the server. Explicit signers signed sha256(ciphertext) bound to the
+// without the server. Explicit signers signed sha384(ciphertext) bound to the
 // workflow (M1), so the proof carries secret_id + the ciphertext hash for the
 // auditor to rebuild and verify their approval messages. The creator's
 // signature is over the plaintext content (verified separately).
@@ -113,7 +115,7 @@ export const downloadMultisigProof = async ({
  * job, kept next to the code that writes the proof so the two cannot drift.
  *
  * Each role signed different bytes (H1/M1): the creator the plaintext document
- * under the `content` domain, a signer sha256(ciphertext) bound to the
+ * under the `content` domain, a signer sha384(ciphertext) bound to the
  * workflow under the `multisig-approval` domain (server-verifiable).
  *
  * Each entry is verified with the identity key it carries, which must be the

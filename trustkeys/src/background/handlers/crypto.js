@@ -2,6 +2,7 @@ import {
     signMessage, encryptMessage, decryptMessage, generateSessionKey, wrapSessionKey,
     unwrapSessionKey, attestEncryptionKey, MESSAGE_SIGNING_PREFIX, SIGNING_CONTEXT, domainSeparate,
     loginChallengeBody, accountDeletionBody, conversationEraseBody, multisigApprovalMessage,
+    encryptionSeedFor,
 } from '../../utils/crypto.js';
 import { state, requireUnlocked, requireActiveAccount, activeAccount, requireConnectedOrigin } from '../state.js';
 import { isInternalSender, getSenderOrigin, isDevOrigin } from '../utils.js';
@@ -265,7 +266,8 @@ export const handleDecryptAsync = async (request, sender, sendResponse) => {
         onApprove: async () => {
             const account = activeAccount();
             if (!account) return sendResponse({ success: false, error: "No active account" });
-            const decrypted = await decryptMessage(request.data, account.encryption.seed);
+            // Whichever of the account's keys the envelope names (crypto-core 5.0.0).
+            const decrypted = await decryptMessage(request.data, encryptionSeedFor(account, request.data));
             sendResponse({ success: true, decrypted });
         },
         onReject: (err) => sendResponse({ success: false, error: err }),
@@ -287,7 +289,9 @@ export const handleUnwrapSessionKeyAsync = async (request, sender, sendResponse)
             if (!account) return sendResponse({ success: false, error: "No active account" });
 
             try {
-                const sessionKey = await unwrapSessionKey(request.wrappedKey, account.encryption.seed);
+                const sessionKey = await unwrapSessionKey(
+                    request.wrappedKey, encryptionSeedFor(account, request.wrappedKey)
+                );
                 sendResponse({ success: true, sessionKey });
             } catch (e) {
                 console.error("TrustKeys: Unwrap failed", e);
@@ -320,10 +324,9 @@ export const handleDecryptManyAsync = async (request, sender, sendResponse) => {
                 const items = request.items;
                 if (!Array.isArray(items)) throw new Error("Invalid input");
 
-                const privKey = account.encryption.seed;
                 const results = await Promise.all(items.map(async (blob) => {
                     try {
-                        return await decryptMessage(blob, privKey);
+                        return await decryptMessage(blob, encryptionSeedFor(account, blob));
                     } catch { return null; } // per-item failure -> null, not batch failure
                 }));
                 sendResponse({ success: true, results });
@@ -355,10 +358,9 @@ export const handleUnwrapManySessionKeysAsync = async (request, sender, sendResp
                 const wrappedKeys = request.wrappedKeys;
                 if (!Array.isArray(wrappedKeys)) throw new Error("Invalid input");
 
-                const privKey = account.encryption.seed;
                 const results = await Promise.all(wrappedKeys.map(async (blob) => {
                     try {
-                        return await unwrapSessionKey(blob, privKey);
+                        return await unwrapSessionKey(blob, encryptionSeedFor(account, blob));
                     } catch { return null; }
                 }));
                 sendResponse({ success: true, sessionKeys: results });

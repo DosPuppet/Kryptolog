@@ -52,8 +52,8 @@ export const fromHex = (hex) => {
 // An address IS an ML-DSA public key — a primary key, a URL path segment, and
 // part of every signed login body — and the project normalizes addresses to
 // lowercase everywhere, which a case-sensitive encoding would quietly destroy.
-// Same for the ML-KEM public key (folded into the signed login challenge) and
-// for SHA-256 digests, which must keep matching Python's hexdigest(). What moves
+// Same for the encryption public key (folded into the signed login challenge)
+// and for digests, which must keep matching Python's hexdigest(). What moves
 // is the opaque stuff: ciphertext, IVs, wrapped keys, signatures, vault blobs.
 //
 // btoa/atob rather than Buffer, for the same reason toHex is hand-rolled: this
@@ -102,22 +102,23 @@ export const fromB64 = (b64) => {
     return out;
 };
 
-// SHA-256 -> lowercase hex (matches Python hashlib.sha256().hexdigest()).
-export const sha256HexBytes = async (bytes) =>
-    toHex(new Uint8Array(await crypto.subtle.digest('SHA-256', bytes)));
-
-// The same over a UTF-8 string. Separate from the bytes form on purpose: which
-// one a caller wants is a real decision — hashing a File's contents and hashing
-// its name are both plausible and give different answers.
-export const sha256Hex = async (str) => sha256HexBytes(ENC.encode(str));
-
 // SHA-384 -> lowercase hex (Python hashlib.sha384().hexdigest()). Every digest
-// crypto-core 4 puts inside a signed body or an identifier is SHA-384: ANSSI
-// asks for at least that level next to category-3 primitives (audit
-// 2026-10-12 K-10). Synchronous, from noble, because an address is one of them
+// crypto-core puts inside a signed body or an identifier is SHA-384 (4.0.0,
+// audit 2026-10-12 K-10; the last SHA-256 went in 5.0.0): ANSSI's PG-083
+// v3.00 recommends at least 384 bits once post-quantum security is the goal. Synchronous, from noble, because an address is one of them
 // and code that adopts an identity cannot wait for WebCrypto to name it.
 export const sha384HexBytes = (bytes) => toHex(sha384(bytes));
 export const sha384Hex = async (str) => sha384HexBytes(ENC.encode(str));
+
+// The same digest through WebCrypto, for inputs too large to hash on the
+// event loop in one go: a signed document's FILES, up to 50 MB (5.0.0). It
+// was the last SHA-256 on a signed path — the digest a creator's `content`
+// signature commits to and Proof Audit compares — and PG-083 v3.00
+// recommends >= 384-bit digests once post-quantum security is the goal
+// (RecoPQHachage). Separate from sha384HexBytes rather than replacing it: an
+// address must be computable synchronously, a file need not be.
+export const sha384HexOfFile = async (bytes) =>
+    toHex(new Uint8Array(await crypto.subtle.digest('SHA-384', bytes)));
 
 // Deterministic JSON with recursively sorted object keys. JSON.stringify would
 // NOT do: it preserves insertion order, so the sender and a verifier that

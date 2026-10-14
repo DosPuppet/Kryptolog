@@ -19,7 +19,7 @@ import hashlib
 import json
 
 import jwt
-from conftest import CompositeSigner
+from conftest import CompositeSigner, synthetic_encryption_key
 
 import auth
 
@@ -123,7 +123,7 @@ def test_login_challenge_binds_encryption_key():
     signed challenge, so a signature is valid only for the exact key it covers —
     a network attacker can't substitute a different KEM key at login."""
     nonce = auth.generate_nonce()
-    enc_key = "ab" * 1216
+    enc_key = synthetic_encryption_key("pqc-a")
     message = auth._login_message(nonce, encryption_public_key=enc_key, **SERVER).encode("utf-8")
     client = CompositeSigner()
     pk_hex, sig_b64 = client.identity_public_key, _sig_b64(client.sign(message))
@@ -131,7 +131,7 @@ def test_login_challenge_binds_encryption_key():
     # Valid only with the exact bound key.
     assert _verify(pk_hex, sig_b64, nonce, enc_key) is True
     # Substituting a different encryption key fails (the binding holds).
-    assert _verify(pk_hex, sig_b64, nonce, "cd" * 1216) is False
+    assert _verify(pk_hex, sig_b64, nonce, synthetic_encryption_key("pqc-b")) is False
     # Dropping the key (downgrade attempt) also fails — the signature covers it.
     assert _verify(pk_hex, sig_b64, nonce, None) is False
 
@@ -141,7 +141,7 @@ def test_login_challenge_is_domain_separated():
     signed bytes are disjoint from any content-signing operation (multisig /
     document approval). The wrapper is fixed by code, never by content."""
     nonce = "deadbeef" * 4
-    enc_key = "cd" * 1216
+    enc_key = synthetic_encryption_key("pqc-c")
     msg = auth._login_message(nonce, encryption_public_key=enc_key, **SERVER)
     assert msg.startswith("Kryptolog Signed Message v1\ncontext=login\nSign in to Kryptolog\n")
     assert f"\nnonce={nonce}\n" in msg
@@ -153,7 +153,7 @@ def test_content_signature_cannot_be_replayed_as_login():
     approving attacker-chosen *content* must NOT verify as a login challenge,
     even when the attacker set that content equal to the raw login body."""
     nonce = auth.generate_nonce()
-    enc_key = "ef" * 1216
+    enc_key = synthetic_encryption_key("pqc-d")
 
     # The login body without its domain header — what an attacker would coerce
     # a victim into signing as raw or content-wrapped multisig content.

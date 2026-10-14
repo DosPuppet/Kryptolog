@@ -119,4 +119,16 @@ regexes = [
   # suites do.
   '''Vyyr9J/xkfcfcugaApesWLiDlU24MWspKy72eqPTdj8=''',
   '''cCAS15l8n1w69WTpwWdygyeM59qIhAWnxcAbFaRYcac=''',
+
+  # The KEM's algorithm id since crypto-core 5.0.0 — the name of an ETSI
+  # TS 103 744 parameter set plus its combiner, public by definition. It is
+  # flagged wherever it sits after a word like "key" (encryption_key_alg =
+  # ..., "encryption-key-alg=..."), which is everywhere it is used.
+  '''HKDFwSHA384_P384_ML-KEM-768_CatKDF''',
+
+  # crypto-core 5.0.0: the same `keysh`, SHA-384 over the v5 `message_keys` of
+  # tests/fixtures/signed_bodies.json (wrapped keys carry v 5, the CatKDF alg
+  # and a stand-in kid). Recompute it from that file with backend/auth.py's
+  # _canonical_json; backend/tests/test_signed_bodies.py does, by hand.
+  '''6b0dd33b8d1e3c2b1e3489f0561f83694907ed815a1c51be2a3d1596199eafb6fa833610e3b31ae327f6024d7deb79cc''',
 ]

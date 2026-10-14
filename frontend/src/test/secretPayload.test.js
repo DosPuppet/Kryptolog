@@ -53,7 +53,8 @@ describe('buildFileMetadata', () => {
         expect(plain.file_hash).toBeNull();
 
         const hashed = JSON.parse(await buildFileMetadata(fakeFile('a.txt', 8), { hash: true }));
-        expect(hashed.file_hash).toMatch(/^[0-9a-f]{64}$/);
+        // SHA-384 since crypto-core 5.0.0: the digest a signed document commits to.
+        expect(hashed.file_hash).toMatch(/^[0-9a-f]{96}$/);
 
         // Same bytes under a different name must hash the same.
         const renamed = JSON.parse(await buildFileMetadata(fakeFile('b.txt', 8), { hash: true }));

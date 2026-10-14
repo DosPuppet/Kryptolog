@@ -22,6 +22,7 @@ from conftest import (
     get_nonce,
     identity_key_of,
     server_deployment,
+    synthetic_encryption_key,
 )
 
 import auth as auth_module
@@ -127,7 +128,7 @@ class TestAttestationStorage:
         )
         # New encryption key + new attestation: the old one signed the old key
         # and must never survive the swap.
-        new_key = "1a" * 1216
+        new_key = synthetic_encryption_key("att-new")
         new_att = "bb" * 100
         resp = login_with_attestation(client, TEST_USER_ADDRESS, new_key, new_att)
         assert resp.status_code == 200
@@ -153,7 +154,7 @@ class TestAttestationStorage:
                 "nonce": nonce,
                 "origin": TEST_ORIGIN,
                 "deployment": server_deployment(),
-                "encryption_public_key": "2b" * 1216,
+                "encryption_public_key": synthetic_encryption_key("att-unsigned"),
             },
         )
         assert resp.status_code == 400
@@ -199,7 +200,7 @@ class TestRealCrypto:
 
         signer = CompositeSigner()
         address = signer.address
-        enc_key = "3c" * 1216
+        enc_key = synthetic_encryption_key("att-real")
 
         att_msg = auth_module.encryption_key_attestation_message(address, enc_key)
         good_att = base64.b64encode(signer.sign(att_msg.encode("utf-8"))).decode()
@@ -209,7 +210,7 @@ class TestRealCrypto:
         assert resp.json()["user"]["encryption_key_attestation"] == good_att
 
         # Same signature presented for a different KEM key must fail.
-        other_key = "4d" * 1216
+        other_key = synthetic_encryption_key("att-other")
         resp = login_with_attestation(client, address, other_key, good_att)
         assert resp.status_code == 400
 

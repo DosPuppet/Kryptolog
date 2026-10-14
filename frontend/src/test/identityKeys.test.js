@@ -159,12 +159,12 @@ describe('signed documents and proofs', () => {
             address: alice.address,
             identity_public_key: alice.identityPublicKey,
             signature: await signMessage(approval, alice.seed),
-            algorithm: 'MLDSA65-Ed25519-SHA512',
+            algorithm: 'MLDSA65-ECDSA-P384-SHA512',
             role: 'signer',
         };
         const proof = (signatures) => ({
             workflow: { id: 7, secret_id: 9 },
-            version: '2.0',
+            version: '3.0',
             document: { content: 'doc', ciphertext_sha384: 'ab'.repeat(48) },
             signatures,
         });
@@ -176,9 +176,11 @@ describe('signed documents and proofs', () => {
         expect([ok.valid, keyless.valid, wrongKey.valid]).toEqual([true, false, false]);
     });
 
-    it('refuses a proof made before 4.0.0 by name, not as a set of failed signatures', async () => {
-        const old = { version: '1.1', workflow: {}, document: {}, signatures: [] };
-        await expect(verifyMultisigProofSignatures(old)).rejects.toThrow(/older Kryptolog version/);
+    it('refuses a proof made before 5.0.0 by name, not as a set of failed signatures', async () => {
+        for (const version of ['1.1', '2.0']) {
+            const old = { version, workflow: {}, document: {}, signatures: [] };
+            await expect(verifyMultisigProofSignatures(old)).rejects.toThrow(/older Kryptolog version/);
+        }
     });
 });
 

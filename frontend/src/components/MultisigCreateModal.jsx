@@ -14,7 +14,7 @@ import { buildFileMetadata } from '../utils/secretPayload';
 
 export default function MultisigCreateModal({ isOpen, onClose, onCreated }) {
     const { user, token } = useAuth();
-    const { pqcAccount, identityPublicKey, encrypt: encryptPQC, mlkemKey, sign: signPQC } = usePQC(); // PQC Hook
+    const { pqcAccount, identityPublicKey, encrypt: encryptPQC, ownEncryptionKey, sign: signPQC } = usePQC(); // PQC Hook
 
     // Step 0: Secret Content
     // Step 1: Add Signers
@@ -117,7 +117,7 @@ export default function MultisigCreateModal({ isOpen, onClose, onCreated }) {
     };
 
     const secureEncrypt = async (content, pubKey) => {
-        // ML-KEM wrap for the recipient's post-quantum public key.
+        // KEM wrap for the recipient's hybrid encryption key.
         const res = await encryptPQC(content, pubKey);
         return JSON.stringify(res);
     };
@@ -178,7 +178,7 @@ export default function MultisigCreateModal({ isOpen, onClose, onCreated }) {
 
             // 3. Encrypt AES Key for Creator (Me)
             setProgress(20);
-            const encryptionPublicKey = mlkemKey;
+            const encryptionPublicKey = ownEncryptionKey;
             const encryptedKeyForMe = await secureEncrypt(fileKey, encryptionPublicKey);
 
             // 4. Encrypt AES Key for Signers

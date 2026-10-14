@@ -177,9 +177,11 @@ describe('golden constants (wire/storage format contract)', () => {
     it('the login challenge names the origin and the deployment (3.0.0, K-02)', () => {
         const args = { nonce: 'ab', origin: 'https://k.example', deployment: 'dep-1', encryptionKey: 'cd' };
         expect(core.loginChallengeBody(args)).toBe('Kryptolog Signed Message v1\ncontext=login\n' +
-            'Sign in to Kryptolog\norigin=https://k.example\ndeployment=dep-1\nnonce=ab\nencryption-key=cd');
-        // No key: the line is still there, empty, so the body has one shape.
-        expect(core.loginChallengeBody({ ...args, encryptionKey: null }).endsWith('\nencryption-key=')).toBe(true);
+            'Sign in to Kryptolog\norigin=https://k.example\ndeployment=dep-1\nnonce=ab' +
+            '\nencryption-key-alg=HKDFwSHA384_P384_ML-KEM-768_CatKDF\nencryption-key=cd');
+        // No key: both lines are still there, empty, so the body has one shape.
+        expect(core.loginChallengeBody({ ...args, encryptionKey: null }).endsWith('\nencryption-key-alg=\nencryption-key='))
+            .toBe(true);
         expect(core.loginChallengeBody({ ...args, origin: 'https://evil.example' }))
             .not.toBe(core.loginChallengeBody(args));
         // Origins are the browser's serialisation — anything else is refused, so
@@ -205,12 +207,12 @@ describe('golden constants (wire/storage format contract)', () => {
             .toBe('Kryptolog Signed Message v1\ncontext=multisig-approval\nworkflow=wf1\nsecret=sec1\nct=deadbeef');
     });
 
-    it('sha256Hex and sha384Hex match Python hashlib', async () => {
-        // echo -n "kryptolog" | sha256sum / sha384sum
-        expect(await core.sha256Hex('kryptolog'))
-            .toBe(createHash('sha256').update('kryptolog').digest('hex'));
-        expect(await core.sha384Hex('kryptolog'))
-            .toBe(createHash('sha384').update('kryptolog').digest('hex'));
+    it('sha384Hex and sha384HexOfFile match Python hashlib, and SHA-256 is gone (5.0.0)', async () => {
+        const expected = createHash('sha384').update('kryptolog').digest('hex');
+        expect(await core.sha384Hex('kryptolog')).toBe(expected);
+        expect(await core.sha384HexOfFile(new TextEncoder().encode('kryptolog'))).toBe(expected);
+        expect(core.sha256Hex).toBeUndefined();
+        expect(core.sha256HexBytes).toBeUndefined();
     });
 
     it('hex round-trips bytes', () => {
@@ -234,8 +236,9 @@ describe('randomized envelope round-trips', () => {
     it('KEM message envelope: encrypt -> decrypt', async () => {
         const { publicKey, seed: privateKey } = core.generateEncryptionKeyPair();
         const env = await core.encryptMessage('secret payload', publicKey);
-        expect(env.v).toBe(4);
-        expect(env.alg).toBe('XWING-HKDF384-A256GCM');
+        expect(env.v).toBe(5);
+        expect(env.alg).toBe('HKDFwSHA384_P384_ML-KEM-768_CatKDF-A256GCM');
+        expect(env.kid).toBe(core.encryptionKeyId(publicKey));
         expect(env).toHaveProperty('kem');
         expect(env).toHaveProperty('iv');
         expect(env).toHaveProperty('content');
@@ -246,8 +249,9 @@ describe('randomized envelope round-trips', () => {
         const { publicKey, seed: privateKey } = core.generateEncryptionKeyPair();
         const sessionKey = await core.generateSessionKey();
         const wrapped = await core.wrapSessionKey(sessionKey, publicKey);
-        expect(wrapped.v).toBe(4);
-        expect(wrapped.alg).toBe('XWING-HKDF384-A256GCM');
+        expect(wrapped.v).toBe(5);
+        expect(wrapped.alg).toBe('HKDFwSHA384_P384_ML-KEM-768_CatKDF-A256GCM');
+        expect(wrapped.kid).toBe(core.encryptionKeyId(publicKey));
         expect(wrapped).toHaveProperty('encKey');
         expect(await core.unwrapSessionKey(wrapped, privateKey)).toBe(sessionKey);
 
@@ -261,15 +265,15 @@ describe('randomized envelope round-trips', () => {
         // cannot come back as a kindness to old data.
         const { publicKey, seed: privateKey } = core.generateEncryptionKeyPair();
         const sessionKey = await core.generateSessionKey();
-        const { v, alg, kem, iv, encKey } = await core.wrapSessionKey(sessionKey, publicKey);
+        const { v, alg, kid, kem, iv, encKey } = await core.wrapSessionKey(sessionKey, publicKey);
         await expect(
-            core.unwrapSessionKey({ v, alg, kem, iv, ct: encKey }, privateKey)
+            core.unwrapSessionKey({ v, alg, kid, kem, iv, ct: encKey }, privateKey)
         ).rejects.toThrow();
     });
 
     it('every decoder refuses an older or foreign format BY NAME (3.0.0, K-10)', async () => {
-        // ...including everything 3.x wrote: format 3 is refused like any
-        // other (4.0.0), and so is its algorithm id.
+        // ...including everything 3.x and 4.x wrote: formats 3 and 4 are
+        // refused like any other (5.0.0), and so are their algorithm ids.
         // Before 3.0.0 nothing carried a version, so old data failed as an
         // opaque tag error. Now the refusal says what it is, before any crypto.
         const { publicKey, seed: privateKey } = core.generateEncryptionKeyPair();
@@ -290,8 +294,17 @@ describe('randomized envelope round-trips', () => {
         await expect(core.unwrapSessionKey({ ...wrapped, alg: 'X25519' }, privateKey)).rejects.toThrow(core.FormatError);
         await expect(core.unwrapSessionKey({ ...wrapped, v: 3, alg: 'MLKEM768-HKDF-A256GCM' }, privateKey))
             .rejects.toThrow(/older Kryptolog version/);
+        await expect(core.unwrapSessionKey({ ...wrapped, v: 4, alg: 'XWING-HKDF384-A256GCM' }, privateKey))
+            .rejects.toThrow(/older Kryptolog version/);
+        await expect(core.unwrapSessionKey({ ...wrapped, alg: 'XWING-HKDF384-A256GCM' }, privateKey))
+            .rejects.toThrow(/unsupported algorithm XWING/);
         await expect(core.decryptWithSessionKey({ ...sym, v: 3 }, sessionKey)).rejects.toThrow(/older Kryptolog version/);
-        await expect(core.decryptWithSessionKey({ ...sym, v: 5 }, sessionKey)).rejects.toThrow(core.FormatError);
+        await expect(core.decryptWithSessionKey({ ...sym, v: 4 }, sessionKey)).rejects.toThrow(/older Kryptolog version/);
+        await expect(core.decryptWithSessionKey({ ...sym, v: 6 }, sessionKey)).rejects.toThrow(core.FormatError);
+        // A KEM envelope without its key id, or with a malformed one, is refused before any crypto.
+        const { kid: _kid, ...noKid } = wrapped;
+        await expect(core.unwrapSessionKey(noKid, privateKey)).rejects.toThrow(/key id/);
+        await expect(core.unwrapSessionKey({ ...wrapped, kid: 'AB'.repeat(16) }, privateKey)).rejects.toThrow(/key id/);
     });
 
     it('the markers are authenticated: an envelope rewritten to claim them is refused (4.0.0)', async () => {
@@ -303,8 +316,13 @@ describe('randomized envelope round-trips', () => {
         const wrapped = await core.wrapSessionKey(sessionKey, publicKey);
         const env = await core.encryptMessage('m', publicKey);
         const sym = await core.encryptWithSessionKey('m', sessionKey);
-        expect(core.formatAad('XWING-HKDF384-A256GCM'))
-            .toEqual(new TextEncoder().encode('Kryptolog envelope\nv=4\nalg=XWING-HKDF384-A256GCM'));
+        expect(core.formatAad('A256GCM'))
+            .toEqual(new TextEncoder().encode('Kryptolog envelope\nv=5\nalg=A256GCM'));
+        expect(core.formatAad('HKDFwSHA384_P384_ML-KEM-768_CatKDF-A256GCM', wrapped.kid))
+            .toEqual(new TextEncoder().encode(`Kryptolog envelope\nv=5\nalg=HKDFwSHA384_P384_ML-KEM-768_CatKDF-A256GCM\nkid=${wrapped.kid}`));
+        // The key id is covered too (5.0.0): another well-formed kid fails the tag.
+        await expect(core.unwrapSessionKey({ ...wrapped, kid: 'ab'.repeat(16) }, seed)).rejects.toThrow();
+        await expect(core.decryptMessage({ ...env, kid: 'ab'.repeat(16) }, seed)).rejects.toThrow();
         // Re-encrypting the same plaintext WITHOUT the AAD and labelling it
         // correctly is exactly what a downgrade would look like.
         const iv = crypto.getRandomValues(new Uint8Array(12));
@@ -316,10 +334,10 @@ describe('randomized envelope round-trips', () => {
     });
 
     // A round-trip passes through any change that encryption and decryption
-    // make together. These were sealed ONCE by 4.0.0 and must keep opening:
-    // they pin the X-Wing decapsulation, the HKDF-SHA-384 label and the
+    // make together. These were sealed ONCE by 5.0.0 and must keep opening:
+    // they pin the CatKDF decapsulation, its info string, the key id and the
     // markers bound as associated data — the bytes a peer actually sends.
-    it('opens the 4.0.0 golden envelopes, byte for byte', async () => {
+    it('opens the 5.0.0 golden envelopes, byte for byte', async () => {
         const G = JSON.parse(readFileSync(new URL('./golden-envelopes.json', import.meta.url), 'utf8'));
         expect(await core.unwrapSessionKey(G.wrapped, G.seed)).toBe(G.sessionKey);
         expect(await core.decryptMessage(G.kemEnvelope, G.seed)).toBe(G.plaintexts.kemEnvelope);
@@ -366,9 +384,9 @@ describe('randomized envelope round-trips', () => {
         salt: core.toB64(core.fromHex('000102030405060708090a0b0c0d0e0f')),
     };
 
-    it('vault: password encrypt -> decrypt (Argon2id, 3.0.0; format 4 since 4.0.0)', async () => {
+    it('vault: password encrypt -> decrypt (Argon2id, 3.0.0; format 5 since 5.0.0)', async () => {
         const vault = await core.encryptVault({ a: 1, b: 'two' }, 'hunter2');
-        expect(vault.v).toBe(4);
+        expect(vault.v).toBe(5);
         expect(vault.kdf).toMatchObject({ alg: 'argon2id', m: 46 * 1024, t: 1, p: 1 });
         expect(vault).toHaveProperty('iv');
         expect(vault).toHaveProperty('data');
@@ -421,9 +439,12 @@ describe('randomized envelope round-trips', () => {
     });
 
     it('an older vault or backup is refused by name, not as a wrong password', async () => {
-        // A 3.x vault holds ML-DSA-44 / ML-KEM-768 keys: refused by its format.
-        const v3 = { v: 3, kdf: core.newVaultKdf(), iv: 'AAAAAAAAAAAAAAAA', data: 'AAAA' };
-        await expect(core.decryptVault(v3, 'pw')).rejects.toThrow(/older Kryptolog version/);
+        // A 3.x vault holds ML-DSA-44 / ML-KEM-768 keys, a 4.x one Ed25519 /
+        // X-Wing keys: both refused by their format.
+        for (const v of [3, 4]) {
+            const old = { v, kdf: core.newVaultKdf(), iv: 'AAAAAAAAAAAAAAAA', data: 'AAAA' };
+            await expect(core.decryptVault(old, 'pw')).rejects.toThrow(/older Kryptolog version/);
+        }
         const legacy = { salt: 'AAAAAAAAAAAAAAAAAAAAAA==', iv: 'AAAAAAAAAAAAAAAA', data: 'AAAA' };
         expect(core.isEncryptedVaultBlob(legacy)).toBe(true);
         await expect(core.decryptVault(legacy, 'pw')).rejects.toThrow(/older Kryptolog version/);
@@ -431,6 +452,20 @@ describe('randomized envelope round-trips', () => {
         await expect(core.decryptVaultWithKey(legacy, key)).rejects.toThrow(/older Kryptolog version/);
         // A plain (unencrypted) account export is not a blob.
         expect(core.isEncryptedVaultBlob({ accounts: [] })).toBe(false);
+    });
+
+    it("the vault's markers are its associated data: a rewritten kdf fails the tag (5.0.0)", async () => {
+        // With the key cached (the extension's resumed session) nothing
+        // re-derives from `kdf`, so only the tag can notice it changed — to
+        // cheaper parameters for whoever derives next, say.
+        const kdf = core.newVaultKdf();
+        const key = await core.deriveKey('pw', kdf);
+        const vault = await core.encryptVaultWithKey({ x: 1 }, key, kdf);
+        expect(await core.decryptVaultWithKey(vault, key)).toEqual({ x: 1 });
+        await expect(core.decryptVaultWithKey({ ...vault, kdf: { ...kdf, m: 8 * 1024 } }, key)).rejects.toThrow();
+        // Field order does not matter: the descriptor is bound canonically.
+        const reordered = { salt: kdf.salt, p: kdf.p, t: kdf.t, m: kdf.m, alg: kdf.alg };
+        expect(await core.decryptVaultWithKey({ ...vault, kdf: reordered }, key)).toEqual({ x: 1 });
     });
 
     it('vault: pre-derived key encrypt -> decrypt', async () => {
@@ -477,8 +512,10 @@ describe('encoding split: blobs base64, identifiers hex (v2.0.0, audit L-12)', (
         const { publicKey, seed: privateKey } = core.generateEncryptionKeyPair();
         const env = await core.encryptMessage('secret payload', publicKey);
         for (const f of ['kem', 'iv', 'content']) notHex(isB64(env[f]));
-        // 1120-byte X-Wing ciphertext -> 1496 base64 chars (hex would be 2240).
-        expect(env.kem.length).toBe(1496);
+        // 1185-byte CatKDF ciphertext -> 1580 base64 chars (hex would be 2370).
+        expect(env.kem.length).toBe(1580);
+        // The key id is an identifier, not a payload: hex.
+        expect(env.kid).toMatch(/^[0-9a-f]{32}$/);
         expect(await core.decryptMessage(env, privateKey)).toBe('secret payload');
     });
 
@@ -507,11 +544,13 @@ describe('encoding split: blobs base64, identifiers hex (v2.0.0, audit L-12)', (
         const { publicKey, seed } = core.generateIdentityKeyPair();
         const sig = await core.signMessage('msg', seed);
         notHex(isB64(sig));
-        // 3373-byte composite signature -> 4500 base64 chars (hex would be 6746).
-        expect(sig.length).toBe(4500);
+        // A composite ML-DSA-65 + ECDSA-P384 signature is 3 317..3 413 bytes
+        // (the DER half varies) -> 4 424..4 552 base64 chars.
+        expect(sig.length).toBeGreaterThanOrEqual(4424);
+        expect(sig.length).toBeLessThanOrEqual(4552);
         // Keys and addresses are identifiers: primary keys, URL segments, lines
         // of signed bodies. They stay lowercase hex.
-        expect(publicKey).toMatch(/^[0-9a-f]{3968}$/);
+        expect(publicKey).toMatch(/^[0-9a-f]{4098}$/);
         expect(core.addressOf(publicKey)).toMatch(/^[0-9a-f]{96}$/);
         expect(await core.verifySignature('msg', sig, publicKey)).toBe(true);
     });
@@ -550,18 +589,19 @@ describe('encoding split: blobs base64, identifiers hex (v2.0.0, audit L-12)', (
 });
 
 
-describe('composite server-interop guard (4.0.0)', () => {
+describe('composite server-interop guard (5.0.0)', () => {
     // The backend verifies every signature with OpenSSL's ML-DSA-65 and
-    // Ed25519. Both libraries implement keygen from the seed directly, so one
-    // 64-byte seed is one composite key on both sides: this digest was computed
-    // by OpenSSL (pyca/cryptography) and backend/tests/test_hybrid_primitives.py
-    // pins the same literal, so a silent upstream change on either side fails.
-    const SEED = new Uint8Array(64).fill(7);
+    // ECDSA-P384. Both libraries derive the keys from the seed and the scalar
+    // directly, so one 80-byte secret is one composite key on both sides: this
+    // digest was computed here and checked by OpenSSL (pyca/cryptography), and
+    // backend/tests/test_hybrid_primitives.py pins the same literal, so a
+    // silent upstream change on either side fails.
+    const SEED = new Uint8Array(80).fill(7);
     const GOLDEN_PK_SHA384 =
-        '96a33b461c1decb225cef1504b886bfb752de6bc7620a8a1f94d493278c91ad2fe0374c97882b3bbc913b8d760482fec';
+        '92ec842aeaf614676e560b807ae045e9359acb0920e437cbd2eb1472da20664dccb6d778274f25ed0dbe551f52c0c84d';
 
     it('a seed names the pinned composite key', () => {
-        const publicKey = core.compositePublicKey(SEED);
+        const publicKey = core.mldsa65P384PublicKey(SEED);
         expect(createHash('sha384').update(Buffer.from(publicKey)).digest('hex')).toBe(GOLDEN_PK_SHA384);
         expect(core.identityPublicKeyOf(core.toHex(SEED))).toBe(core.toHex(publicKey));
     });
@@ -576,12 +616,15 @@ describe('composite server-interop guard (4.0.0)', () => {
     });
 });
 
-describe('accounts (4.0.0): seeds, the address as id, and nothing older', () => {
-    it('a new account is its seeds, with the address as its id', () => {
+describe('accounts (5.0.0): seeds, the address as id, keys by id, and nothing older', () => {
+    it('a new account is its seeds, with the address as its id and a current key with an id', () => {
         const account = core.generateAccount('Alice');
         expect(account.id).toBe(core.addressOf(account.identity.publicKey));
-        expect(account.identity.seed).toMatch(/^[0-9a-f]{128}$/);
-        expect(account.encryption.seed).toMatch(/^[0-9a-f]{64}$/);
+        expect(account.identity.seed).toMatch(/^[0-9a-f]{160}$/);
+        expect(account.encryption.seed).toMatch(/^[0-9a-f]{224}$/);
+        expect(account.encryption.alg).toBe('HKDFwSHA384_P384_ML-KEM-768_CatKDF');
+        expect(account.encryption.kid).toBe(core.encryptionKeyId(account.encryption.publicKey));
+        expect(account.retiredEncryption).toEqual([]);
         expect(core.parseAccount(account)).toEqual(account);
     });
 
@@ -589,7 +632,7 @@ describe('accounts (4.0.0): seeds, the address as id, and nothing older', () => 
         const account = core.generateAccount('Alice');
         // Public values are derived, so they may be absent...
         const { publicKey: _i, ...identity } = account.identity;
-        const { publicKey: _e, ...encryption } = account.encryption;
+        const { publicKey: _e, kid: _k, ...encryption } = account.encryption;
         expect(core.parseAccount({ ...account, id: undefined, identity, encryption })).toEqual(account);
         // ...but never wrong.
         const other = core.generateAccount('Mallory');
@@ -597,8 +640,38 @@ describe('accounts (4.0.0): seeds, the address as id, and nothing older', () => 
             .toThrow(core.FormatError);
         expect(() => core.parseAccount({ ...account, encryption: { ...account.encryption, publicKey: other.encryption.publicKey } }))
             .toThrow(core.FormatError);
+        expect(() => core.parseAccount({ ...account, encryption: { ...account.encryption, kid: other.encryption.kid } }))
+            .toThrow(core.FormatError);
+        expect(() => core.parseAccount({ ...account, encryption: { ...account.encryption, alg: 'XWING-HKDF384' } }))
+            .toThrow(core.FormatError);
         expect(() => core.parseAccount({ ...account, id: other.id })).toThrow(core.FormatError);
         expect(() => core.parseAccount({ ...account, identity: { seed: 'zz' } })).toThrow(core.FormatError);
+    });
+
+    it('keeps retired keys, checks each, and finds any of them by id', () => {
+        const account = core.generateAccount('Alice');
+        const old = core.generateAccount('old').encryption;
+        const withRetired = { ...account, retiredEncryption: [{ ...old, retiredAt: 5 }] };
+        const parsed = core.parseAccount(withRetired);
+        expect(parsed.retiredEncryption).toEqual([{ ...old, retiredAt: 5 }]);
+        expect(core.encryptionKeyFor(parsed, old.kid).seed).toBe(old.seed);
+        expect(core.encryptionKeyFor(parsed, account.encryption.kid).seed).toBe(account.encryption.seed);
+        expect(core.encryptionKeyFor(parsed, 'ab'.repeat(16))).toBeNull();
+        // A key twice, a wrong seed, or a list past the cap: refused.
+        expect(() => core.parseAccount({ ...account, retiredEncryption: [account.encryption] })).toThrow(/twice/);
+        expect(() => core.parseAccount({ ...account, retiredEncryption: [{ ...old, seed: 'zz' }] })).toThrow(core.FormatError);
+        expect(() => core.parseAccount({
+            ...account, retiredEncryption: new Array(core.MAX_RETIRED_ENCRYPTION_KEYS + 1).fill(old),
+        })).toThrow(/retired/);
+    });
+
+    it('opens an envelope with whichever key its kid names, and says so when it has none', async () => {
+        const account = core.generateAccount('Alice');
+        const env = await core.encryptMessage('m', account.encryption.publicKey);
+        expect(await core.decryptMessage(env, core.encryptionSeedFor(account, env))).toBe('m');
+        const stranger = core.generateAccount('Bob');
+        expect(() => core.encryptionSeedFor(stranger, env)).toThrow(core.MissingKeyError);
+        expect(() => core.encryptionSeedFor(stranger, env)).toThrow(env.kid);
     });
 
     it.each(['mldsa', 'mlkem', 'dilithium', 'kyber'])(
@@ -606,13 +679,19 @@ describe('accounts (4.0.0): seeds, the address as id, and nothing older', () => 
             const old = { id: 'x', name: 'A', [field]: { publicKey: 'aa', privateKey: 'bb' } };
             expect(() => core.parseAccount(old)).toThrow(/older Kryptolog version/);
         });
+
+    it('refuses a 4.x account (Ed25519 / X-Wing seeds) by name', () => {
+        const v4 = { id: 'aa'.repeat(48), name: 'A', identity: { seed: '07'.repeat(64) }, encryption: { seed: '5a'.repeat(32) } };
+        expect(() => core.parseAccount(v4)).toThrow(/older Kryptolog version \(ML-DSA-65 \+ Ed25519/);
+    });
 });
 
 describe('encryption-key attestation (audit M-1, v1.3.0)', () => {
-    it('attestation body is byte-exact and names the address (4.0.0)', () => {
+    it('attestation body is byte-exact and names the address (4.0.0) and the suite (5.0.0)', () => {
         const address = 'ab'.repeat(48);
         expect(core.encryptionKeyAttestationBody({ address, encryptionPublicKey: 'aabb' }))
-            .toBe(`Kryptolog Signed Message v1\ncontext=key-attestation\naddress=${address}\nencryption=aabb`);
+            .toBe('Kryptolog Signed Message v1\ncontext=key-attestation\n' +
+                `address=${address}\nencryption-alg=HKDFwSHA384_P384_ML-KEM-768_CatKDF\nencryption=aabb`);
         expect(() => core.encryptionKeyAttestationBody({ address: 'ab', encryptionPublicKey: 'aabb' }))
             .toThrow(core.SignedBodyError);
     });
@@ -642,8 +721,10 @@ describe('encryption-key attestation (audit M-1, v1.3.0)', () => {
         expect(await check({ attestation: null })).toBe(false);
     });
 
-    it('keyFingerprint is a SHA-384 over a labelled statement of both (4.0.0)', async () => {
-        const hex = createHash('sha384').update('Kryptolog safety number v4\naddress=a1\nencryption=k1').digest('hex');
+    it('keyFingerprint is a SHA-384 over a labelled statement of both, and the suite (5.0.0)', async () => {
+        const hex = createHash('sha384')
+            .update('Kryptolog safety number v5\naddress=a1\nencryption-alg=HKDFwSHA384_P384_ML-KEM-768_CatKDF\nencryption=k1')
+            .digest('hex');
         const expected = Array.from({ length: 12 }, (_, i) =>
             String(parseInt(hex.slice(i * 5, i * 5 + 5), 16) % 100000).padStart(5, '0')).join(' ');
         expect(await core.keyFingerprint('a1', 'k1')).toBe(expected);
@@ -661,7 +742,7 @@ describe('encryption-key attestation (audit M-1, v1.3.0)', () => {
 
 describe('single-source / version guard', () => {
     it('exports a version both app builds can assert against', () => {
-        expect(core.CRYPTO_CORE_VERSION).toBe('4.3.0');
+        expect(core.CRYPTO_CORE_VERSION).toBe('5.0.0');
     });
 });
 

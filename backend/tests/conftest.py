@@ -3,13 +3,15 @@ Shared test fixtures for Kryptolog backend tests.
 
 Runs against a real PostgreSQL database (TEST_DATABASE_URL, defaulting to the
 `kryptolog_test` DB on the docker-compose Postgres). PQC verification runs
-in-process via pyca/cryptography (ML-DSA-44) — there is no sidecar to mock, and
-tests that need a genuine signature get one from `CompositeSigner`. Two client
+in-process via pyca/cryptography (composite ML-DSA-65 + ECDSA-P384) — there is
+no sidecar to mock, and tests that need a genuine signature get one from
+`CompositeSigner`. Two client
 signature checks are stubbed (see `_mock_pqc`) because the tests post
 placeholder signatures; JWT issuance and verification run for real against an
 ephemeral server key.
 """
 
+import base64
 import hashlib
 import os
 import sys
@@ -90,23 +92,56 @@ def register_identity(identity_public_key: str) -> str:
     return address
 
 
+def _p384_scalar(tag: bytes) -> int:
+    """A P-384 scalar in [1, n-1], deterministic per tag (FIPS 186-5 A.2.1's
+    "extra random bits": 448 bits reduced mod n-1, plus one)."""
+    from cryptography.hazmat.primitives.asymmetric import ec
+
+    n = ec.SECP384R1().group_order
+    wide = hashlib.shake_256(b"kryptolog-test-p384:" + tag).digest(56)
+    return int.from_bytes(wide, "big") % (n - 1) + 1
+
+
 def synthetic_identity_key(tag: str) -> str:
     """A structurally valid composite identity key, deterministic per tag.
 
     Not a key anyone holds: signature verification is patched out in these
     tests. But it must be the right SHAPE, all the way down, because the login
-    route checks it: 1952 bytes of ML-DSA-65 key (any bytes are one) and a real
-    Ed25519 public key, whose order the server verifies (crypto-core 4.0.0,
-    security/ed25519_subgroup.py) — random bytes would not be a point at all.
+    route and the database check it: 1952 bytes of ML-DSA-65 key (any bytes
+    are one) and a real P-384 point, which the server checks is on the curve
+    (crypto-core 5.0.0) — random bytes would not be a point at all.
     """
-    from cryptography.hazmat.primitives.asymmetric import ed25519
+    from cryptography.hazmat.primitives import serialization
+    from cryptography.hazmat.primitives.asymmetric import ec
 
     digest = hashlib.sha256(tag.encode()).digest()
     ml = (digest * (1952 // len(digest) + 1))[:1952]
-    ed = ed25519.Ed25519PrivateKey.from_private_bytes(
-        hashlib.sha256(b"ed25519:" + tag.encode()).digest()
+    point = (
+        ec.derive_private_key(_p384_scalar(tag.encode()), ec.SECP384R1())
+        .public_key()
+        .public_bytes(serialization.Encoding.X962, serialization.PublicFormat.UncompressedPoint)
     )
-    return (ml + ed.public_key().public_bytes_raw()).hex()
+    return (ml + point).hex()
+
+
+_ENCRYPTION_KEYS: dict[str, str] = {}
+
+
+def synthetic_encryption_key(tag: str) -> str:
+    """A REAL CatKDF P-384 + ML-KEM-768 public key, deterministic per tag.
+
+    The login route refuses anything else since crypto-core 5.0.0: the point
+    must be on the curve and the ML-KEM key pass FIPS 203's modulus check, so
+    the `"ab" * 1216` stand-ins of 4.x would not get in. Nobody decrypts with
+    it here; the secret half is derived and discarded (catkdf_ref, test-only).
+    """
+    if tag not in _ENCRYPTION_KEYS:
+        import catkdf_ref
+
+        scalar = _p384_scalar(b"enc:" + tag.encode()).to_bytes(48, "big")
+        seed = hashlib.shake_256(b"kryptolog-test-mlkem:" + tag.encode()).digest(64)
+        _ENCRYPTION_KEYS[tag] = catkdf_ref.public_key(scalar + seed).hex()
+    return _ENCRYPTION_KEYS[tag]
 
 
 def synthetic_address(tag: str) -> str:
@@ -117,7 +152,7 @@ def synthetic_address(tag: str) -> str:
 
 
 class CompositeSigner:
-    """A REAL composite ML-DSA-65 + Ed25519 client identity, for the tests that
+    """A REAL composite ML-DSA-65 + ECDSA-P384 client identity, for the tests that
     must not trust the stubbed verifier: `identity_public_key` is its key in
     hex, `address` the address that key names, `sign` returns raw signature
     bytes (callers base64 them, as the clients do).
@@ -129,30 +164,48 @@ class CompositeSigner:
     """
 
     def __init__(self):
-        from cryptography.hazmat.primitives.asymmetric import ed25519, mldsa
+        from cryptography.hazmat.primitives import serialization
+        from cryptography.hazmat.primitives.asymmetric import ec, mldsa
 
         self._ml = mldsa.MLDSA65PrivateKey.generate()
-        self._ed = ed25519.Ed25519PrivateKey.generate()
+        self._ec = ec.generate_private_key(ec.SECP384R1())
         self.identity_public_key = (
-            self._ml.public_key().public_bytes_raw() + self._ed.public_key().public_bytes_raw()
+            self._ml.public_key().public_bytes_raw()
+            + self._ec.public_key().public_bytes(
+                serialization.Encoding.X962, serialization.PublicFormat.UncompressedPoint
+            )
         ).hex()
         self.address = register_identity(self.identity_public_key)
 
     def sign(self, message: bytes) -> bytes:
+        """ML-DSA-65, then ECDSA-P384 over M' normalized to low-S — OpenSSL
+        does not normalize, and the verifiers on both sides require it."""
+        from cryptography.hazmat.primitives import hashes
+        from cryptography.hazmat.primitives.asymmetric import ec
+        from cryptography.hazmat.primitives.asymmetric.utils import (
+            decode_dss_signature,
+            encode_dss_signature,
+        )
+
         import auth
 
         m = auth._composite_message(message)
-        return self._ml.sign(m, auth._COMPOSITE_LABEL) + self._ed.sign(m)
+        r, s = decode_dss_signature(self._ec.sign(m, ec.ECDSA(hashes.SHA384())))
+        n = ec.SECP384R1().group_order
+        low = encode_dss_signature(r, min(s, n - s))
+        return self._ml.sign(m, auth._COMPOSITE_P384_LABEL) + low
 
 
 TEST_USER_ADDRESS = synthetic_address("user-1")
 TEST_USER_ADDRESS_2 = synthetic_address("user-2")
 TEST_USER_ADDRESS_3 = synthetic_address("user-3")
-# A structurally valid X-Wing public key: 1216 bytes, hex-encoded (2432
-# chars). Not a real key — a KEM key has no cheap validity predicate, so the
-# server can only check the format — but it must *be* the right format, since
-# login rejects malformed keys (KRY-011).
-TEST_ENCRYPTION_KEY = "ab" * 1216
+# A real CatKDF public key (crypto-core 5.0.0), 1 281 bytes as 2 562 hex: login
+# rejects anything that is not one (KRY-011, and the point and modulus checks).
+TEST_ENCRYPTION_KEY = synthetic_encryption_key("test-user")
+# A placeholder composite signature for the endpoint tests whose verifier is
+# stubbed (_mock_pqc): canonical base64 of a signature's SIZE, which is all the
+# schemas check (3 317..3 413 bytes since 5.0.0).
+PLACEHOLDER_SIGNATURE = base64.b64encode(b"\x00" * 3411).decode()
 
 
 # ---------- Auth helpers ----------

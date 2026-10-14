@@ -2,7 +2,7 @@
 //
 // Three fields in this app hold envelopes rather than user text: a group name
 // (a per-member key-wrap map, audit M-3), a DM's content, and a group
-// message's content. Their size is set by composite signatures, X-Wing-wrapped
+// message's content. Their size is set by composite signatures, CatKDF-wrapped
 // session keys and the member count — not by what anyone typed.
 //
 // `backend/schemas.py` budgets for each of them using costs measured HERE. The
@@ -29,13 +29,13 @@ import {
 // Must match backend/schemas.py. Raising one means raising the other.
 const SERVER = {
     MAX_GROUP_MEMBERS: 50,
-    KEY_WRAP_CHARS_PER_MEMBER: 1_796,
-    SIGNATURE_CHARS: 4_500,
-    WRAPPED_KEY_CHARS: 1_700,
+    KEY_WRAP_CHARS_PER_MEMBER: 1_946,
+    SIGNATURE_CHARS: 4_552,
+    WRAPPED_KEY_CHARS: 1_850,
     MAX_MESSAGE_TEXT_CHARS: 10_000,
-    MAX_GROUP_NAME_LEN: 89_800,
-    MAX_DM_CONTENT_LEN: 48_924,
-    MAX_GROUP_MESSAGE_CONTENT_LEN: 135_324,
+    MAX_GROUP_NAME_LEN: 97_300,
+    MAX_DM_CONTENT_LEN: 49_276,
+    MAX_GROUP_MESSAGE_CONTENT_LEN: 142_876,
 };
 
 // One identity's worth of real key material, generated once — keygen is the
@@ -72,6 +72,15 @@ const buildGroupNameBlob = async (name, members) => {
 };
 
 describe('encrypted group name size', () => {
+    // The unit every other bound is built from, measured directly: a wrap is
+    // JSON {v, alg, kid, kem, iv, encKey}, ~1 790 characters under 5.0.0.
+    it('one wrapped session key fits WRAPPED_KEY_CHARS', async () => {
+        const { kem } = await identity();
+        const wrapped = JSON.stringify(await wrapSessionKey(await generateSessionKey(), kem.publicKey));
+        expect(wrapped.length).toBeLessThanOrEqual(SERVER.WRAPPED_KEY_CHARS);
+        expect(SERVER.KEY_WRAP_CHARS_PER_MEMBER).toBe(96 + SERVER.WRAPPED_KEY_CHARS);
+    });
+
     it('costs less per member than the server budgets for', async () => {
         const { kem, dsa } = await identity();
         const members = membersOfSize(3, dsa, kem);

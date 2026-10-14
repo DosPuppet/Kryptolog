@@ -20,9 +20,9 @@ import { addressOf } from '../utils/crypto';
 
 // Keys of the right SHAPE (crypto-core 4.0.0: a 3968-hex composite identity
 // key, a 2432-hex X-Wing key); the addresses are what they name.
-const IDENTITY_KEY = 'a'.repeat(3968);
+const IDENTITY_KEY = 'a'.repeat(4098);
 const ADDRESS = addressOf(IDENTITY_KEY);
-const BOB_ADDRESS = addressOf('c'.repeat(3968));
+const BOB_ADDRESS = addressOf('c'.repeat(4098));
 
 const vault = {
     isLocked: false,
@@ -38,7 +38,7 @@ const vault = {
         id: ADDRESS,
         name: 'Alice',
         identity: { publicKey: IDENTITY_KEY },
-        encryption: { publicKey: 'b'.repeat(2432) },
+        encryption: { publicKey: 'b'.repeat(2562) },
     }),
     sign: vi.fn(async () => 'deletion-signature'),
     signMessage: vi.fn(async () => 'redaction-signature'),
@@ -504,7 +504,7 @@ describe('an erase performed with the keys in the extension', () => {
     // which is what used to select "wipe the whole vault" (audit 2026-09-12
     // M-1). The keys it holds are a different, still-valid identity's, and they
     // exist nowhere else unless the user exported a backup.
-    const EXTENSION_KEY = 'e'.repeat(3968);
+    const EXTENSION_KEY = 'e'.repeat(4098);
     const EXTENSION_ADDRESS = addressOf(EXTENSION_KEY);
     const localActiveAccount = vault.getActiveAccount;
 
@@ -519,7 +519,7 @@ describe('an erase performed with the keys in the extension', () => {
             getAccount: vi.fn(async () => ({
                 address: EXTENSION_ADDRESS,
                 identityPublicKey: EXTENSION_KEY,
-                encryptionPublicKey: 'f'.repeat(2432),
+                encryptionPublicKey: 'f'.repeat(2562),
                 name: 'ext-user',
             })),
             sign: vi.fn(async () => 'extension-signature'),
@@ -588,8 +588,8 @@ describe('a vault open on a different identity', () => {
         vault.getActiveAccount = () => ({
             id: BOB_ADDRESS,
             name: 'Bob',
-            identity: { publicKey: 'c'.repeat(3968) },
-            encryption: { publicKey: 'd'.repeat(2432) },
+            identity: { publicKey: 'c'.repeat(4098) },
+            encryption: { publicKey: 'd'.repeat(2562) },
         });
         vault.getAccounts.mockReturnValue([{ id: ADDRESS }, { id: BOB_ADDRESS }]);
 

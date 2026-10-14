@@ -126,6 +126,19 @@ A malformed `KRYPTOLOG_MESSAGE_RETENTION_DAYS` refuses to start in every mode.
   backend's migration `b4c5d6e7f8a9` refuses to run on a database that still
   holds identities and says so; back up, then recreate the database. 3.2.0 and
   3.3.0 led up to it (3.3.0 adds `users.identity_public_key`).
+- **crypto-core 5.0.0 is a clean break too** (October 2026, lot 12), and the
+  last one meant to need an empty database. Identities become composite
+  ML-DSA-65 + **ECDSA-P384**, encryption keys **ETSI TS 103 744 CatKDF over
+  P-384 + ML-KEM-768** — every component in the ECCG Agreed Cryptographic
+  Mechanisms v2 that ANSSI accepts for certification, which Ed25519 and X-Wing
+  were not. Nothing 4.x wrote opens or verifies, and the clients say so by
+  name; a deployment holding 4.x data starts from an empty database, and the
+  backend's migration `c5d6e7f8a9b0` refuses to run on one that holds
+  identities (back up first: `scripts/backup.sh`). From here on an encryption
+  key carries its suite and its id (`users.encryption_key_alg`,
+  `users.encryption_key_id`), which is what lets the next change of KEM be a
+  rotation of keys instead of another wipe. Deploy the SPA, the extension and
+  the server together.
 - **TrustKeys production build** injects into no site by default: each user adds
   the SPA's HTTPS origin under Settings → Manage Trusted Sites. The `build:dev`
   variant (localhost trusted, silent chat signing) is for development only.

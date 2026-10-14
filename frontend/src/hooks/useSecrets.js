@@ -327,7 +327,7 @@ export function useSecrets(encryptionPublicKey, options = {}) {
             const encryptedContentIdx = await encryptSymmetric(payloadToEncrypt, fileKey);
             const encryptedDataStr = JSON.stringify(encryptedContentIdx);
 
-            // 4. Encrypt AES Key for Owner (Me) — ML-KEM wrap.
+            // 4. Encrypt AES Key for Owner (Me) — KEM wrap.
             reportProgress(50, 'Encrypting Key...');
             const encryptedKeyForMe = await secureEncrypt(fileKey, encryptionPublicKey);
             // Prime the title-key cache: this fetch's re-render needs no prompt.
@@ -396,7 +396,7 @@ export function useSecrets(encryptionPublicKey, options = {}) {
         // 1. Decrypt the owner's wrapped AES file key (we re-wrap the key, not content).
         const fileKey = await secureDecrypt(originalEncryptedKey);
 
-        // 2. Re-wrap the file key for the recipient's ML-KEM public key.
+        // 2. Re-wrap the file key for the recipient's encryption public key.
         if (!recipientPublicKey || recipientPublicKey.length < 60) {
             throw new Error("Recipient has no post-quantum encryption key.");
         }

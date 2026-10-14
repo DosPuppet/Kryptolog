@@ -33,22 +33,22 @@ import {
 const fromHexLocal = (h) => new Uint8Array(Buffer.from(h, 'hex'));
 const fromB64Local = (b) => new Uint8Array(Buffer.from(b, 'base64'));
 
-describe('the shim hands out crypto-core 4', () => {
-  it('is the 4.0.0 package, not a stale copy', () => {
-    expect(CRYPTO_CORE_VERSION).toBe('4.3.0');
+describe('the shim hands out crypto-core 5', () => {
+  it('is the 5.0.0 package, not a stale copy', () => {
+    expect(CRYPTO_CORE_VERSION).toBe('5.0.0');
   });
 
-  it('composite identity keys: 1984-byte public key, 64-byte seed, 96-hex address', () => {
+  it('composite identity keys: 2049-byte public key, 80-byte seed, 96-hex address', () => {
     const { publicKey, seed } = generateIdentityKeyPair();
-    expect(fromHexLocal(publicKey).length).toBe(1984);
-    expect(fromHexLocal(seed).length).toBe(64);
+    expect(fromHexLocal(publicKey).length).toBe(2049);
+    expect(fromHexLocal(seed).length).toBe(80);
     expect(addressOf(publicKey)).toMatch(/^[0-9a-f]{96}$/);
   });
 
-  it('X-Wing encryption keys: 1216-byte public key, 32-byte seed', () => {
+  it('CatKDF encryption keys: 1281-byte public key, 112-byte seed', () => {
     const { publicKey, seed } = generateEncryptionKeyPair();
-    expect(fromHexLocal(publicKey).length).toBe(1216);
-    expect(fromHexLocal(seed).length).toBe(32);
+    expect(fromHexLocal(publicKey).length).toBe(1281);
+    expect(fromHexLocal(seed).length).toBe(112);
   });
 
   it('an account is the same shape in the SPA as everywhere: its id is its address', () => {
@@ -62,7 +62,9 @@ describe('composite sign/verify', () => {
     const { publicKey, seed } = generateIdentityKeyPair();
     const msg = 'login-challenge-abc';
     const sig = await signMessagePQC(msg, seed);
-    expect(fromB64Local(sig).length).toBe(3373);
+    // ML-DSA-65 (3 309) + a DER ECDSA-P384 half (8..104).
+    expect(fromB64Local(sig).length).toBeGreaterThanOrEqual(3317);
+    expect(fromB64Local(sig).length).toBeLessThanOrEqual(3413);
     expect(await verifySignature(msg, sig, publicKey)).toBe(true);
     expect(await verifySignature(msg + ' ', sig, publicKey)).toBe(false);
   });
@@ -72,12 +74,12 @@ describe('composite sign/verify', () => {
   });
 });
 
-describe('X-Wing envelopes round-trip', () => {
+describe('CatKDF envelopes round-trip', () => {
   it('encryptMessagePQC -> decryptMessagePQC', async () => {
     const { publicKey, seed } = generateEncryptionKeyPair();
     const env = await encryptMessagePQC('hello pqc', publicKey);
-    expect(env.alg).toBe('XWING-HKDF384-A256GCM');
-    expect(fromB64Local(env.kem).length).toBe(1120);
+    expect(env.alg).toBe('HKDFwSHA384_P384_ML-KEM-768_CatKDF-A256GCM');
+    expect(fromB64Local(env.kem).length).toBe(1185);
     expect(await decryptMessagePQC(env, seed)).toBe('hello pqc');
   });
 

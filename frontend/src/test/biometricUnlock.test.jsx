@@ -38,8 +38,8 @@ const vault = {
     unlock: vi.fn(async () => true),
     getActiveAccount: () => ({
         name: 'Alice',
-        identity: { publicKey: 'a'.repeat(3968) },
-        encryption: { publicKey: 'b'.repeat(2432) },
+        identity: { publicKey: 'a'.repeat(4098) },
+        encryption: { publicKey: 'b'.repeat(2562) },
     }),
     sign: vi.fn(async () => 'signature'),
     decryptMany: vi.fn(async () => ['plaintext']),
@@ -75,7 +75,7 @@ beforeEach(() => {
     global.fetch = vi.fn(async (url) =>
         /nonce/i.test(String(url))
             ? { ok: true, json: async () => ({ nonce: 'ab12', deployment: 'dev' }) }
-            : { ok: true, json: async () => ({ user: { address: addressOf('a'.repeat(3968)) }, access_token: 't' }) }
+            : { ok: true, json: async () => ({ user: { address: addressOf('a'.repeat(4098)) }, access_token: 't' }) }
     );
 });
 afterEach(() => { vi.restoreAllMocks(); });

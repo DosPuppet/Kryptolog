@@ -1,12 +1,13 @@
 import { useState, useRef } from 'react';
 import { Upload, ShieldCheck, ShieldAlert, FileJson, User, Key, Clock, FileText, X, Loader2, FileCheck, FileWarning, Type } from 'lucide-react';
 
-// Proofs are format 2.0 since crypto-core 4.0.0: composite ML-DSA-65 + Ed25519
+// Proofs are format 3.0 since crypto-core 5.0.0: composite ML-DSA-65 + ECDSA-P384
 // signatures, each signer named by address AND identity key. An older proof is
 // refused by name (multisig/proof.js assertProofVersion) rather than shown as a
 // column of failed signatures, which would read as forgeries.
 import { verifySignedDocument } from '../utils/secretContent';
 import { verifyMultisigProofSignatures, assertProofVersion, PROOF_ALGORITHM } from './multisig/proof';
+import { sha384HexOfFile } from '../utils/crypto';
 
 // Parse proof content to detect type: text, single file, or multi-file
 function parseProofContent(proofData) {
@@ -24,11 +25,9 @@ function parseProofContent(proofData) {
     return { kind: 'text', text: raw };
 }
 
-async function hashFile(file) {
-    const buffer = await file.arrayBuffer();
-    const hashBuffer = await crypto.subtle.digest('SHA-256', buffer);
-    return Array.from(new Uint8Array(hashBuffer)).map(b => b.toString(16).padStart(2, '0')).join('');
-}
+// The digest a signed document's descriptor carries (utils/secretPayload.js):
+// one function in crypto-core for the writer and for this check.
+const hashFile = async (file) => sha384HexOfFile(await file.arrayBuffer());
 
 export default function ProofAudit() {
     const fileInputRef = useRef(null);
@@ -392,7 +391,7 @@ export default function ProofAudit() {
                                     <>
                                         <p className="text-xs text-slate-500">
                                             Upload the original file{parsed.kind === 'files' ? 's' : ''} to verify
-                                            {parsed.kind === 'files' ? ' their' : ' its'} SHA-256 hash matches the proof.
+                                            {parsed.kind === 'files' ? ' their' : ' its'} SHA-384 hash matches the proof.
                                         </p>
                                         <div className="flex flex-wrap gap-2 text-xs text-slate-500">
                                             {(parsed.kind === 'files' ? parsed.files : [parsed.file]).map((f, i) => (
@@ -456,7 +455,7 @@ export default function ProofAudit() {
                                                     </>
                                                 )}
                                                 {d.matches && d.expected && d.expected === d.got && (
-                                                    <div className="text-emerald-600 break-all">SHA-256: {d.got}</div>
+                                                    <div className="text-emerald-600 break-all">SHA-384: {d.got}</div>
                                                 )}
                                             </div>
                                         ))}

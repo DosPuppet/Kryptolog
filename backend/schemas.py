@@ -54,7 +54,7 @@ MAX_GROUP_MEMBERS = 50
 # the first message of a conversation was capped at ~160 characters.
 #
 # So the costs are spelled out and the bounds derived from them. Every figure
-# is measured against crypto-core 4.0.0 and pinned on the producing side by
+# is measured against crypto-core 5.0.0 and pinned on the producing side by
 # packages/crypto-core/test/envelope-size.test.js, which fails if a primitive
 # change outgrows what this file budgets.
 
@@ -69,19 +69,21 @@ def b64_chars(byte_len: int) -> int:
 # through the L-12 cutover; only opaque payloads moved to base64.
 ADDRESS_CHARS = 96
 # The keys an address and an encryption key name, hex: a composite ML-DSA-65 +
-# Ed25519 identity key (1 984 bytes) and an X-Wing key (1 216 bytes).
-IDENTITY_KEY_CHARS = 3_968
-ENCRYPTION_KEY_CHARS = 2_432
-# A composite ML-DSA-65 + Ed25519 signature, base64 (3 373 bytes). Every
-# message carries one (audit S1).
-SIGNATURE_CHARS = b64_chars(3_373)  # 4 500
-# One X-Wing-wrapped session key, JSON-encoded: {v, alg, kem, iv, encKey}.
-# Measured ~1 640 under crypto-core 4.0.0 (an ML-KEM-768 wrap was ~1 600: the
-# X-Wing ciphertext is 32 bytes longer, the algorithm id the same length).
-WRAPPED_KEY_CHARS = 1_700
+# ECDSA-P384 identity key (2 049 bytes) and a CatKDF P-384 + ML-KEM-768 key
+# (1 281 bytes), crypto-core 5.0.0.
+IDENTITY_KEY_CHARS = 4_098
+ENCRYPTION_KEY_CHARS = 2_562
+# A composite ML-DSA-65 + ECDSA-P384 signature, base64, at its largest (3 413
+# bytes: the DER half varies). Every message carries one (audit S1).
+SIGNATURE_CHARS = b64_chars(3_413)  # 4 552
+# One CatKDF-wrapped session key, JSON-encoded: {v, alg, kid, kem, iv, encKey}.
+# Measured 1 788 under crypto-core 5.0.0 (the 4.0.0 X-Wing wrap was ~1 640: the
+# ciphertext is 65 bytes longer, the algorithm id 21 characters, and the key id
+# is new), so the budget keeps the same ~60 characters of headroom.
+WRAPPED_KEY_CHARS = 1_850
 # One entry in a key-wrap map: the member's address, their wrapped key, and the
 # JSON punctuation between them. Shrank from 4 324 when addresses became hashes.
-KEY_WRAP_CHARS_PER_MEMBER = ADDRESS_CHARS + WRAPPED_KEY_CHARS  # 1 796
+KEY_WRAP_CHARS_PER_MEMBER = ADDRESS_CHARS + WRAPPED_KEY_CHARS  # 1 946
 # Plaintext a user may put in one message, counted the way the client counts it
 # — JavaScript string length, i.e. UTF-16 code units.
 MAX_MESSAGE_TEXT_CHARS = 10_000
@@ -103,7 +105,7 @@ ENVELOPE_SLACK_CHARS = 1_000
 # "encg1:" + JSON({ct, keys: {address: wrappedKey}}) — one wrap per member so
 # each can decrypt the name (audit M-3). Rebuilt on rename and on every
 # membership change, so create and update share the bound.
-MAX_GROUP_NAME_LEN = MAX_GROUP_MEMBERS * KEY_WRAP_CHARS_PER_MEMBER  # 89 800
+MAX_GROUP_NAME_LEN = MAX_GROUP_MEMBERS * KEY_WRAP_CHARS_PER_MEMBER  # 97 300
 
 # A DM that mints a session carries two wraps (recipient and sender), keyed by
 # short literal names rather than by address.

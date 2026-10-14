@@ -1,4 +1,4 @@
-"""Format validation for key material, addresses and signatures (crypto-core 4).
+"""Format validation for key material, addresses and signatures (crypto-core 5).
 
 KRY-011: capability checks were written as `len(key) < 500`, which a run of
 600 arbitrary characters satisfies. The real security boundary is elsewhere
@@ -7,21 +7,30 @@ but a length floor is a poor proxy for "this is a public key", it makes the
 invariant unauditable, and it lets malformed keys reach storage where they
 surface later as confusing failures. Every check here is exact.
 
-crypto-core 4.0.0 is hybrid throughout (audit 2026-10-12 K-10):
-    identity key    composite ML-DSA-65 + Ed25519   1984 bytes -> 3968 hex
-    address         SHA-384 of the identity key       48 bytes ->   96 hex
-    encryption key  X-Wing (ML-KEM-768 + X25519)    1216 bytes -> 2432 hex
-    signature       composite                       3373 bytes -> 4500 base64
+crypto-core 5.0.0 is hybrid throughout (audit 2026-10-12 K-10), and every
+component is in the ECCG Agreed Cryptographic Mechanisms v2 (lot 12):
+    identity key    composite ML-DSA-65 + ECDSA-P384        2049 bytes -> 4098 hex
+    address         SHA-384 of the identity key               48 bytes ->   96 hex
+    encryption key  CatKDF, P-384 point || ML-KEM-768 key   1281 bytes -> 2562 hex
+    key id          SHA-384 of the encryption key, cut        16 bytes ->   32 hex
+    signature       composite (DER half varies)        3317..3413 bytes -> <= 4552 base64
 
-Two encodings, on purpose (audit L-12). Keys and addresses are IDENTIFIERS —
-an address is a primary key and a URL path segment, and the project
-normalizes addresses to lowercase everywhere, which would not survive a
-case-sensitive encoding. Signatures are opaque payloads and are base64 with
+Unlike their 4.x predecessors, both kinds of key can be checked for BEING
+keys, and are: P-384 has cofactor 1, so a point is valid iff it is on the
+curve (no subgroup to test — the pure-Python Ed25519 subgroup check this
+module used to lean on is gone with Ed25519), and ML-KEM-768's encapsulation
+key has FIPS 203's modulus check, which OpenSSL runs when the key is loaded.
+
+Two encodings, on purpose (audit L-12). Keys, key ids and addresses are
+IDENTIFIERS — an address is a primary key and a URL path segment, and the
+project normalizes addresses to lowercase everywhere, which would not survive
+a case-sensitive encoding. Signatures are opaque payloads and are base64 with
 the rest of them.
 
 These are the only places the server answers "what is an address" and "what
-does a key look like"; identity.js in crypto-core is the client's half and
-the two must agree (tests/fixtures/hybrid_interop.json pins a golden address).
+does a key look like"; identity.js and pqc.js in crypto-core are the client's
+half and the two must agree (tests/fixtures/hybrid_interop.json pins a golden
+address).
 """
 
 import base64
@@ -30,21 +39,33 @@ import re
 
 from cryptography.hazmat.primitives.asymmetric import ec, mlkem
 
-from security.ed25519_subgroup import in_prime_order_subgroup
+# The suites in use, by registry id — the names crypto-core's pqc.js spells
+# SIGNATURE_ALG and KEM_ALG. Both are in the prefixes below, so a change of
+# either changes every address and key id, deliberately.
+FORMAT_VERSION = 5
+SIGNATURE_ALG = "MLDSA65-ECDSA-P384-SHA512"
+KEM_ALG = "HKDFwSHA384_P384_ML-KEM-768_CatKDF"
 
 # Byte lengths.
 _ML_DSA_65_PUBLIC_KEY_BYTES = 1952
-IDENTITY_KEY_BYTES = _ML_DSA_65_PUBLIC_KEY_BYTES + 32
-ENCRYPTION_KEY_BYTES = 1216
-SIGNATURE_BYTES = 3309 + 64
+_ML_DSA_65_SIGNATURE_BYTES = 3309
+P384_POINT_BYTES = 97  # SEC1 uncompressed: 0x04 || x || y
+_ML_KEM_768_KEY_BYTES = 1184
+IDENTITY_KEY_BYTES = _ML_DSA_65_PUBLIC_KEY_BYTES + P384_POINT_BYTES
+ENCRYPTION_KEY_BYTES = 97 + _ML_KEM_768_KEY_BYTES  # P-384 point || ML-KEM-768 encapsulation key
+# A composite signature: ML-DSA-65 then a DER Ecdsa-Sig-Value of 8..104 bytes.
+SIGNATURE_MIN_BYTES = _ML_DSA_65_SIGNATURE_BYTES + 8
+SIGNATURE_MAX_BYTES = _ML_DSA_65_SIGNATURE_BYTES + 104
 ADDRESS_BYTES = 48
+KEY_ID_BYTES = 16
 
 # Hex lengths for the identifiers.
 IDENTITY_KEY_HEX_LEN = IDENTITY_KEY_BYTES * 2
 ENCRYPTION_KEY_HEX_LEN = ENCRYPTION_KEY_BYTES * 2
 ADDRESS_HEX_LEN = ADDRESS_BYTES * 2
-# Base64 length for the payload: 4 chars per 3 bytes, padded.
-SIGNATURE_B64_LEN = ((SIGNATURE_BYTES + 2) // 3) * 4
+KEY_ID_HEX_LEN = KEY_ID_BYTES * 2
+# Base64 length for the largest signature: 4 chars per 3 bytes, padded.
+SIGNATURE_MAX_B64_LEN = ((SIGNATURE_MAX_BYTES + 2) // 3) * 4
 
 
 def _lowercase_hex(length: int) -> re.Pattern:
@@ -56,6 +77,7 @@ def _lowercase_hex(length: int) -> re.Pattern:
 _ADDRESS_RE = _lowercase_hex(ADDRESS_HEX_LEN)
 _IDENTITY_KEY_RE = _lowercase_hex(IDENTITY_KEY_HEX_LEN)
 _ENCRYPTION_KEY_RE = _lowercase_hex(ENCRYPTION_KEY_HEX_LEN)
+_KEY_ID_RE = _lowercase_hex(KEY_ID_HEX_LEN)
 
 
 def is_hex(value: str) -> bool:
@@ -104,93 +126,16 @@ def is_valid_b64_of_length(value: str | None, b64_len: int) -> bool:
 
 
 def is_valid_signature(value: str | None) -> bool:
-    """True if `value` is canonical base64 of exactly one composite signature.
+    """True if `value` is canonical base64 of a composite signature's size.
 
-    By decoded BYTES, not characters: base64 pads to a multiple of four, so
-    3 373 and 3 374 bytes both spell 4 500 characters, and a check on the
-    length alone accepts a signature with a byte appended.
+    By decoded BYTES, not characters: base64 pads to a multiple of four, so a
+    check on the length alone would accept a signature with a byte appended.
+    The size varies with the DER half (crypto-core 5.0.0); whether the bytes
+    ARE a signature is verification's question, not this one's.
     """
-    return (
-        is_valid_b64_of_length(value, SIGNATURE_B64_LEN)
-        and len(base64.b64decode(value)) == SIGNATURE_BYTES
-    )
-
-
-def is_valid_encryption_key(value: str | None) -> bool:
-    """True if `value` is a lowercase-hex X-Wing public key.
-
-    Structural only — and that is the ceiling, not an omission. Its ML-KEM-768
-    half has one cheap validity predicate, the FIPS 203 modulus check, and 1184
-    bytes of `AA` pass it; any 32 bytes are an X25519 key. What binds a key to
-    an identity is the key attestation, which the login route verifies.
-    """
-    return isinstance(value, str) and _ENCRYPTION_KEY_RE.match(value) is not None
-
-
-# --- Addresses and the keys they name (crypto-core 3.3.0 seam, 4.0.0 meaning) -
-
-# The address of a composite identity key: SHA-384 under a prefix that names
-# the version and the algorithm. Byte-identical to crypto-core's addressOf.
-_ADDRESS_DOMAIN = b"Kryptolog address v4\nalg=MLDSA65-Ed25519-SHA512\n"
-
-
-def is_valid_address(value: str | None) -> bool:
-    """True if `value` is shaped like an address: 96 lowercase hex characters."""
-    return isinstance(value, str) and _ADDRESS_RE.match(value) is not None
-
-
-def address_of(identity_public_key: str) -> str:
-    """The address an identity public key (lowercase hex) is known by. Raises
-    ValueError for anything that is not one."""
-    if not isinstance(identity_public_key, str) or not _IDENTITY_KEY_RE.match(identity_public_key):
-        raise ValueError("an identity public key is 3968 lowercase hex characters")
-    return hashlib.sha384(_ADDRESS_DOMAIN + bytes.fromhex(identity_public_key)).hexdigest()
-
-
-def identity_binds_address(identity_public_key: str | None, address: str | None) -> bool:
-    """Is `identity_public_key` the key `address` names? Never raises."""
-    try:
-        return is_valid_address(address) and address_of(identity_public_key) == address
-    except ValueError:
+    if not isinstance(value, str) or len(value) > SIGNATURE_MAX_B64_LEN or not is_b64(value):
         return False
-
-
-def is_valid_identity_key(value: str | None) -> bool:
-    """True if `value` is a lowercase-hex composite key whose Ed25519 half is
-    a point of order exactly L.
-
-    The second condition is what lets the server verify with OpenSSL alone:
-    with such a key, OpenSSL's cofactorless Ed25519 rule and the clients'
-    stricter one accept the same signatures (see security/ed25519_subgroup.py).
-    Checked once, where a key enters — the login route — so every stored key
-    satisfies it.
-    """
-    if not isinstance(value, str) or not _IDENTITY_KEY_RE.match(value):
-        return False
-    # Nothing to check in the ML-DSA-65 half beyond its length: FIPS 204's
-    # pkDecode cannot fail on 1952 bytes (rho is any 32 bytes, t1 any packed
-    # 10-bit values), and OpenSSL accepts every such key.
-    return in_prime_order_subgroup(bytes.fromhex(value)[_ML_DSA_65_PUBLIC_KEY_BYTES:])
-
-
-# --- The keys of lot 12 (crypto-core 4.1.0 / 4.2.0, additive) ---
-#
-# The suites 5.0.0 switches to: identities become composite ML-DSA-65 +
-# ECDSA-P384, encryption keys ETSI TS 103 744 CatKDF over P-384 +
-# ML-KEM-768. Unlike X25519 and X-Wing, both CAN be checked for what they
-# claim to be, and are: P-384 has cofactor 1, so a point is valid iff it is on
-# the curve (no subgroup to test), and ML-KEM-768's encapsulation key has the
-# FIPS 203 modulus check, which OpenSSL runs when the key is loaded. Nothing
-# calls these yet; the login route will in 5.0.0.
-
-P384_POINT_BYTES = 97  # SEC1 uncompressed: 0x04 || x || y
-P384_IDENTITY_KEY_BYTES = _ML_DSA_65_PUBLIC_KEY_BYTES + P384_POINT_BYTES
-CATKDF_ENCRYPTION_KEY_BYTES = 97 + 1184  # P-384 point || ML-KEM-768 encapsulation key
-P384_IDENTITY_KEY_HEX_LEN = P384_IDENTITY_KEY_BYTES * 2
-CATKDF_ENCRYPTION_KEY_HEX_LEN = CATKDF_ENCRYPTION_KEY_BYTES * 2
-
-_P384_IDENTITY_KEY_RE = _lowercase_hex(P384_IDENTITY_KEY_HEX_LEN)
-_CATKDF_ENCRYPTION_KEY_RE = _lowercase_hex(CATKDF_ENCRYPTION_KEY_HEX_LEN)
+    return SIGNATURE_MIN_BYTES <= len(base64.b64decode(value)) <= SIGNATURE_MAX_BYTES
 
 
 def is_valid_p384_point(point: bytes) -> bool:
@@ -207,34 +152,95 @@ def is_valid_p384_point(point: bytes) -> bool:
     return True
 
 
-def is_valid_p384_identity_key(value: str | None) -> bool:
-    """True if `value` is a lowercase-hex composite ML-DSA-65 + ECDSA-P384 key
-    whose P-384 half is a point on the curve. (The ML-DSA-65 half has nothing
-    to check beyond its length, see is_valid_identity_key.)"""
-    if not isinstance(value, str) or not _P384_IDENTITY_KEY_RE.match(value):
-        return False
-    return is_valid_p384_point(bytes.fromhex(value)[_ML_DSA_65_PUBLIC_KEY_BYTES:])
-
-
-def is_valid_catkdf_encryption_key(value: str | None) -> bool:
+def is_valid_encryption_key(value: str | None) -> bool:
     """True if `value` is a lowercase-hex CatKDF key, P-384 point || ML-KEM-768
     encapsulation key, with a point on the curve and an encapsulation key that
     passes FIPS 203's modulus check.
 
     The attestation still decides WHOSE key it is; this decides that it IS a
-    key, which X-Wing's structural check could not (its X25519 half accepts any
-    32 bytes) — a malformed key no longer reaches the directory, where every
-    sender would fail on it one at a time.
+    key, which X-Wing's structural check could not (its X25519 half accepted
+    any 32 bytes) — a malformed key no longer reaches the directory, where
+    every sender would fail on it one at a time.
     """
-    if not isinstance(value, str) or not _CATKDF_ENCRYPTION_KEY_RE.match(value):
+    if not isinstance(value, str) or not _ENCRYPTION_KEY_RE.match(value):
         return False
     raw = bytes.fromhex(value)
     if not is_valid_p384_point(raw[:P384_POINT_BYTES]):
         return False
     try:
         # OpenSSL runs the modulus check on load (its message on failure talks
-        # about the LENGTH, misleadingly; the probe in the test pins the case).
+        # about the LENGTH, misleadingly; test_hybrid_primitives pins the case).
         mlkem.MLKEM768PublicKey.from_public_bytes(raw[P384_POINT_BYTES:])
     except ValueError:
         return False
     return True
+
+
+# --- Encryption key ids (crypto-core 5.0.0) ---
+# Byte-identical to crypto-core's encryptionKeyId: the first 16 bytes of
+# SHA-384 over the key under a prefix naming the format and the suite. Every
+# KEM envelope carries the id of the key it was sealed to, which is what lets
+# an account keep retired keys and read with the right one.
+_KEY_ID_DOMAIN = f"Kryptolog encryption key id v{FORMAT_VERSION}\nalg={KEM_ALG}\n".encode()
+
+
+def encryption_key_id(encryption_public_key: str) -> str:
+    """The id of an encryption public key (lowercase hex). Raises ValueError
+    for anything that is not one's hex spelling."""
+    if not isinstance(encryption_public_key, str) or not _ENCRYPTION_KEY_RE.match(
+        encryption_public_key
+    ):
+        raise ValueError(
+            f"an encryption public key is {ENCRYPTION_KEY_HEX_LEN} lowercase hex characters"
+        )
+    digest = hashlib.sha384(_KEY_ID_DOMAIN + bytes.fromhex(encryption_public_key)).hexdigest()
+    return digest[:KEY_ID_HEX_LEN]
+
+
+def is_valid_key_id(value: str | None) -> bool:
+    """True if `value` is shaped like a key id: 32 lowercase hex characters."""
+    return isinstance(value, str) and _KEY_ID_RE.match(value) is not None
+
+
+# --- Addresses and the keys they name (crypto-core 3.3.0 seam, 5.0.0 meaning) -
+
+# The address of a composite identity key: SHA-384 under a prefix that names
+# the version and the algorithm. Byte-identical to crypto-core's addressOf.
+_ADDRESS_DOMAIN = f"Kryptolog address v{FORMAT_VERSION}\nalg={SIGNATURE_ALG}\n".encode()
+
+
+def is_valid_address(value: str | None) -> bool:
+    """True if `value` is shaped like an address: 96 lowercase hex characters."""
+    return isinstance(value, str) and _ADDRESS_RE.match(value) is not None
+
+
+def address_of(identity_public_key: str) -> str:
+    """The address an identity public key (lowercase hex) is known by. Raises
+    ValueError for anything that is not one."""
+    if not isinstance(identity_public_key, str) or not _IDENTITY_KEY_RE.match(identity_public_key):
+        raise ValueError(
+            f"an identity public key is {IDENTITY_KEY_HEX_LEN} lowercase hex characters"
+        )
+    return hashlib.sha384(_ADDRESS_DOMAIN + bytes.fromhex(identity_public_key)).hexdigest()
+
+
+def identity_binds_address(identity_public_key: str | None, address: str | None) -> bool:
+    """Is `identity_public_key` the key `address` names? Never raises."""
+    try:
+        return is_valid_address(address) and address_of(identity_public_key) == address
+    except ValueError:
+        return False
+
+
+def is_valid_identity_key(value: str | None) -> bool:
+    """True if `value` is a lowercase-hex composite ML-DSA-65 + ECDSA-P384 key
+    whose P-384 half is a point on the curve.
+
+    Checked where a key enters — the login route — so every stored key
+    satisfies it. Nothing to check in the ML-DSA-65 half beyond its length:
+    FIPS 204's pkDecode cannot fail on 1952 bytes (rho is any 32 bytes, t1 any
+    packed 10-bit values), and OpenSSL accepts every such key.
+    """
+    if not isinstance(value, str) or not _IDENTITY_KEY_RE.match(value):
+        return False
+    return is_valid_p384_point(bytes.fromhex(value)[_ML_DSA_65_PUBLIC_KEY_BYTES:])

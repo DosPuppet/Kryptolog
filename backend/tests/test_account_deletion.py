@@ -23,6 +23,7 @@ from unittest.mock import patch
 
 import pytest
 from conftest import (
+    PLACEHOLDER_SIGNATURE,
     TEST_ENCRYPTION_KEY,
     TEST_ORIGIN,
     CompositeSigner,
@@ -45,7 +46,7 @@ from utils.clock import utcnow_naive
 # Right shape, wrong content: the schema checks the exact base64 length of an
 # ML-DSA-44 signature, while conftest patches the verifier itself to True for
 # every test without the real_signatures marker.
-DUMMY_SIG = base64.b64encode(b"\x00" * 3373).decode()
+DUMMY_SIG = PLACEHOLDER_SIGNATURE
 
 
 def _wrapped(tag):

@@ -1,4 +1,4 @@
-import { encryptVault, decryptVaultWithKey, encryptVaultWithKey, deriveKey, vaultKdfOf, vaultPasswordProblem, generateAccount, signMessagePQC, decryptMessagePQC, unwrapSessionKey, generateSessionKey, wrapSessionKey, parseAccount, FormatError } from '../utils/crypto';
+import { encryptVault, decryptVaultWithKey, encryptVaultWithKey, deriveKey, vaultKdfOf, vaultPasswordProblem, generateAccount, signMessagePQC, decryptMessagePQC, unwrapSessionKey, generateSessionKey, wrapSessionKey, parseAccount, FormatError, encryptionSeedFor } from '../utils/crypto';
 import { backupMethods } from './vaultBackup';
 import { biometricMethods } from './vaultBiometrics';
 
@@ -401,7 +401,8 @@ class VaultService {
 
         if (!account) throw new Error("Active account not found in vault");
 
-        const plaintext = await decryptMessagePQC(encryptedData, account.encryption.seed);
+        // Whichever of the account's keys the envelope names (crypto-core 5.0.0).
+        const plaintext = await decryptMessagePQC(encryptedData, encryptionSeedFor(account, encryptedData));
 
         return plaintext;
     }
@@ -417,7 +418,7 @@ class VaultService {
         // We catch errors per message so one failure doesn't break all
         return await Promise.all(encryptedItems.map(async (item) => {
             try {
-                return await decryptMessagePQC(item, account.encryption.seed);
+                return await decryptMessagePQC(item, encryptionSeedFor(account, item));
             } catch (e) {
                 console.error("Failed to decrypt message:", e);
                 return "Error: Decryption Failed";
@@ -442,7 +443,7 @@ class VaultService {
         const account = fullVault.accounts.find(a => a.id === fullVault.activeAccountId);
         if (!account) throw new Error("Active account not found");
 
-        return await unwrapSessionKey(wrappedKey, account.encryption.seed);
+        return await unwrapSessionKey(wrappedKey, encryptionSeedFor(account, wrappedKey));
     }
 
     async unwrapManySessionKeys(wrappedKeys, password) {
@@ -452,12 +453,10 @@ class VaultService {
         const account = fullVault.accounts.find(a => a.id === fullVault.activeAccountId);
         if (!account) throw new Error("Active account not found");
 
-        const privKey = account.encryption.seed;
-
-        // We run these in parallel since we have the key
+        // In parallel; each blob opens with the key its kid names (5.0.0).
         return await Promise.all(wrappedKeys.map(async (blob) => {
             try {
-                return await unwrapSessionKey(blob, privKey);
+                return await unwrapSessionKey(blob, encryptionSeedFor(account, blob));
             } catch (e) {
                 console.error("Batch unwrap item failed", e);
                 return null;

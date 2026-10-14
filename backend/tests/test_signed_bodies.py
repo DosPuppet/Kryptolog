@@ -23,7 +23,14 @@ import json
 import pathlib
 
 import pytest
-from conftest import TEST_ORIGIN, CompositeSigner, get_nonce, identity_key_of, server_deployment
+from conftest import (
+    TEST_ORIGIN,
+    CompositeSigner,
+    get_nonce,
+    identity_key_of,
+    server_deployment,
+    synthetic_encryption_key,
+)
 
 import auth
 
@@ -288,7 +295,7 @@ class TestTheVectorsAreWhatWeThinkTheyAre:
             "{"
             + ",".join(
                 f'"{name}":{{"alg":"{e["alg"]}","encKey":"{e["encKey"]}",'
-                f'"iv":"{e["iv"]}","kem":"{e["kem"]}","v":{e["v"]}}}'
+                f'"iv":"{e["iv"]}","kem":"{e["kem"]}","kid":"{e["kid"]}","v":{e["v"]}}}'
                 for name, e in sorted(v["message_keys"].items())
             )
             + "}"
@@ -297,13 +304,21 @@ class TestTheVectorsAreWhatWeThinkTheyAre:
         assert f"keysh={digest}" in v["bodies"]["message"]
 
     def test_binding_the_encryption_key_changes_the_bytes(self):
+        """Both forms end on the same two lines, empty without a key — and with
+        one, its suite as well as its bytes (crypto-core 5.0.0)."""
         v = _vectors()
-        assert v["bodies"]["login"] != v["bodies"]["login_with_encryption_key"]
-        assert v["bodies"]["login_with_encryption_key"].startswith(v["bodies"]["login"])
+        bare, bound = v["bodies"]["login"], v["bodies"]["login_with_encryption_key"]
+        assert bare != bound
+        head = bare[: bare.index("\nencryption-key-alg=")]
+        assert bare == head + "\nencryption-key-alg=\nencryption-key="
+        assert bound == (
+            head + "\nencryption-key-alg=HKDFwSHA384_P384_ML-KEM-768_CatKDF"
+            f"\nencryption-key={v['encryption_public_key']}"
+        )
 
 
 class TestARealLoginSignatureThroughTheEndpoint:
-    """The one path nothing covered: a genuine ML-DSA-44 login signature,
+    """The one path nothing covered: a genuine composite login signature,
     verified by the server, through POST /auth/login.
 
     conftest patches both verifiers autouse, so every other endpoint test logs
@@ -322,8 +337,9 @@ class TestARealLoginSignatureThroughTheEndpoint:
 
     @pytest.mark.real_signatures
     def test_a_genuine_signature_over_the_shared_body_logs_in(self, client):
-        v = _vectors()
-        enc_key = v["encryption_public_key"]
+        # A REAL key: the fixture's stand-in pins the body's bytes, but the
+        # login route checks the key is one (crypto-core 5.0.0).
+        enc_key = synthetic_encryption_key("real-login")
 
         signer = CompositeSigner()
         address = signer.address

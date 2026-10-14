@@ -26,7 +26,7 @@ import { apiFetch } from '../services/api';
 export default function Dashboard({ view = 'secrets' }) {
     const { user, authType, logout, token } = useAuth();
     const { theme, toggleTheme } = useTheme();
-    const { hasLocalVault, isExtensionAvailable, mlkemKey, pqcAccount } = usePQC();
+    const { hasLocalVault, isExtensionAvailable, ownEncryptionKey, pqcAccount } = usePQC();
 
     // Global Progress State
     const [globalProgress, setGlobalProgress] = useState(0);
@@ -37,8 +37,8 @@ export default function Dashboard({ view = 'secrets' }) {
         setGlobalStatus(msg);
     };
 
-    // Derived Logic — PQC identity (ML-KEM encryption key + ML-DSA account id).
-    const encryptionPublicKey = mlkemKey;
+    // Derived Logic — PQC identity (hybrid encryption key + composite identity's address).
+    const encryptionPublicKey = ownEncryptionKey;
     const currentDisplayAccount = pqcAccount;
 
     const handleLogout = async () => {

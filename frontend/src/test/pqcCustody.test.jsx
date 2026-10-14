@@ -27,7 +27,7 @@ const vault = {
     decryptMany: vi.fn(async () => ['vault-plaintext']),
     unwrapManySessionKeys: vi.fn(async () => ['vault-unwrapped']),
     importEncryptedBlob: vi.fn(async () => ({
-        name: 'Moved', identity: { publicKey: 'aa'.repeat(1984) }, encryption: { publicKey: 'bb'.repeat(1216) },
+        name: 'Moved', identity: { publicKey: 'aa'.repeat(2049) }, encryption: { publicKey: 'bb'.repeat(1281) },
     })),
 };
 
@@ -149,7 +149,7 @@ describe('receiving a vault from another device', () => {
                 return { ok: true, json: async () => ({ nonce: 'ab12', deployment: 'dev' }) };
             }
             posted.push(JSON.parse(init.body));
-            return { ok: true, json: async () => ({ access_token: 'tok', user: { address: addressOf('aa'.repeat(1984)) } }) };
+            return { ok: true, json: async () => ({ access_token: 'tok', user: { address: addressOf('aa'.repeat(2049)) } }) };
         });
         await mount();
         await act(async () => { await api.receiveVault('{}', 'transfer-pass', 'new local password'); });
@@ -161,7 +161,7 @@ describe('receiving a vault from another device', () => {
         expect(posted[0]).toMatchObject({
             signature: 'vault-signature', encryption_key_attestation: 'vault-signature',
             // The key travels with the address it names (crypto-core 3.3.0).
-            address: addressOf('aa'.repeat(1984)), identity_public_key: 'aa'.repeat(1984),
+            address: addressOf('aa'.repeat(2049)), identity_public_key: 'aa'.repeat(2049),
         });
     });
 });

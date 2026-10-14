@@ -15,7 +15,7 @@
 
 import { argon2idAsync } from '@noble/hashes/argon2.js';
 
-import { toB64, fromB64, ENC, DEC } from './encoding.js';
+import { toB64, fromB64, ENC, DEC, canonicalJson } from './encoding.js';
 import { FORMAT_VERSION, FormatError } from './pqc.js';
 
 export const VAULT_KDF_ALG = 'argon2id';
@@ -118,10 +118,18 @@ const assertVaultFormat = (blob) => {
     }
 };
 
+// The blob's own markers — its format version and the KDF descriptor that
+// produced its key — are its AES-GCM associated data (5.0.0). The 4.0.0
+// changelog said every envelope's markers were; the vault's were not, so a
+// blob's `kdf` could be rewritten (to cheaper parameters, say, for whoever
+// re-derives next) without the tag noticing. Canonical JSON, so the bytes do
+// not depend on the order the descriptor's fields were written in.
+const vaultAad = (kdf) => ENC.encode(`Kryptolog vault\nv=${FORMAT_VERSION}\nkdf=${canonicalJson(kdf)}`);
+
 const seal = async (data, key, kdf) => {
     const iv = crypto.getRandomValues(new Uint8Array(12));
     const encryptedContent = await crypto.subtle.encrypt(
-        { name: "AES-GCM", iv: iv },
+        { name: "AES-GCM", iv: iv, additionalData: vaultAad(kdf) },
         key,
         ENC.encode(JSON.stringify(data))
     );
@@ -149,7 +157,7 @@ export const decryptVault = async (encryptedVault, password) => {
 
 const openSealed = async (blob, key) => {
     const decryptedContent = await crypto.subtle.decrypt(
-        { name: "AES-GCM", iv: fromB64(blob.iv) },
+        { name: "AES-GCM", iv: fromB64(blob.iv), additionalData: vaultAad(blob.kdf) },
         key,
         fromB64(blob.data)
     );

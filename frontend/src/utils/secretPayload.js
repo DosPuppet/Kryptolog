@@ -7,12 +7,15 @@
 // signed document's integrity check later compares against, so the two copies
 // drifting apart would be found by a verification failure and nothing earlier.
 
-import { sha256HexBytes } from './crypto';
+import { sha384HexOfFile } from './crypto';
 import { CHUNK_SIZE } from './fileChunks';
 
 const chunkCount = (file) => Math.ceil(file.size / CHUNK_SIZE);
 
-const hashOf = async (file) => sha256HexBytes(await file.arrayBuffer());
+// SHA-384 since crypto-core 5.0.0: this digest is inside the content a signed
+// document's creator signs, so it is held to the same digest size as every
+// other signed body (ANSSI PG-083 v3.00, RecoPQHachage).
+const hashOf = async (file) => sha384HexOfFile(await file.arrayBuffer());
 
 /**
  * Build the metadata envelope for one or more files.

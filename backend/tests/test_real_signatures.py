@@ -15,6 +15,7 @@ import json
 
 import pytest
 from conftest import (
+    PLACEHOLDER_SIGNATURE,
     TEST_ENCRYPTION_KEY,
     TEST_ORIGIN,
     CompositeSigner,
@@ -144,7 +145,7 @@ class TestConversationErase:
             "ts": 1760264400000,
             "seq": 0,
             "ct": "Y3Q=",
-            "sig": base64.b64encode(b"\x00" * 3373).decode(),
+            "sig": PLACEHOLDER_SIGNATURE,
             "keys": {
                 "recip": {
                     "v": 3,

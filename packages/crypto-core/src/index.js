@@ -1,14 +1,18 @@
 // @kryptolog/crypto-core — the single source of truth for client-side crypto.
 //
-// crypto-core 4 is HYBRID throughout (audit 2026-10-12 K-10), at NIST category
-// 3, the level ANSSI asks for — each primitive holds while either half does:
-//   identity    composite ML-DSA-65 + Ed25519, id-MLDSA65-Ed25519-SHA512
-//               (draft-ietf-lamps-pq-composite-sigs)                — composite.js
-//   encryption  X-Wing, ML-KEM-768 + X25519
-//               (draft-connolly-cfrg-xwing-kem)                     — kem.js
+// crypto-core 5 is HYBRID throughout (audit 2026-10-12 K-10), at NIST category
+// 3, and every component is in the ECCG Agreed Cryptographic Mechanisms v2
+// that ANSSI accepts for certification (lot 12) — each primitive holds while
+// either half does:
+//   identity    composite ML-DSA-65 + ECDSA-P384, id-MLDSA65-ECDSA-P384-SHA512
+//               (draft-ietf-lamps-pq-composite-sigs-19)             — composite.js
+//   encryption  ETSI TS 103 744 CatKDF, HKDFwSHA384_P384_ML-KEM-768  — kem.js
 //   address     SHA-384 of the identity key                          — identity.js
-// Both are pinned to their specifications' own vectors and checked against
-// the server's OpenSSL in both directions (test/hybrid.test.js).
+// Both sit behind registries (SIGNATURE_SUITES, KEM_SUITES) and pqc.js names
+// the one in use of each, so the next change of algorithm is an entry and a
+// cutover, not a rewrite. Both are pinned to their specifications' own vectors
+// and checked against the server's OpenSSL in both directions
+// (test/hybrid.test.js).
 //
 // The primitives come from @noble/post-quantum and @noble/curves: pure JS, no
 // WASM. noble is NOT independently audited (post-quantum self-audited at 0.6.1)
@@ -37,7 +41,7 @@
 
 // Bumped whenever a wire/storage format or shared primitive changes; the
 // per-version history is in CHANGELOG.md next to this file.
-export const CRYPTO_CORE_VERSION = '4.3.0';
+export const CRYPTO_CORE_VERSION = '5.0.0';
 
 export * from './encoding.js';
 export * from './signing.js';

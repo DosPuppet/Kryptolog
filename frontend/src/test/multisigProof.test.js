@@ -78,7 +78,7 @@ describe('creator signature attribution', () => {
     });
 });
 
-describe('proof export and Proof Audit agree (4.0.0)', () => {
+describe('proof export and Proof Audit agree (5.0.0)', () => {
     // An exported proof is only worth something if the auditor's side accepts
     // what the exporting side wrote: the digest, the keys, the version.
     it('a signer\'s approval in an exported proof verifies offline', async () => {
@@ -108,7 +108,7 @@ describe('proof export and Proof Audit agree (4.0.0)', () => {
         vi.restoreAllMocks();
 
         const proof = JSON.parse(written);
-        expect(proof.version).toBe('2.0');
+        expect(proof.version).toBe('3.0');
         const [result] = await verifyMultisigProofSignatures(proof);
         expect(result.valid).toBe(true);
     });

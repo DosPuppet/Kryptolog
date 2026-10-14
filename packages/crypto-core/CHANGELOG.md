@@ -344,3 +344,61 @@ envelopes are built.
   account seed patterns from the suites' secret-key lengths.
 - The backend mirrors the seam: `auth.SIGNATURE_VERIFIERS[SIG_ALG]` is what
   every verification path calls.
+
+## 5.0.0
+
+CUTOVER — the ninth, and meant to be the last that needs an empty database
+(lot 12, ANSSI 2026 alignment). Nothing 4.x wrote opens or verifies after it,
+and every decoder says so by name: wrapped keys, envelopes, vaults, `.kvault`
+backups, extension vaults, stored accounts, signatures, multisig proofs, and
+the server's identities (its migration c5d6e7f8a9b0 refuses a database that
+holds any). Deploy the SPA, the extension and the server together.
+
+Why: the 4.x suites missed the references ANSSI accepts for certification.
+The ECCG Agreed Cryptographic Mechanisms v2 agree neither Ed25519 nor X25519,
+and only ETSI TS 103 744's CatKDF/CasKDF as hybrid KEM combiners — X-Wing's
+SHA3-256 combiner is filed as "not allowed" next to them by ENISA's
+2026-04-30 report; ANSSI's PG-083 v3.00 names neither curve and recommends
+≥ 384-bit digests for post-quantum security. Every component of 5.0.0 is
+ECCG-agreed, at the level PG-083 prefers (ML-KEM-768, ML-DSA-65); ANSSI's
+crypto-agility note puts algorithmic agility — which 4.1.0–4.3.0 built — ahead
+of the highest parameter set.
+
+- **Identity: `MLDSA65-ECDSA-P384-SHA512`** (4.2.0). Addresses are SHA-384
+  under `Kryptolog address v5\nalg=MLDSA65-ECDSA-P384-SHA512\n`. Signatures
+  are 3 317..3 413 bytes, low-S and canonical DER required on both sides.
+  The Ed25519 composite, its torsion rule and the server's subgroup check are
+  gone.
+- **Encryption: `HKDFwSHA384_P384_ML-KEM-768_CatKDF`** (4.1.0); envelopes are
+  `{ v: 5, alg: 'HKDFwSHA384_P384_ML-KEM-768_CatKDF-A256GCM', kid, kem, iv, … }`.
+  X-Wing is gone.
+- **Key ids**: every KEM envelope carries `kid`, the first 128 bits of
+  SHA-384 over the recipient key under `Kryptolog encryption key id v5\n
+  alg=…\n` (`encryptionKeyId`), and the associated data binds it with `v` and
+  `alg`. Decryption picks its seed by kid (`encryptionSeedFor`, which throws
+  `MissingKeyError` for a key the account no longer holds).
+- **Accounts** keep the current encryption key with its `alg`, `kid` and
+  `createdAt`, and a `retiredEncryption` list (empty until 5.1.0's rotation),
+  each entry re-derived and checked on load; a 4.x account is refused by name.
+- **Signed bodies name the encryption key's suite**: the login challenge gains
+  `encryption-key-alg=`, the key attestation `encryption-alg=`, and the safety
+  number is v5 over both. A key is only ever authorized as a key of the suite
+  named.
+- **The vault blob's markers are its associated data**: `v` and the KDF
+  descriptor (canonical JSON) — the 4.0.0 entry claimed this for "every
+  envelope", and the vault was not one of them.
+- **The last SHA-256 on a signed path is gone**: a signed document's file
+  digest is SHA-384 (`sha384HexOfFile`, WebCrypto); `sha256Hex` and
+  `sha256HexBytes` are removed. Multisig proofs are format 3.0.
+- Sizes: identity key 2 049 bytes, encryption key 1 281, a wrap ~1 790 JSON
+  characters (`WRAPPED_KEY_CHARS` 1 850 on the server), a signature at most
+  4 552 base64 characters. The golden envelopes and the signed-bodies fixture
+  were regenerated once, deliberately, for this release.
+
+Measured on this development machine (Intel Mac, Node 24): a composite
+signature costs ~12 ms to make and ~9.5 ms to verify in the client, a wrap or
+an unwrap ~11 ms (X-Wing unwrapped in 2.6 ms: noble's pure-JS P-384 is slower
+than its X25519); the server verifies 1 000 composite signatures — a full
+erase round — in 0.69 s (0.17 s for the Ed25519 composite). WebCrypto's
+native P-384 ECDH is the lever if unwrap cost ever shows; the registry is
+where it would go.

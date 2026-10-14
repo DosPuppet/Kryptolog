@@ -135,9 +135,9 @@ def _verify_login_payload(login_req: schemas.LoginRequest, address: str) -> None
         raise HTTPException(
             status_code=400, detail="This identity key is not the one the address names."
         )
-    # Where a key enters, and only here: its Ed25519 half must have order L,
-    # which is what makes OpenSSL's verification on every later request agree
-    # with the clients' (crypto-core 4.0.0, security/ed25519_subgroup.py).
+    # Where a key enters, and only here: its P-384 half must be a point on the
+    # curve (crypto-core 5.0.0), so every stored key is one OpenSSL can verify
+    # against on every later request.
     if not is_valid_identity_key(login_req.identity_public_key):
         raise HTTPException(status_code=400, detail="This identity key is malformed.")
 
@@ -151,16 +151,18 @@ def _verify_login_payload(login_req: schemas.LoginRequest, address: str) -> None
     ):
         raise HTTPException(status_code=401, detail="Invalid signature")
 
-    # Reject malformed encryption keys before they can be stored (KRY-011).
-    # Enforced only on keys being *submitted*, so accounts whose stored key
-    # predates this check keep working until their client sends a new one —
-    # existing users are not locked out by a validation tightening.
+    # Reject malformed encryption keys before they can be stored (KRY-011) —
+    # and since 5.0.0 keys that are not keys at all: the P-384 point must be on
+    # the curve and the ML-KEM key pass FIPS 203's modulus check.
     if login_req.encryption_public_key and not is_valid_encryption_key(
         login_req.encryption_public_key
     ):
         raise HTTPException(
             status_code=400,
-            detail="encryption_public_key must be a lowercase-hex X-Wing public key",
+            detail=(
+                "encryption_public_key must be a lowercase-hex "
+                "HKDFwSHA384_P384_ML-KEM-768 CatKDF public key"
+            ),
         )
 
     # Key attestation (audit M-1): a self-signature by `address` over its own
@@ -258,8 +260,7 @@ def _revive_user(
 
     user.username = username
     user.identity_public_key = login_req.identity_public_key
-    user.encryption_public_key = login_req.encryption_public_key
-    user.encryption_key_attestation = attestation
+    user.set_encryption_key(login_req.encryption_public_key, attestation)
     # A return is a key-directory event, and the server cannot tell whether the
     # key coming back is the one that left: the strip NULLed it, so there is
     # nothing to compare against. Stamping is the conservative direction of the
@@ -290,10 +291,9 @@ def _register_user(
     user = models.User(
         address=address,
         identity_public_key=login_req.identity_public_key,
-        encryption_public_key=login_req.encryption_public_key,
-        encryption_key_attestation=attestation,
         username=default_username,
     )
+    user.set_encryption_key(login_req.encryption_public_key, attestation)
     db.add(user)
     # Flush (don't commit) so the invite's used_by FK can see the new user while
     # keeping user creation + invite consumption a single atomic transaction: a
@@ -358,9 +358,9 @@ def _upsert_identity(
         # backfilling a key onto an identity that had none.
         if user.encryption_public_key:
             user.key_changed_at = utcnow_naive()
-        user.encryption_public_key = login_req.encryption_public_key
-        # The old attestation signed the old key — never leave a stale one.
-        user.encryption_key_attestation = attestation
+        # The old attestation signed the old key — never leave a stale one;
+        # the setter replaces all four together.
+        user.set_encryption_key(login_req.encryption_public_key, attestation)
         db.commit()
     elif attestation and not user.encryption_key_attestation:
         # Backfill: an account that predates attestations (or whose earlier

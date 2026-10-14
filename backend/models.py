@@ -53,29 +53,23 @@ class Nonce(Base):
 
 class User(Base):
     __tablename__ = "users"
-    # The two shapes crypto-core 4.0.0 defines (audit 2026-10-12 K-10), held by
-    # the database as well as by the login route: an address that is not a
-    # SHA-384 hex digest, or a key that is not a composite key, can only have
-    # come from data written before the cutover — which migration b4c5d6e7f8a9
-    # refuses to carry forward.
-    __table_args__ = (
-        CheckConstraint("address ~ '^[0-9a-f]{96}$'", name="ck_users_address"),
-        CheckConstraint(
-            "char_length(identity_public_key) = 3968", name="ck_users_identity_public_key"
-        ),
-    )
 
     # SHA-384 of the identity key, 96 lowercase hex (crypto-core 4.0.0; it was
-    # the ML-DSA-44 key itself before). CHECKed in the database.
+    # the ML-DSA-44 key itself before; 5.0.0 changed the key it hashes, not the
+    # shape). CHECKed in the database.
     address = Column(String, primary_key=True)
-    # The key `address` names: a composite ML-DSA-65 + Ed25519 key, which every
-    # signature by this identity is verified against (audit 2026-10-12 K-10).
-    # The login route checks the binding, and that its Ed25519 half has order
-    # L, before it stores one. Survives account deletion: readers still verify
-    # a deleted identity's messages.
+    # The key `address` names: a composite ML-DSA-65 + ECDSA-P384 key, which
+    # every signature by this identity is verified against (audit 2026-10-12
+    # K-10, lot 12). The login route checks the binding, and that its P-384
+    # half is a point on the curve, before it stores one. Survives account
+    # deletion: readers still verify a deleted identity's messages.
     identity_public_key = Column(String, nullable=False)
     username = Column(String, nullable=True)
-    encryption_public_key = Column(String, nullable=True)  # X-Wing public key (hex)
+    # CatKDF P-384 + ML-KEM-768 public key (hex), its suite and its id
+    # (crypto-core encryptionKeyId) — written only through set_encryption_key.
+    encryption_public_key = Column(String, nullable=True)
+    encryption_key_alg = Column(String(64), nullable=True)
+    encryption_key_id = Column(String(32), nullable=True)
     # Stamped whenever encryption_public_key changes for an existing identity
     # (audit S1: key-directory transparency). Lets clients surface "this contact's
     # key changed on <date>" and detect a malicious/compromised key swap.
@@ -124,10 +118,49 @@ class User(Base):
     # as a drift gate. The plain index is redundant next to the functional one
     # (which is strictly stronger) but it exists on live databases, so the model
     # states that rather than pretending otherwise.
+    #
+    # The shapes crypto-core 5.0.0 defines (lot 12), held by the database as
+    # well as by the login route: an address that is not a SHA-384 hex digest,
+    # or a key that is not a 5.0.0 key, can only have come from data written
+    # before the cutover — which migration c5d6e7f8a9b0 refuses to carry
+    # forward. The encryption key travels with its suite and its id, all three
+    # set or all three NULL (set_encryption_key keeps them so).
+    #
+    # ONE __table_args__ for the class, and that is load-bearing: the CHECKs
+    # used to sit in a second assignment near the top, which this one silently
+    # replaced, so they existed only in migrated databases and never in the
+    # metadata — a test database built with create_all had none of them, and
+    # nothing failed.
     __table_args__ = (
         Index("ix_users_username_unique", username, unique=True),
         Index("ix_users_username_lower_unique", func.lower(username), unique=True),
+        CheckConstraint("address ~ '^[0-9a-f]{96}$'", name="ck_users_address"),
+        CheckConstraint(
+            "char_length(identity_public_key) = 4098", name="ck_users_identity_public_key"
+        ),
+        CheckConstraint(
+            "(encryption_public_key IS NULL AND encryption_key_alg IS NULL"
+            " AND encryption_key_id IS NULL)"
+            " OR (char_length(encryption_public_key) = 2562"
+            " AND encryption_key_alg = 'HKDFwSHA384_P384_ML-KEM-768_CatKDF'"
+            " AND encryption_key_id ~ '^[0-9a-f]{32}$')",
+            name="ck_users_encryption_key",
+        ),
     )
+
+    def set_encryption_key(self, encryption_public_key: str | None, attestation: str | None):
+        """Set (or clear, with None) the encryption key together with what is
+        derived from it — its suite and its id — and the attestation that signs
+        it. The only writer of the four columns, so they cannot disagree; the
+        CHECK above refuses a row where they do."""
+        from security.crypto_validation import KEM_ALG, encryption_key_id
+
+        self.encryption_public_key = encryption_public_key
+        self.encryption_key_alg = KEM_ALG if encryption_public_key else None
+        self.encryption_key_id = (
+            encryption_key_id(encryption_public_key) if encryption_public_key else None
+        )
+        self.encryption_key_attestation = attestation if encryption_public_key else None
 
     @property
     def deleted(self) -> bool:

@@ -19,6 +19,7 @@ from datetime import timedelta
 
 import pytest
 from conftest import (
+    PLACEHOLDER_SIGNATURE,
     TEST_ENCRYPTION_KEY,
     TEST_ORIGIN,
     auth_header,
@@ -410,7 +411,6 @@ class TestLeavingHasOneSpelling:
     def test_leaving_via_the_endpoint_and_via_deletion_agree(
         self, client, db_session, user1, user2, with_admin
     ):
-        import base64
 
         token1, u1 = user1
         _, u2 = user2
@@ -443,7 +443,7 @@ class TestLeavingHasOneSpelling:
                 "nonce": nonce,
                 "origin": TEST_ORIGIN,
                 "deployment": server_deployment(),
-                "signature": base64.b64encode(b"\x00" * 3373).decode(),
+                "signature": PLACEHOLDER_SIGNATURE,
                 "redactions": [],
             },
             headers=auth_header(token1),
@@ -461,7 +461,6 @@ class TestLeavingHasOneSpelling:
     def test_the_last_member_leaving_tears_the_group_down_either_way(
         self, client, db_session, user1
     ):
-        import base64
 
         token1, u1 = user1
         endpoint_channel = self._build(client, token1, [u1["address"]])
@@ -483,7 +482,7 @@ class TestLeavingHasOneSpelling:
                     "nonce": nonce,
                     "origin": TEST_ORIGIN,
                     "deployment": server_deployment(),
-                    "signature": base64.b64encode(b"\x00" * 3373).decode(),
+                    "signature": PLACEHOLDER_SIGNATURE,
                     "redactions": [],
                 },
                 headers=auth_header(token1),

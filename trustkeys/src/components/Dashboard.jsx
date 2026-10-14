@@ -240,7 +240,7 @@ const Dashboard = () => {
 
           <div className="key-section">
             <div className="key-header">
-              <span>Encryption key (X-Wing)</span>
+              <span>Encryption key (CatKDF P-384 + ML-KEM-768)</span>
               <button onClick={() => copyToClipboard(activeAccount.encryptionPublicKey, 'encryption')} className={copyFeedback === 'encryption' ? 'copied' : ''}>
                 {copyFeedback === 'encryption' ? 'COPIED' : 'COPY'}
               </button>
@@ -250,7 +250,7 @@ const Dashboard = () => {
 
           <div className="key-section">
             <div className="key-header">
-              <span>Identity key (ML-DSA-65 + Ed25519)</span>
+              <span>Identity key (ML-DSA-65 + ECDSA-P384)</span>
               <button onClick={() => copyToClipboard(activeAccount.identityPublicKey, 'identity')} className={copyFeedback === 'identity' ? 'copied' : ''}>
                 {copyFeedback === 'identity' ? 'COPIED' : 'COPY'}
               </button>

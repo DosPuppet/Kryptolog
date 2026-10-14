@@ -37,7 +37,7 @@ export const PQCProvider = ({ children }) => {
     // The key that address names (crypto-core 3.3.0): the same string until
     // 4.0.0 makes the address a hash of it. Set only through adoptIdentity.
     const [identityPublicKey, setIdentityPublicKey] = useState(null);
-    const [mlkemKey, setMlkemKey] = useState(null);
+    const [ownEncryptionKey, setOwnEncryptionKey] = useState(null);
     const [isExtensionAvailable, setIsExtensionAvailable] = useState(false);
     const [hasLocalVault, setHasLocalVault] = useState(false);
 
@@ -70,7 +70,7 @@ export const PQCProvider = ({ children }) => {
         if (authType !== 'trustkeys') {
             setPqcAccount(null);
             setIdentityPublicKey(null);
-            setMlkemKey(null);
+            setOwnEncryptionKey(null);
             vaultService.clearKeyCache();
         }
     }, [authType]);
@@ -153,7 +153,7 @@ export const PQCProvider = ({ children }) => {
     const adoptIdentity = (identityKey, encryptionKey) => {
         setPqcAccount(addressOf(identityKey));
         setIdentityPublicKey(identityKey);
-        setMlkemKey(encryptionKey);
+        setOwnEncryptionKey(encryptionKey);
     };
 
     // `signLogin({ nonce, origin, deployment, encryptionKey })` returns the login
@@ -174,7 +174,7 @@ export const PQCProvider = ({ children }) => {
         const { nonce, deployment } = await nonceRes.json();
         const origin = window.location.origin;
 
-        // 2. Sign Nonce — bind the encryption (ML-KEM) key into the challenge so
+        // 2. Sign Nonce — bind the encryption (CatKDF) key into the challenge so
         //    the identity's signature authorizes it (M-2). The challenge is
         //    domain-separated under the `login` context (H1) so a content-signing
         //    operation can never produce these bytes. Built by crypto-core, not
@@ -182,7 +182,7 @@ export const PQCProvider = ({ children }) => {
         //    byte for byte, and a second copy of it cannot be kept honest.
         const signature = await signLogin({ nonce, origin, deployment, encryptionKey });
 
-        // 2b. Key attestation (audit M-1): self-sign our own ML-KEM key so peers
+        // 2b. Key attestation (audit M-1): self-sign our own encryption key so peers
         //     can verify the directory's key binding against our address.
         //     REQUIRED now (audit 2026-10-12 K-04): the server refuses a key
         //     without one, and contacts refuse an unattested key. It used to be
@@ -413,16 +413,16 @@ export const PQCProvider = ({ children }) => {
     // library rather than the vault, and a locked vault is not an error.
     const encrypt = async (content, publicKey) => {
         if (isExtensionAvailable && window.trustkeys) {
-            return await window.trustkeys.encrypt(content, publicKey || mlkemKey);
+            return await window.trustkeys.encrypt(content, publicKey || ownEncryptionKey);
         } else {
             // Fallback: use the in-process library when a target key is supplied
             // (e.g. encrypting for a contact before the local vault is unlocked).
             if (!publicKey && vaultService.isLocked) {
-                // If no public key provided AND vault locked (no mlkemKey), we can't encrypt
+                // If no public key provided AND vault locked (no ownEncryptionKey), we can't encrypt
                 throw new Error("PQC Provider not ready (Locked or Missing)");
             }
 
-            const targetKey = publicKey || mlkemKey;
+            const targetKey = publicKey || ownEncryptionKey;
             if (!targetKey) throw new Error("No encryption key available");
 
             const { encryptMessagePQC } = await import('../utils/crypto');
@@ -870,7 +870,7 @@ export const PQCProvider = ({ children }) => {
         <PQCContext.Provider value={{
             pqcAccount,
             identityPublicKey,
-            mlkemKey,
+            ownEncryptionKey,
             isExtensionAvailable,
             hasLocalVault,
             loginTrustKeys,

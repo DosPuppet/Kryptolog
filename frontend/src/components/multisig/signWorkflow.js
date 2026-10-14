@@ -40,7 +40,7 @@ export const signMultisigWorkflow = async ({ workflow, user, token, decryptPQC, 
 
     onProgress(30, "Decrypting content for signing...");
 
-    // 1. Decrypt the AES file key (ML-KEM envelope).
+    // 1. Decrypt the AES file key (KEM envelope).
     let fileKey;
     try {
         const decryptedKeyJson = await decryptPQC(JSON.parse(encryptedKey));
@@ -101,7 +101,7 @@ export const signMultisigWorkflow = async ({ workflow, user, token, decryptPQC, 
                 // Attestation gate (audit M-1): the final release is exactly
                 // where a substituted recipient key would leak the secret.
                 await assertSafeRecipient({ ...r.user, address: r.user_address });
-                // ML-KEM wrap of the file key for this recipient.
+                // KEM wrap of the file key for this recipient.
                 recipientKeys[r.user_address] = JSON.stringify(await encryptPQC(fileKey, pubKey));
             } catch (encErr) {
                 console.error(`Failed to encrypt for recipient ${r.user_address}`, encErr);

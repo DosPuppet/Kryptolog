@@ -16,6 +16,7 @@ from conftest import (
     get_nonce,
     login_body,
     synthetic_address,
+    synthetic_encryption_key,
 )
 
 from security.audit_log import ADDRESS_PREFIX, audit_event, audit_logger
@@ -71,7 +72,7 @@ class TestLogin:
     def test_registration_and_a_key_change_are_their_own_kinds(self, client, trail):
         address = synthetic_address("audit-kinds")
         do_login(client, address, TEST_ENCRYPTION_KEY)
-        do_login(client, address, "cd" * 1216)
+        do_login(client, address, synthetic_encryption_key("audit-new"))
 
         kinds = [e["kind"] for e in _of(trail, "auth.login")]
         assert kinds == ["register", "key_changed"]

@@ -32,7 +32,7 @@ export const useMessageSessions = ({
     // Group key rotation & forward secrecy (audit S2).
     //
     // A group message wraps a fresh AES session key (sid) for each member's
-    // ML-KEM key, embedded in the first message under that sid; later messages
+    // encryption key, embedded in the first message under that sid; later messages
     // reuse the sid. On any membership change we DROP the active sid so the next
     // send mints a new one wrapped for the *current* member set:
     //   • removed member → not in the new wrap, so they cannot read future
@@ -160,7 +160,7 @@ export const useMessageSessions = ({
             // its `seq` a sequence the receiver can hold the server to (audit
             // 2026-10-12 K-06), and minting per page load plus rotation bounds
             // what one leaked session key exposes (K-07). The cost is two
-            // ML-KEM wraps on the first DM after a page load.
+            // KEM wraps on the first DM after a page load.
             return await Promise.all(processed.map(async m => {
                 const p = m._sessionPayload;
                 if (!p || m.plainText !== null) return m;

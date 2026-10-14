@@ -38,7 +38,7 @@ export const useMessengerContext = () => {
 
 export const MessengerProvider = ({ children }) => {
     const { user, token, logout, isAuthenticated } = useAuth();
-    const { generateSessionKey, wrapSessionKey, unwrapSessionKey, unwrapManySessionKeys, mlkemKey, signMessage, eraseConversation } = usePQC();
+    const { generateSessionKey, wrapSessionKey, unwrapSessionKey, unwrapManySessionKeys, ownEncryptionKey, signMessage, eraseConversation } = usePQC();
 
     const [conversations, setConversations] = useState([]);
     const [activeConversation, setActiveConversation] = useState(null); // { user, messages: [] }
@@ -86,7 +86,7 @@ export const MessengerProvider = ({ children }) => {
 
     // Encrypted group names, audit M-3 (messenger/useGroupNames.js)
     const { resolveChannelName, resolveGroupNames, buildGroupNameBlob } =
-        useGroupNames({ user, mlkemKey, unwrapManySessionKeys });
+        useGroupNames({ user, ownEncryptionKey, unwrapManySessionKeys });
 
     // ── Shared Helpers ─────────────────────────────────────────────
 
@@ -166,7 +166,7 @@ export const MessengerProvider = ({ children }) => {
     // reordering. And no session outlives SESSION_MAX_MESSAGES or
     // SESSION_MAX_AGE_MS (K-07): a leaked session key used to expose a DM
     // conversation for as long as it lasted, which was forever. Rotation bounds
-    // that; it is not forward secrecy against a compromised ML-KEM key, which
+    // that; it is not forward secrecy against a compromised encryption key, which
     // still opens every wrap ever sent to it — that needs a ratchet.
     const sendStateRef = useRef({}); // sessionKeyId -> { next, startedAt }
     const sessionUsable = (keyId) => {
@@ -396,7 +396,7 @@ export const MessengerProvider = ({ children }) => {
                 sid = crypto.randomUUID();
                 sKey = await generateSessionKey();
                 const wRecip = await wrapSessionKey(sKey, recipientKey);
-                const myKey = user?.encryption_public_key || mlkemKey;
+                const myKey = user?.encryption_public_key || ownEncryptionKey;
                 const wSender = myKey ? await wrapSessionKey(sKey, myKey) : null;
                 keyPayload = { recip: wRecip, sender: wSender };
                 setSessionKeys(prev => ({ ...prev, [sessionKeyId(theirAddr, sid)]: sKey }));
@@ -514,7 +514,7 @@ export const MessengerProvider = ({ children }) => {
             body: { user_address: userAddress }
         });
         // Add to local state synchronously (the response carries the member's
-        // ML-KEM key) so the rekeyed next send wraps for them immediately, not
+        // encryption key) so the rekeyed next send wraps for them immediately, not
         // only after the WS echo. Idempotent with GROUP_MEMBER_ADDED.
         if (result?.user_address) {
             setActiveGroupConversation(prev => {

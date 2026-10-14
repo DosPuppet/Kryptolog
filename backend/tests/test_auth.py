@@ -10,6 +10,7 @@ from conftest import (
     identity_key_of,
     server_deployment,
     synthetic_address,
+    synthetic_encryption_key,
 )
 
 
@@ -194,8 +195,8 @@ class TestLogin:
         assert resp2.status_code == 400
 
     def test_login_updates_encryption_key(self, client):
-        old_key = "5e" * 1216
-        new_key = "6f" * 1216
+        old_key = synthetic_encryption_key("old")
+        new_key = synthetic_encryption_key("new")
         do_login(client, TEST_USER_ADDRESS, old_key)
         token2, user2 = do_login(client, TEST_USER_ADDRESS, new_key)
         assert user2["encryption_public_key"] == new_key
@@ -270,7 +271,7 @@ class TestRegistrationUsernameCollision:
 class TestKeyChangeStamp:
     """audit S1: encryption-key changes are stamped (no longer silently overwritten)."""
 
-    ALT_KEY = "cd" * 1216  # a different, still well-formed X-Wing key
+    ALT_KEY = synthetic_encryption_key("alt")  # a different, still valid CatKDF key
 
     def test_new_user_has_no_key_change_stamp(self, client):
         _, user = do_login(client, TEST_USER_ADDRESS, TEST_ENCRYPTION_KEY, "Alice")

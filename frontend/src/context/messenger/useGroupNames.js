@@ -4,7 +4,7 @@ import { assertSafeRecipient } from '../../services/trustedKeys';
 
 // Encrypted group-channel names (audit M-3): decrypt `encg1:` blobs with my
 // per-member-wrapped name key, and build fresh blobs for create/rename/re-wrap.
-export const useGroupNames = ({ user, mlkemKey, unwrapManySessionKeys }) => {
+export const useGroupNames = ({ user, ownEncryptionKey, unwrapManySessionKeys }) => {
     // Group-name keys, keyed by my wrap's JSON so re-fetches never re-prompt;
     // unresolved wraps decrypt in ONE batch.
     const groupNameKeyCache = useRef({});
@@ -55,7 +55,7 @@ export const useGroupNames = ({ user, mlkemKey, unwrapManySessionKeys }) => {
     // Always mints a FRESH name key, so members removed before a rename can
     // never read the new name. Attestation-gated like message-key wraps.
     const buildGroupNameBlob = async (plainName, memberUsers) => {
-        const me = { address: user.address, encryption_public_key: user?.encryption_public_key || mlkemKey };
+        const me = { address: user.address, encryption_public_key: user?.encryption_public_key || ownEncryptionKey };
         const targets = [me];
         for (const m of memberUsers) {
             if (m.address.toLowerCase() === me.address.toLowerCase()) continue;

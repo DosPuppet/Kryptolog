@@ -1,6 +1,6 @@
 """An identity's key, stored apart from its address (crypto-core 3.3.0).
 
-Until 4.0.0 the two are the same string, which is exactly why these tests do
+Until 4.0.0 the two were the same string, which is exactly why these tests do
 not trust that: a verifier handed the ADDRESS would pass every other test in
 the suite today and break the day the address becomes a hash. So the routes
 that verify a signature are driven here with the stored key overwritten by a
@@ -59,24 +59,32 @@ class TestLoginBindsTheKeyToTheAddress:
         assert "not the one the address names" in resp.json()["detail"]
         assert db_session.query(models.User).filter_by(address=address).count() == 0
 
-    def test_a_key_whose_ed25519_half_has_a_torsion_component_is_refused(self, client, db_session):
-        """Bound to its address, so the binding passes — the order check is what
-        refuses it (crypto-core 4.0.0, security/ed25519_subgroup.py). Such a key
-        would let its owner sign approvals OpenSSL accepts and every client
-        refuses. The key is the one tests/fixtures/hybrid_interop.json carries."""
-        import json
-        import pathlib
-
+    def test_a_key_whose_p384_half_is_not_on_the_curve_is_refused(self, client, db_session):
+        """Bound to its address, so the binding passes — the point check is what
+        refuses it (crypto-core 5.0.0): a key OpenSSL could not even load would
+        sit in the directory and fail every verification against it."""
         from security.crypto_validation import address_of
 
-        fixture = pathlib.Path(__file__).resolve().parents[2] / "tests/fixtures/hybrid_interop.json"
-        key = json.loads(fixture.read_text())["ed25519_edges"]["mixed_order_A_even_k"]["public_key"]
+        raw = bytearray.fromhex(identity_key_of(synthetic_address("off-curve-source")))
+        raw[1952 + 40] ^= 1
+        key = raw.hex()
         address = register_identity(key)
         assert address == address_of(key)
         body = login_body(address, get_nonce(client, address), TEST_ENCRYPTION_KEY)
         resp = client.post("/auth/login", json=body)
         assert resp.status_code == 400, resp.text
         assert "malformed" in resp.json()["detail"]
+        assert db_session.query(models.User).filter_by(address=address).count() == 0
+
+    def test_an_encryption_key_that_is_not_a_key_is_refused(self, client, db_session):
+        """Since 5.0.0 the encryption key is checked for BEING one: a point on
+        the curve and an ML-KEM key that passes FIPS 203's modulus check. The
+        4.x stand-in `"ab" * 1281` has the right length and is neither."""
+        address = synthetic_address("not-a-kem-key")
+        body = login_body(address, get_nonce(client, address), "ab" * 1281)
+        resp = client.post("/auth/login", json=body)
+        assert resp.status_code == 400, resp.text
+        assert "CatKDF" in resp.json()["detail"]
         assert db_session.query(models.User).filter_by(address=address).count() == 0
 
     def test_a_login_without_a_key_is_malformed(self, client):

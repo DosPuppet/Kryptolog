@@ -1,18 +1,22 @@
-// The asymmetric layer of crypto-core 4: hybrid signatures and the hybrid KEM
-// envelope (audit 2026-10-12 K-10).
+// The asymmetric layer of crypto-core 5: hybrid signatures and the hybrid KEM
+// envelope (audit 2026-10-12 K-10; lot 12, ANSSI 2026).
 //
-//   identity    composite ML-DSA-65 + Ed25519 (composite.js) — signs
-//   encryption  X-Wing, ML-KEM-768 + X25519   (kem.js)       — receives
+//   identity    composite ML-DSA-65 + ECDSA-P384         (composite.js) — signs
+//   encryption  ETSI CatKDF, P-384 ECDH + ML-KEM-768     (kem.js)       — receives
 //
-// Both are NIST category 3, the level ANSSI asks for, and each holds as long
-// as either of its two halves does. Keys are stored as their SEEDS — 64 bytes
-// for the composite, 32 for X-Wing — and expanded on use: the seed is what
-// FIPS 204/203 and the IETF drafts define as the private key, and what any
-// other library (WebCrypto, OpenSSL) can import.
+// Both are NIST category 3 — the level ANSSI's PG-083 v3.00 prefers to 1
+// (ML-KEM-768 "préférable" to 512), and enough on a platform that can change
+// algorithm, which is what ANSSI's crypto-agility note asks for before the
+// highest parameter set (Rec. 1) — and each holds as long as either of its
+// halves does. Every component is in the ECCG Agreed Cryptographic
+// Mechanisms v2. Keys are stored as their SEEDS — 80 bytes for the
+// composite, 112 for the KEM — and expanded on use: the seed is what FIPS
+// 204/203 define as the private key, and what any other library (WebCrypto,
+// OpenSSL) can import.
 
-import { SIGNATURE_SUITES, COMPOSITE_SIG_ALG } from './composite.js';
-import { KEM_SUITES, XWING_KEM_ALG } from './kem.js';
-import { toHex, fromHex, toB64, fromB64, ENC, DEC } from './encoding.js';
+import { SIGNATURE_SUITES, MLDSA65_P384_SIG_ALG } from './composite.js';
+import { KEM_SUITES, CATKDF_KEM_ALG } from './kem.js';
+import { toHex, fromHex, toB64, fromB64, ENC, DEC, sha384HexBytes } from './encoding.js';
 
 // --- Format markers (crypto-core 3.0.0, audit 2026-10-12 K-10) ---
 //
@@ -24,10 +28,11 @@ import { toHex, fromHex, toB64, fromB64, ENC, DEC } from './encoding.js';
 // Since 4.0.0 the two markers are also the AES-GCM associated data of the
 // envelope they describe. They were stored beside the ciphertext before, but
 // nothing authenticated them: the day a second algorithm exists, a marker an
-// attacker can rewrite is a downgrade lever.
-export const FORMAT_VERSION = 4;
+// attacker can rewrite is a downgrade lever. 5.0.0 adds a third to every KEM
+// envelope, the recipient key's id (`kid`, below), bound the same way.
+export const FORMAT_VERSION = 5;
 
-// --- The suites in use (4.3.0, lot 12d: the agility seam) ---
+// --- The suites in use (the agility seam, 4.3.0; switched in 5.0.0) ---
 //
 // Which signature identities use and which KEM encryption keys use, by
 // registry id — the one place either is named. Everything below goes through
@@ -38,8 +43,8 @@ export const FORMAT_VERSION = 4;
 // ANSSI's crypto-agility note draws (Rec. 6): coexisting algorithms must
 // never let a negotiation, or an attacker-chosen marker, pick an undesired
 // one.
-export const SIGNATURE_ALG = COMPOSITE_SIG_ALG;
-export const KEM_ALG = XWING_KEM_ALG;
+export const SIGNATURE_ALG = MLDSA65_P384_SIG_ALG;
+export const KEM_ALG = CATKDF_KEM_ALG;
 export const KEM_ENVELOPE_ALG = `${KEM_ALG}-A256GCM`;
 export const SIGNATURE_SUITE = SIGNATURE_SUITES[SIGNATURE_ALG];
 export const KEM_SUITE = KEM_SUITES[KEM_ALG];
@@ -72,8 +77,44 @@ export const assertFormat = (envelope, alg, what) => {
     }
 };
 
-/** The associated data binding an envelope's markers to its ciphertext (4.0.0). */
-export const formatAad = (alg) => ENC.encode(`Kryptolog envelope\nv=${FORMAT_VERSION}\nalg=${alg}`);
+/**
+ * The associated data binding an envelope's markers to its ciphertext (4.0.0),
+ * and since 5.0.0 the recipient key's id for an envelope that has one. The
+ * symmetric envelopes have no kid and keep their 4.0.0 shape; their alg is
+ * not a KEM envelope's, so the two forms cannot collide.
+ */
+export const formatAad = (alg, kid) => ENC.encode(
+    `Kryptolog envelope\nv=${FORMAT_VERSION}\nalg=${alg}` + (kid === undefined ? '' : `\nkid=${kid}`)
+);
+
+// --- Encryption key ids (5.0.0, lot 12) ---
+//
+// Which key an envelope is sealed to, without the key: the first 128 bits of
+// SHA-384 over the key under a prefix naming the format and the suite. Every
+// KEM envelope carries it, bound into its associated data.
+//
+// It is what makes an encryption key REPLACEABLE without replacing the
+// identity (5.1.0): an account keeps the keys it has retired, and reads an
+// envelope with whichever one its kid names (account.js encryptionKeyFor),
+// where 4.x could only try the one key it had. 128 bits: a kid only has to
+// tell one account's keys apart, and the AES-GCM tag still fails for any key
+// but the one the envelope was sealed to, so even a collision could cost a
+// failed decryption, never a wrong one.
+export const KEY_ID_HEX_LENGTH = 32;
+const KEY_ID_DOMAIN = ENC.encode(`Kryptolog encryption key id v${FORMAT_VERSION}\nalg=${KEM_ALG}\n`);
+const KEY_ID_RE = new RegExp(`^[0-9a-f]{${KEY_ID_HEX_LENGTH}}$`);
+
+/** The id of an encryption public key (hex), as envelopes carry it. */
+export const encryptionKeyId = (encryptionPublicKeyHex) => {
+    const key = fromHex(encryptionPublicKeyHex);
+    const input = new Uint8Array(KEY_ID_DOMAIN.length + key.length);
+    input.set(KEY_ID_DOMAIN);
+    input.set(key, KEY_ID_DOMAIN.length);
+    return sha384HexBytes(input).slice(0, KEY_ID_HEX_LENGTH);
+};
+
+/** Is `value` shaped like a key id (32 lowercase hex)? */
+export const isEncryptionKeyId = (value) => typeof value === 'string' && KEY_ID_RE.test(value);
 
 // The KEM suite hands back the final 256-bit AES-GCM key (kem.js); this only
 // imports it, non-extractable, for the one operation it is for.
@@ -126,30 +167,37 @@ export const verifySignature = async (message, signatureB64, identityPublicKeyHe
 // nothing else, so they share it — two copies of a format are two chances to
 // drift. The markers are the associated data (formatAad).
 
-/** `{ v, alg, kem, iv, [field] }`: `plaintext` (bytes) sealed to one encryption key. */
+/** `{ v, alg, kid, kem, iv, [field] }`: `plaintext` (bytes) sealed to one encryption key. */
 export const kemSeal = async (plaintext, encryptionPublicKeyHex, field) => {
+    const kid = encryptionKeyId(encryptionPublicKeyHex);
     const { cipherText, key } = KEM_SUITE.encapsulate(fromHex(encryptionPublicKeyHex));
     const iv = crypto.getRandomValues(new Uint8Array(12));
     const sealed = await crypto.subtle.encrypt(
-        { name: 'AES-GCM', iv, additionalData: formatAad(KEM_ENVELOPE_ALG) },
+        { name: 'AES-GCM', iv, additionalData: formatAad(KEM_ENVELOPE_ALG, kid) },
         await importKemKey(key, ['encrypt']),
         plaintext
     );
     return {
         v: FORMAT_VERSION,
         alg: KEM_ENVELOPE_ALG,
+        kid,
         kem: toB64(cipherText),
         iv: toB64(iv),
         [field]: toB64(new Uint8Array(sealed)),
     };
 };
 
-/** The plaintext bytes of a kemSeal envelope, for the holder of the seed. */
+/**
+ * The plaintext bytes of a kemSeal envelope, for the holder of the seed it was
+ * sealed to. Which seed that is, among an account's keys, is the envelope's
+ * `kid` to say (account.js encryptionKeyFor); a wrong one fails the tag.
+ */
 export const kemOpen = async (envelope, encryptionSeedHex, field, what) => {
     assertFormat(envelope, KEM_ENVELOPE_ALG, what);
+    if (!isEncryptionKeyId(envelope.kid)) throw new FormatError(`${what}: missing or malformed key id`);
     const key = KEM_SUITE.decapsulate(fromB64(envelope.kem), fromHex(encryptionSeedHex));
     return new Uint8Array(await crypto.subtle.decrypt(
-        { name: 'AES-GCM', iv: fromB64(envelope.iv), additionalData: formatAad(KEM_ENVELOPE_ALG) },
+        { name: 'AES-GCM', iv: fromB64(envelope.iv), additionalData: formatAad(KEM_ENVELOPE_ALG, envelope.kid) },
         await importKemKey(key, ['decrypt']),
         fromB64(envelope[field])
     ));

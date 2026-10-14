@@ -1,16 +1,16 @@
 // An identity's ADDRESS versus its identity PUBLIC KEY (audit 2026-10-12 K-10).
 //
-// crypto-core 4: the identity key is a composite ML-DSA-65 + Ed25519 key
-// (1 984 bytes, composite.js), and the address that names it is
+// crypto-core 5: the identity key is a composite ML-DSA-65 + ECDSA-P384 key
+// (2 049 bytes, composite.js), and the address that names it is
 //
-//     hex(SHA-384("Kryptolog address v4\nalg=MLDSA65-Ed25519-SHA512\n" || key))
+//     hex(SHA-384("Kryptolog address v5\nalg=MLDSA65-ECDSA-P384-SHA512\n" || key))
 //
 // — 96 lowercase hex characters. Short enough to be a primary key, a URL
 // segment and a line in every signed body, where 3.x carried a 2 624-character
 // ML-DSA-44 key in each. The prefix names the version and the algorithm, so an
-// address can never be read as the hash of a key of another kind, and the
-// hash is SHA-384 because ANSSI asks for at least that level next to
-// category-3 primitives.
+// address can never be read as the hash of a key of another kind (4.x's were
+// v4 over MLDSA65-Ed25519-SHA512 keys), and the hash is SHA-384, the digest
+// size PG-083 v3.00 recommends once post-quantum security is the goal.
 //
 // 3.3.0 introduced this seam with `addressOf` as the identity function, so
 // every verifier already took the KEY and checked it against the address; this
