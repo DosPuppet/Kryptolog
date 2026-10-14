@@ -519,6 +519,24 @@ describe('noble <-> OpenSSL interop (tests/fixtures/hybrid_interop.json)', () =>
         expect(ss).toEqual(b64(V.openssl_xwing_shared_secret));
     });
 
+    // Lot 12: the suites 5.0.0 switches to, same procedure.
+    it('derives the same CatKDF and P-384 composite keys from the same secrets', () => {
+        expect(core.catkdfPublicKey(hex(V.catkdf_secret_key))).toEqual(hex(V.catkdf_public_key));
+        expect(core.mldsa65P384PublicKey(hex(V.p384_composite_secret_key))).toEqual(hex(V.p384_composite_public_key));
+    });
+
+    it('opens what OpenSSL encapsulated with CatKDF, to the same key', () => {
+        const key = core.catkdfDecapsulate(b64(V.openssl_catkdf_cipher_text), hex(V.catkdf_secret_key));
+        expect(key).toEqual(b64(V.openssl_catkdf_key));
+    });
+
+    it.each(['noble', 'openssl'])('verifies the %s P-384 composite signature', (who) => {
+        const sig = b64(V[`${who}_p384_composite_signature`]);
+        const pk384 = hex(V.p384_composite_public_key);
+        expect(core.mldsa65P384Verify(sig, message, pk384)).toBe(true);
+        expect(core.mldsa65P384Verify(sig, new TextEncoder().encode('another message'), pk384)).toBe(false);
+    });
+
     // OpenSSL accepts mixed_order_A_even_k's signature; the server refuses its
     // KEY where it enters. The clients refuse all four on the signature alone.
     it.each(Object.keys(V.ed25519_edges))('refuses the %s edge', (edge) => {

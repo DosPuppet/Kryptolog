@@ -24,25 +24,35 @@ logger = logging.getLogger("kryptolog.auth")
 # draft's vectors and interop-checked against the clients' noble in both
 # directions (tests/test_hybrid_primitives.py).
 SIG_ALG = "MLDSA65-Ed25519-SHA512"
+# The composite 5.0.0 switches identities to (lot 12b/12c): Ed25519 is not an
+# ECCG-agreed curve, P-384 is. Verified here already, used nowhere yet.
+SIG_ALG_P384 = "MLDSA65-ECDSA-P384-SHA512"
 
 # Refuse to import rather than fail every login at runtime: a server that
 # cannot verify its signature algorithms cannot authenticate anybody. This is
 # reachable only off the hashed lock — cryptography < 48 (no `mldsa` module at
 # all), or a source build linked against an OpenSSL older than 3.5 — and is
 # the check `serve.sh` used to run against the liboqs build. ML-DSA-65 and
-# Ed25519 are the two halves of the composite signature; each is probed on its
-# own so the message names the one that is missing.
+# Ed25519 are the two halves of the composite signature (ECDSA P-384 those of
+# the one lot 12 adds); each is probed on its own so the message names the one
+# that is missing.
 _REQUIREMENT = "install backend/requirements.txt (cryptography >= 48 built against OpenSSL >= 3.5)"
 try:
-    from cryptography.hazmat.primitives.asymmetric import ed25519, mldsa
+    from cryptography.hazmat.primitives import hashes
+    from cryptography.hazmat.primitives.asymmetric import ec, ed25519, mldsa
+    from cryptography.hazmat.primitives.asymmetric.utils import (
+        decode_dss_signature,
+        encode_dss_signature,
+    )
 except ImportError as e:
     raise RuntimeError(f"cryptography lacks ML-DSA: {_REQUIREMENT}") from e
-for _name, _key in (
-    ("ML-DSA-65", mldsa.MLDSA65PrivateKey),
-    ("Ed25519", ed25519.Ed25519PrivateKey),
+for _name, _make in (
+    ("ML-DSA-65", mldsa.MLDSA65PrivateKey.generate),
+    ("Ed25519", ed25519.Ed25519PrivateKey.generate),
+    ("ECDSA P-384", lambda: ec.generate_private_key(ec.SECP384R1())),
 ):
     try:
-        _key.generate()
+        _make()
     except UnsupportedAlgorithm as e:
         raise RuntimeError(f"cryptography lacks {_name}: {_REQUIREMENT}") from e
 
@@ -446,17 +456,11 @@ COMPOSITE_PUBLIC_KEY_BYTES = _ML_DSA_65_PUBLIC_KEY_BYTES + 32
 COMPOSITE_SIGNATURE_BYTES = _ML_DSA_65_SIGNATURE_BYTES + 64
 
 
-def _composite_message(message: bytes, ctx: bytes = b"") -> bytes:
+def _composite_message(message: bytes, ctx: bytes = b"", label: bytes = _COMPOSITE_LABEL) -> bytes:
     """M' = Prefix || Label || len(ctx) || ctx || SHA-512(M): what both halves sign."""
     if len(ctx) > 255:
         raise ValueError("composite context longer than 255 bytes")
-    return (
-        _COMPOSITE_PREFIX
-        + _COMPOSITE_LABEL
-        + bytes([len(ctx)])
-        + ctx
-        + hashlib.sha512(message).digest()
-    )
+    return _COMPOSITE_PREFIX + label + bytes([len(ctx)]) + ctx + hashlib.sha512(message).digest()
 
 
 def _verify_composite(
@@ -483,6 +487,73 @@ def _verify_composite(
     except InvalidSignature:
         return False
     return True
+
+
+# --- Composite ML-DSA-65 + ECDSA-P384 (lot 12b/12c, additive) ---
+# id-MLDSA65-ECDSA-P384-SHA512, the same construction as crypto-core's
+# mldsa65P384Verify, pinned to the draft's vector. The ECDSA half is
+# ecdsa-with-SHA384 over M', a DER Ecdsa-Sig-Value — so the signature's length
+# varies, 3 309 bytes of ML-DSA then 8 to 104 of DER.
+#
+# Two rules beyond the draft, exactly as the clients apply them, because the
+# server must never accept a signature Proof Audit would refuse nor the other
+# way round:
+#   * LOW-S. OpenSSL accepts (r, s) and (r, n - s) alike, and anyone can make
+#     the second from the first: ECDSA is not strongly unforgeable (ANSSI
+#     PG-083 v3.00 warns about it), and a composite would inherit that.
+#   * CANONICAL DER. decode_dss_signature is strict already; re-encoding and
+#     comparing says so in the code rather than in a library's changelog.
+_COMPOSITE_P384_LABEL = b"COMPSIG-MLDSA65-ECDSA-P384-SHA512"
+_P384_POINT_BYTES = 97
+_P384_ORDER = ec.SECP384R1().group_order
+_DER_MIN, _DER_MAX = 8, 104
+COMPOSITE_P384_PUBLIC_KEY_BYTES = _ML_DSA_65_PUBLIC_KEY_BYTES + _P384_POINT_BYTES
+COMPOSITE_P384_SIGNATURE_MAX_BYTES = _ML_DSA_65_SIGNATURE_BYTES + _DER_MAX
+
+
+def _verify_composite_p384(
+    public_key: bytes, message: bytes, signature: bytes, ctx: bytes = b""
+) -> bool:
+    """True only if BOTH halves verify over M', with a low-S, canonically
+    encoded ECDSA half. Lengths are checked before any split. Never raises on
+    malformed input — a key or a signature is refused, as crypto-core's
+    mldsa65P384Verify does — since both come from clients."""
+    if len(public_key) != COMPOSITE_P384_PUBLIC_KEY_BYTES:
+        return False
+    if not (
+        _ML_DSA_65_SIGNATURE_BYTES + _DER_MIN
+        <= len(signature)
+        <= _ML_DSA_65_SIGNATURE_BYTES + _DER_MAX
+    ):
+        return False
+    m = _composite_message(message, ctx, _COMPOSITE_P384_LABEL)
+    ml_pk, point = (
+        public_key[:_ML_DSA_65_PUBLIC_KEY_BYTES],
+        public_key[_ML_DSA_65_PUBLIC_KEY_BYTES:],
+    )
+    ml_sig, der = signature[:_ML_DSA_65_SIGNATURE_BYTES], signature[_ML_DSA_65_SIGNATURE_BYTES:]
+    if point[0] != 0x04:  # one encoding, SEC1 uncompressed, as on the clients
+        return False
+    try:
+        r, s = decode_dss_signature(der)  # raises on anything but strict DER
+        if s > _P384_ORDER // 2 or encode_dss_signature(r, s) != der:
+            return False
+        mldsa.MLDSA65PublicKey.from_public_bytes(ml_pk).verify(ml_sig, m, _COMPOSITE_P384_LABEL)
+        ec.EllipticCurvePublicKey.from_encoded_point(ec.SECP384R1(), point).verify(
+            der, m, ec.ECDSA(hashes.SHA384())
+        )
+    except (InvalidSignature, ValueError):
+        return False
+    return True
+
+
+# Every composite the server can verify, by algorithm id — the registry
+# crypto-core's SIGNATURE_SUITES mirrors. Which one an identity uses is decided
+# where identities are read, not here.
+SIGNATURE_VERIFIERS = {
+    SIG_ALG: _verify_composite,
+    SIG_ALG_P384: _verify_composite_p384,
+}
 
 
 def verify_identity_signature(identity_public_key: str, message: str, signature: str) -> bool:

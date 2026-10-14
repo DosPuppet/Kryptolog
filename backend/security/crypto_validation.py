@@ -28,6 +28,8 @@ import base64
 import hashlib
 import re
 
+from cryptography.hazmat.primitives.asymmetric import ec, mlkem
+
 from security.ed25519_subgroup import in_prime_order_subgroup
 
 # Byte lengths.
@@ -169,3 +171,70 @@ def is_valid_identity_key(value: str | None) -> bool:
     # pkDecode cannot fail on 1952 bytes (rho is any 32 bytes, t1 any packed
     # 10-bit values), and OpenSSL accepts every such key.
     return in_prime_order_subgroup(bytes.fromhex(value)[_ML_DSA_65_PUBLIC_KEY_BYTES:])
+
+
+# --- The keys of lot 12 (crypto-core 4.1.0 / 4.2.0, additive) ---
+#
+# The suites 5.0.0 switches to: identities become composite ML-DSA-65 +
+# ECDSA-P384, encryption keys ETSI TS 103 744 CatKDF over P-384 +
+# ML-KEM-768. Unlike X25519 and X-Wing, both CAN be checked for what they
+# claim to be, and are: P-384 has cofactor 1, so a point is valid iff it is on
+# the curve (no subgroup to test), and ML-KEM-768's encapsulation key has the
+# FIPS 203 modulus check, which OpenSSL runs when the key is loaded. Nothing
+# calls these yet; the login route will in 5.0.0.
+
+P384_POINT_BYTES = 97  # SEC1 uncompressed: 0x04 || x || y
+P384_IDENTITY_KEY_BYTES = _ML_DSA_65_PUBLIC_KEY_BYTES + P384_POINT_BYTES
+CATKDF_ENCRYPTION_KEY_BYTES = 97 + 1184  # P-384 point || ML-KEM-768 encapsulation key
+P384_IDENTITY_KEY_HEX_LEN = P384_IDENTITY_KEY_BYTES * 2
+CATKDF_ENCRYPTION_KEY_HEX_LEN = CATKDF_ENCRYPTION_KEY_BYTES * 2
+
+_P384_IDENTITY_KEY_RE = _lowercase_hex(P384_IDENTITY_KEY_HEX_LEN)
+_CATKDF_ENCRYPTION_KEY_RE = _lowercase_hex(CATKDF_ENCRYPTION_KEY_HEX_LEN)
+
+
+def is_valid_p384_point(point: bytes) -> bool:
+    """True if `point` is a SEC1 UNCOMPRESSED P-384 point on the curve. The
+    compressed form is refused although OpenSSL would decode it: the clients
+    write one encoding, and an identifier with two is the L-12 defect again.
+    The point at infinity has no uncompressed encoding."""
+    if len(point) != P384_POINT_BYTES or point[0] != 0x04:
+        return False
+    try:
+        ec.EllipticCurvePublicKey.from_encoded_point(ec.SECP384R1(), point)
+    except ValueError:
+        return False
+    return True
+
+
+def is_valid_p384_identity_key(value: str | None) -> bool:
+    """True if `value` is a lowercase-hex composite ML-DSA-65 + ECDSA-P384 key
+    whose P-384 half is a point on the curve. (The ML-DSA-65 half has nothing
+    to check beyond its length, see is_valid_identity_key.)"""
+    if not isinstance(value, str) or not _P384_IDENTITY_KEY_RE.match(value):
+        return False
+    return is_valid_p384_point(bytes.fromhex(value)[_ML_DSA_65_PUBLIC_KEY_BYTES:])
+
+
+def is_valid_catkdf_encryption_key(value: str | None) -> bool:
+    """True if `value` is a lowercase-hex CatKDF key, P-384 point || ML-KEM-768
+    encapsulation key, with a point on the curve and an encapsulation key that
+    passes FIPS 203's modulus check.
+
+    The attestation still decides WHOSE key it is; this decides that it IS a
+    key, which X-Wing's structural check could not (its X25519 half accepts any
+    32 bytes) — a malformed key no longer reaches the directory, where every
+    sender would fail on it one at a time.
+    """
+    if not isinstance(value, str) or not _CATKDF_ENCRYPTION_KEY_RE.match(value):
+        return False
+    raw = bytes.fromhex(value)
+    if not is_valid_p384_point(raw[:P384_POINT_BYTES]):
+        return False
+    try:
+        # OpenSSL runs the modulus check on load (its message on failure talks
+        # about the LENGTH, misleadingly; the probe in the test pins the case).
+        mlkem.MLKEM768PublicKey.from_public_bytes(raw[P384_POINT_BYTES:])
+    except ValueError:
+        return False
+    return True
