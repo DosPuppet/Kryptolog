@@ -257,3 +257,36 @@ primitive holds while either of its halves does:
 Measured on this development machine: an X-Wing unwrap costs 2.6 ms in the
 client, a composite signature ~10 ms to make and ~4 ms to verify; the server
 verifies 1 000 composite signatures (a full erase round) in 0.17 s.
+
+## 4.1.0
+
+ADDITIVE — nothing on the wire or in storage changes, and every vector is
+unchanged as the proof. The first step of lot 12 (ANSSI 2026 alignment): the
+KEM 5.0.0 will switch to, added beside X-Wing behind a registry.
+
+- **`KEM_SUITES`**, keyed by KEM id. Every suite has one shape —
+  `keygen`, `publicKey`, `encapsulate(pk) -> { cipherText, key }`,
+  `decapsulate(ct, sk) -> key` — where `key` is the final 256-bit AES-GCM key.
+  The X-Wing entry (`XWING_KEM_ALG` = `XWING-HKDF384`) carries the
+  HKDF-SHA-384 step under `Kryptolog/X-Wing/AES-GCM/v4` that pqc.js applies
+  today, byte for byte. Nothing uses the registry yet.
+- **`HKDFwSHA384_P384_ML-KEM-768_CatKDF`**: ETSI TS 103 744 V1.2.2's CatKDF
+  over P-384 ECDH and ML-KEM-768 with static recipient keys (§8.2.2), a
+  parameter set the standard lists (§7.7.2). `catkdfKeygen`, `catkdfPublicKey`,
+  `catkdfEncapsulate`, `catkdfDecapsulate`, `CATKDF_LENGTHS`: a 1 281-byte
+  public key (SEC1 uncompressed point || ML-KEM key), a 112-byte secret key
+  (P-384 scalar || ML-KEM seed, drawn independently), a 1 185-byte ciphertext.
+  MA/MB are Annex C's m_format with cid 0x2221 and empty label contributions;
+  `info` is `Kryptolog/HKDFwSHA384_P384_ML-KEM-768_CatKDF/AES-GCM/v5`.
+- **The standard's building blocks**, exported because its known-answer test
+  pins each one: `etsiMessage` (Annex C), `etsiContextSha384` (cahb_f, §7.2.3),
+  `catKdfHkdfSha384` (§8.2.3 with the §7.4.2 HKDF mapping). The vector — the
+  reference implementation's cid 2221 case, ECDH and derandomized ML-KEM
+  included — is copied verbatim into `tests/fixtures/etsi_catkdf_vectors.json`
+  with its provenance.
+
+Why (sources checked 2026-10-14): the ECCG Agreed Cryptographic Mechanisms v2,
+which ANSSI accepts for certification, agree no X25519 and agree only
+CatKDF/CasKDF as hybrid combiners; ANSSI's PQC FAQ recommends the two by name;
+PG-083 v3.00 recommends ≥ 384-bit digests for post-quantum security. X-Wing's
+SHA3-256 combiner misses all three.

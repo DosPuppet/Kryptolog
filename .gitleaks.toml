@@ -85,4 +85,19 @@ regexes = [
   # derives for the file's patterned seed (5a repeated) — which the suite
   # unwraps. A ciphertext of public test data, flagged for its entropy.
   '''FoTNffAfJsXZICUY6dSyQ7E81ZXKDOYtc2MvOxviRUdMnh3y1lvhosrDid5fyTwT''',
+
+  # tests/fixtures/etsi_catkdf_vectors.json (lot 12a): ETSI TS 103 744's own
+  # known-answer test for HKDFwSHA384_P384_ML-KEM-768 (cid 2221), copied
+  # verbatim from the reference implementation (forge.etsi.org 103744_QHKEX,
+  # branch kats_v1.2.x, main.c). Published test data, flagged for the word
+  # "key" in its field names:
+  #
+  # mlkem_keygen_seed — FIPS 203 derandomized keygen input d||z, also published
+  # in the post-quantum-cryptography KAT set the harness cites; both suites
+  # derive the vector's pa2 from it.
+  '''89b0c4b23019af3498a27da290892d981dd59fa08993bc05da21e1d72503664cb585d4eb01085111a172a87688d0032e3381a9e9a35fdd6ef2f8aeb3b40eb5ce''',
+  #
+  # key_material — CatKDF's output for the vector, which both suites recompute
+  # from k1, k2, MA, MB, info and label in the same file.
+  '''a57206ecf56e0bd26026a92568e5f6363a5f747625168140''',
 ]

@@ -9,7 +9,9 @@ import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { ed25519 } from '@noble/curves/ed25519.js';
-import { sha512 } from '@noble/hashes/sha2.js';
+import { p384 } from '@noble/curves/nist.js';
+import { hkdf } from '@noble/hashes/hkdf.js';
+import { sha384, sha512 } from '@noble/hashes/sha2.js';
 import { ml_kem768_x25519 } from '@noble/post-quantum/hybrid.js';
 import * as core from '../src/index.js';
 
@@ -189,6 +191,159 @@ describe('X-Wing (draft-connolly-cfrg-xwing-kem-10)', () => {
         expect(() => core.xwingEncapsulate(publicKey.subarray(1))).toThrow(/public key must be 1216/);
         expect(() => core.xwingDecapsulate(new Uint8Array(1119), secretKey)).toThrow(/ciphertext must be 1120/);
         expect(() => core.xwingDecapsulate(new Uint8Array(1120), secretKey.subarray(1))).toThrow(/secret key must be 32/);
+    });
+});
+
+// ETSI TS 103 744 V1.2.2 CatKDF, parameter set HKDFwSHA384_P384_ML-KEM-768
+// (lot 12a). The standard's own known-answer test pins every building block;
+// the suite's composition — which halves, in which order, under which
+// transcript — is then pinned by decapsulating the vector's own ciphertext.
+describe('CatKDF HKDFwSHA384_P384_ML-KEM-768 (ETSI TS 103 744 V1.2.2)', () => {
+    const V = fixture('etsi_catkdf_vectors.json');
+    const enc = (s) => new TextEncoder().encode(s);
+    const xor = (a, b) => a.map((byte, i) => byte ^ b[i]);
+    const u32 = (n) => Uint8Array.of(n >>> 24, (n >>> 16) & 255, (n >>> 8) & 255, n & 255);
+    const cat = (...p) => Uint8Array.from(p.flatMap((a) => [...a]));
+    const point = (raw) => cat([4], hex(raw)); // the harness's x||y as SEC1 uncompressed
+    // Our secret key for the vector's recipient: its P-384 scalar, then its ML-KEM seed.
+    const vectorSecretKey = () => cat(hex(V.ecdh_private_a), hex(V.mlkem_keygen_seed));
+    const vectorCipherText = () => cat(hex(V.ecdh_public_b), hex(V.pb2));
+
+    it('has the sizes the formats are built on, and the parameter set the standard names', () => {
+        expect(core.CATKDF_LENGTHS).toEqual({ publicKey: 1281, secretKey: 112, cipherText: 1185, key: 32 });
+        expect(core.CATKDF_KEM_ALG).toBe('HKDFwSHA384_P384_ML-KEM-768_CatKDF');
+        expect(V.cid).toBe('2221');
+    });
+
+    it('formats MA as Annex C does: cid, then each value behind its 32-bit length', () => {
+        const MA = core.etsiMessage(hex(V.cid), hex(V.labelA), hex(V.pa1), hex(V.pa2));
+        expect(MA.subarray(0, 2)).toEqual(hex('2221'));
+        expect(MA.subarray(2, 6)).toEqual(u32(48));
+        expect(MA.subarray(54, 58)).toEqual(u32(96));
+        expect(MA.length).toBe(2 + 4 + 48 + 4 + 96 + 4 + 1184);
+    });
+
+    it("reproduces the standard's key material from its k1, k2, MA, MB, info and label", () => {
+        const km = core.catKdfHkdfSha384({
+            k1: hex(V.k1),
+            k2: hex(V.k2),
+            MA: core.etsiMessage(hex(V.cid), hex(V.labelA), hex(V.pa1), hex(V.pa2)),
+            MB: core.etsiMessage(hex(V.cid), hex(V.labelB), hex(V.pb1), hex(V.pb2)),
+            info: enc(V.info),
+            label: xor(hex(V.labelA), hex(V.labelB)),
+            length: 24,
+        });
+        expect(Buffer.from(km).toString('hex')).toBe(V.key_material);
+    });
+
+    it("cahb_f is SHA-384 over the length-prefixed values, as §7.2.3 defines it", () => {
+        const a = enc('a'); const bc = enc('bc');
+        const expected = createHash('sha384').update(Buffer.from(cat(u32(1), a, u32(2), bc))).digest();
+        expect(Buffer.from(core.etsiContextSha384(a, bc))).toEqual(expected);
+    });
+
+    it("derives the vector's public keys from its secrets: P1 from the scalar, P2 from the seed", () => {
+        const pk = core.catkdfPublicKey(vectorSecretKey());
+        expect(pk.subarray(0, 97)).toEqual(point(V.pa1));
+        expect(pk.subarray(97)).toEqual(hex(V.pa2));
+    });
+
+    it("decapsulates the vector's ciphertext into CatKDF over the vector's own k1 and k2", () => {
+        // k1 and k2 are pinned by the standard; what this pins is the
+        // composition around them: the ECDH half first, SEC1 points in the
+        // transcript, empty label contributions, and this suite's info.
+        const P1 = point(V.pa1); const R1 = hex(V.ecdh_public_b);
+        const expected = core.catKdfHkdfSha384({
+            k1: hex(V.k1),
+            k2: hex(V.k2),
+            MA: core.etsiMessage(hex('2221'), new Uint8Array(0), P1, hex(V.pa2)),
+            MB: core.etsiMessage(hex('2221'), new Uint8Array(0), R1, hex(V.pb2)),
+            info: enc('Kryptolog/HKDFwSHA384_P384_ML-KEM-768_CatKDF/AES-GCM/v5'),
+            length: 32,
+        });
+        expect(core.catkdfDecapsulate(vectorCipherText(), vectorSecretKey())).toEqual(expected);
+    });
+
+    it('round-trips, and a different key recovers a different key without throwing', () => {
+        const alice = core.catkdfKeygen();
+        const eve = core.catkdfKeygen();
+        const { cipherText, key } = core.catkdfEncapsulate(alice.publicKey);
+        expect(cipherText).toHaveLength(1185);
+        expect(key).toHaveLength(32);
+        expect(core.catkdfDecapsulate(cipherText, alice.secretKey)).toEqual(key);
+        expect(core.catkdfDecapsulate(cipherText, eve.secretKey)).not.toEqual(key);
+        // Fresh randomness on every encapsulation, in both halves.
+        const again = core.catkdfEncapsulate(alice.publicKey);
+        expect(again.cipherText.subarray(0, 97)).not.toEqual(cipherText.subarray(0, 97));
+        expect(again.cipherText.subarray(97)).not.toEqual(cipherText.subarray(97));
+    });
+
+    it('needs BOTH halves: replacing either half of the ciphertext changes the key', () => {
+        const alice = core.catkdfKeygen();
+        const one = core.catkdfEncapsulate(alice.publicKey);
+        const two = core.catkdfEncapsulate(alice.publicKey);
+        const mixed = (ecdhFrom, mlkemFrom) => cat(ecdhFrom.cipherText.subarray(0, 97), mlkemFrom.cipherText.subarray(97));
+        expect(core.catkdfDecapsulate(mixed(one, two), alice.secretKey)).not.toEqual(one.key);
+        expect(core.catkdfDecapsulate(mixed(two, one), alice.secretKey)).not.toEqual(one.key);
+        // A flipped bit in the ML-KEM half is implicitly rejected: a key, but not this one.
+        expect(core.catkdfDecapsulate(flip(one.cipherText, 600), alice.secretKey)).not.toEqual(one.key);
+    });
+
+    it('draws the two halves independently', () => {
+        const a = core.catkdfKeygen();
+        const b = core.catkdfKeygen();
+        expect(a.secretKey.subarray(0, 48)).not.toEqual(b.secretKey.subarray(0, 48));
+        expect(a.secretKey.subarray(48)).not.toEqual(b.secretKey.subarray(48));
+        expect(core.catkdfKeygen(a.secretKey).publicKey).toEqual(a.publicKey);
+    });
+
+    it('refuses malformed keys and ciphertexts by name', () => {
+        const { publicKey, secretKey } = core.catkdfKeygen();
+        const { cipherText } = core.catkdfEncapsulate(publicKey);
+        expect(() => core.catkdfEncapsulate(publicKey.subarray(1))).toThrow(/public key must be 1281/);
+        expect(() => core.catkdfDecapsulate(cipherText.subarray(1), secretKey)).toThrow(/ciphertext must be 1185/);
+        expect(() => core.catkdfDecapsulate(cipherText, secretKey.subarray(1))).toThrow(/secret key must be 112/);
+        // A compressed prefix on an otherwise right-length key or ciphertext.
+        const compressed = (b) => { const c = b.slice(); c[0] = 0x02; return c; };
+        expect(() => core.catkdfEncapsulate(compressed(publicKey))).toThrow(/uncompressed P-384/);
+        expect(() => core.catkdfDecapsulate(compressed(cipherText), secretKey)).toThrow(/uncompressed P-384/);
+        // A point that is not on the curve, in the key and in the ciphertext.
+        expect(() => core.catkdfEncapsulate(flip(publicKey, 50))).toThrow();
+        expect(() => core.catkdfDecapsulate(flip(cipherText, 50), secretKey)).toThrow();
+        // An ML-KEM key that fails the FIPS 203 modulus check.
+        const bad = publicKey.slice(); bad[97] = 0xff; bad[98] = 0xff;
+        expect(() => core.catkdfEncapsulate(bad)).toThrow(/modulus/);
+        // A P-384 scalar of zero, and one equal to the group order.
+        expect(() => core.catkdfPublicKey(new Uint8Array(112))).toThrow(/out of range/);
+        const order = hex(p384.Point.Fn.ORDER.toString(16));
+        expect(() => core.catkdfPublicKey(cat(order, secretKey.subarray(48)))).toThrow(/out of range/);
+    });
+});
+
+// The registry (4.1.0): one shape for every suite, whatever its KEM.
+describe('KEM registry', () => {
+    it('holds X-Wing and the CatKDF suite, each under its own id', () => {
+        expect(Object.keys(core.KEM_SUITES).sort()).toEqual([core.CATKDF_KEM_ALG, core.XWING_KEM_ALG].sort());
+        for (const [alg, suite] of Object.entries(core.KEM_SUITES)) expect(suite.alg).toBe(alg);
+        expect(Object.isFrozen(core.KEM_SUITES)).toBe(true);
+    });
+
+    it.each(Object.keys(core.KEM_SUITES))('%s: encapsulate and decapsulate agree on a 256-bit key', (alg) => {
+        const suite = core.KEM_SUITES[alg];
+        const { publicKey, secretKey } = suite.keygen();
+        expect(suite.publicKey(secretKey)).toEqual(publicKey);
+        const { cipherText, key } = suite.encapsulate(publicKey);
+        expect(cipherText).toHaveLength(suite.lengths.cipherText);
+        expect(key).toHaveLength(32);
+        expect(suite.decapsulate(cipherText, secretKey)).toEqual(key);
+    });
+
+    it("X-Wing's entry derives the AES key pqc.js always has: HKDF-SHA-384 under the X-Wing label", () => {
+        const { publicKey, secretKey } = core.xwingKeygen();
+        const { cipherText, key } = core.KEM_SUITES[core.XWING_KEM_ALG].encapsulate(publicKey);
+        const shared = core.xwingDecapsulate(cipherText, secretKey);
+        const expected = hkdf(sha384, shared, new Uint8Array(0), new TextEncoder().encode('Kryptolog/X-Wing/AES-GCM/v4'), 32);
+        expect(key).toEqual(expected);
     });
 });
 

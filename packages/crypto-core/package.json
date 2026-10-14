@@ -1,6 +1,6 @@
 {
   "name": "@kryptolog/crypto-core",
-  "version": "4.0.0",
+  "version": "4.1.0",
   "private": true,
   "type": "module",
   "description": "Single source of truth for Kryptolog client-side hybrid crypto (composite ML-DSA-65 + Ed25519, X-Wing), shared by the SPA and the TrustKeys extension.",
