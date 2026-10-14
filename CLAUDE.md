@@ -1937,8 +1937,8 @@ equivalent ones. Counts: backend **720**, frontend **289**, crypto-core
 gate, at `e96e5e1`.
 
 **Not done, and needed before relying on it:**
-- **On branch `hybrid`** (created from `dev` at `12e8cfb`, which carries the
-  same commits). **Not merged, not pushed.** No CI run has seen lots 1–11.
+- ~~**On branch `hybrid`**, not merged, not pushed.~~ **Merged to `main` on
+  2026-10-14** with lot 12 — see the end of this file.
 - **Deploy all three together on an empty database** (DEPLOYMENT.md). Every
   user recreates their identity; proofs exported before are refused.
 - **The approval windows and the TrustKeys Dashboard on 4.0.0 have not been
@@ -2054,9 +2054,10 @@ all killed; two only after a test was added).
 
 **Not done, and needed before relying on it:**
 - **Fast-forwarded into `hybrid` on 2026-10-14** (`0ecab39`..`fd65030`, lots
-  12.0–12g; `dev` is still at the same commit). **Not merged to `main`, not
-  pushed** — `hybrid` is 8 commits ahead of `origin/hybrid`, and no CI run has
-  seen lots 1–12.
+  12.0–12g), and `hybrid` has been pushed. **Merged to `main` on 2026-10-14**
+  (fast-forward, `2bd873f`..`7105519`: lots 11 and 12, 16 commits; `dev` and
+  `hybrid` are still at the merged commit). **`main` is not pushed yet**, so
+  `origin/main` has not seen lots 11–12.
 - **Deploy 5.0.0 on an empty database**, SPA, extension and server together
   (`c5d6e7f8a9b0` refuses otherwise); 5.1.0 then deploys over it.
 - **The TrustKeys approval windows on 5.x** (login, rotation) have not been
