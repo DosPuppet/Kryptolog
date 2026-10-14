@@ -8,5 +8,5 @@
 # these three carry no hashes. Two invocations keep the runtime half exactly as
 # production installs it, which is also what CI now tests against.
 pytest>=9.1.1      # test runner (TestClient needs httpx, already in the runtime lock)
-fakeredis>=2.38.0  # in-process Redis for the WS fan-out tests (real Redis used when TEST_REDIS_URL is set)
-ruff>=0.16.7       # blocking lint + format gate (config in backend/ruff.toml)
+fakeredis>=2.39.0  # in-process Redis for the WS fan-out tests (real Redis used when TEST_REDIS_URL is set)
+ruff>=0.17.0       # blocking lint + format gate (config in backend/ruff.toml)
