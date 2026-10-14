@@ -2053,7 +2053,10 @@ builds and gitleaks green. Every new gate of 12f mutation-tested (23 mutants,
 all killed; two only after a test was added).
 
 **Not done, and needed before relying on it:**
-- **Not merged, not pushed.** No CI run has seen lots 1–12.
+- **Fast-forwarded into `hybrid` on 2026-10-14** (`0ecab39`..`fd65030`, lots
+  12.0–12g; `dev` is still at the same commit). **Not merged to `main`, not
+  pushed** — `hybrid` is 8 commits ahead of `origin/hybrid`, and no CI run has
+  seen lots 1–12.
 - **Deploy 5.0.0 on an empty database**, SPA, extension and server together
   (`c5d6e7f8a9b0` refuses otherwise); 5.1.0 then deploys over it.
 - **The TrustKeys approval windows on 5.x** (login, rotation) have not been
