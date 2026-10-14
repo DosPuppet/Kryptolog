@@ -10,7 +10,7 @@ Monorepo, four parts:
 
 | Path | What |
 |---|---|
-| `backend/` | FastAPI + SQLAlchemy + Alembic, PostgreSQL. Routers in `routers/`, shared security rules in `security/` (`authorization.py`, `crypto_validation.py`, `ed25519_subgroup.py`, `url_guard.py`, `usernames.py`, `quota.py`, `body_limit.py`, `audit_log.py`, `request_audit.py`). Deletion of history in `account_deletion.py` and `retention.py`. |
+| `backend/` | FastAPI + SQLAlchemy + Alembic, PostgreSQL. Routers in `routers/`, shared security rules in `security/` (`authorization.py`, `crypto_validation.py`, `key_rotation.py`, `url_guard.py`, `usernames.py`, `quota.py`, `body_limit.py`, `audit_log.py`, `request_audit.py`). Deletion of history in `account_deletion.py` and `retention.py`. |
 | `frontend/` | React 19 SPA (Vite). Messenger state is split under `src/context/messenger/`. |
 | `trustkeys/` | MV3 browser extension — the key custodian. Service worker under `src/background/`. |
 | `packages/crypto-core/` | `@kryptolog/crypto-core`: one copy of every crypto primitive, consumed by **both** clients via a `file:` dependency. Split into `encoding`/`signing`/`pqc`/`identity`/`account`/`composite`/`kem`/`aead`/`vault`/`webauthn`, all re-exported from `src/index.js` — import the package root, never a submodule. |
@@ -76,8 +76,19 @@ real path and then needs `@noble/post-quantum` next to it, so run `npm ci` insid
   round-trip passes through any encoding change. Pin the bytes a *peer* receives.
 - **Opaque payloads are base64; identifiers are hex.** Ciphertext, IVs, wrapped
   keys, signatures and the vault blob are base64 (`toB64`/`fromB64`). Addresses,
-  ML-KEM public keys, SHA-256 digests and safety numbers stay hex
-  (`toHex`/`fromHex`) — see the L-12 note below for why the line is drawn there.
+  identity and encryption public keys, key ids (`kid`), SHA-384 digests and
+  safety numbers stay hex (`toHex`/`fromHex`) — see the L-12 note below for why
+  the line is drawn there.
+- **Agility is not a fallback.** The suites are registries (`KEM_SUITES`,
+  `SIGNATURE_SUITES`) with exactly ONE active entry: everything written uses it,
+  and a client only ever encrypts to a recipient's current *attested* key, whose
+  suite the attestation signs. A retired key is kept to READ what was sealed to
+  its `kid`, never to write. An old suite stays in the registry, decapsulation
+  only, until no account can hold a key under it — then it is removed, as a
+  decision. Accepting an old suite *instead of* the current one, anywhere, is the
+  downgrade the clean-cutover rule bans; moving to a new suite is a release plus
+  key rotations (lot 12f). Identity suites cannot rotate: an address is the hash
+  of the identity key, so a new signature suite is still a cutover.
 - **Security rules belong in `backend/security/`,** not inline in routers. Inline
   re-implementation is what produced KRY-001.
 - **Addresses are lowercase everywhere** in the database and in signed bodies. Normalize
@@ -276,6 +287,9 @@ The end-to-end test caught three fields whose `max_length` had been set as if
 they held user text, when each holds a post-quantum envelope. Not introduced by
 the cleanup: the group-name cap has been wrong since `d916b91`.
 
+*(Sizes as of 2026-09-10; since 5.0.0 an address is a 96-hex SHA-384, an
+identity key 4 098 hex, a signature at most 4 552 base64, a wrap ~1 790 —
+`schemas.py` derives the bounds from those. The lesson stands.)*
 An address IS an ML-DSA-44 public key (2 624 hex chars), a detached signature is
 4 840, and a wrapped ML-KEM session key is ~2 330 — so a "name" or a "message"
 costs thousands of characters before any content:
@@ -545,7 +559,8 @@ names go through the M-3 encrypted-name path, which is a different mechanism.
   persistent JWT secret, `REDIS_URL` set).
 - **The cutovers are cumulative, and there are six of them.** *(Seven since
   crypto-core 3.0.0, lot 4 of the 2026-10-12 remediation; eight since 4.0.0,
-  lot 11, the hybrid cutover. 3.1.0, 3.2.0 and 3.3.0 are additive.)* `CRYPTO_CORE_VERSION`
+  lot 11, the hybrid cutover; nine since 5.0.0, lot 12, the ECCG-agreed
+  suites. 3.1.0–3.3.0, 4.1.0–4.3.0 and 5.1.0 are additive.)* `CRYPTO_CORE_VERSION`
   went 1.3.0 → 2.0.0, and the count is one higher than the version list suggests:
   the HKDF derivation of the AES key from the ML-KEM shared secret (audit S5,
   `KEM_KDF_INFO` in `pqc.js`) was a wire break that landed before `CHANGELOG.md`
@@ -1932,3 +1947,121 @@ gate, at `e96e5e1`.
   ways (with the verified badge on both receivers) and a share.
 - The drafts may still change before they become RFCs; that would be a further
   cutover.
+
+## Lot 12 — ANSSI 2026 alignment and crypto-agility, crypto-core 5.x — 2026-10-14, branch `dev`
+
+*Not the "lot 12" of the 2026-10-12 remediation table (forward secrecy,
+code-delivery integrity, an external audit) — those budget items are still
+postponed. This one replaced X-Wing and Ed25519 and added key rotation.*
+
+The question was "remove X-Wing to conform to ANSSI, with crypto-agility in
+mind". The references lot 11 argued from (ANSSI's December 2023 paper) had been
+superseded, so they were re-checked first, on 2026-10-14:
+
+- **ANSSI PG-083 v3.00** (2026-03-20): hybridization required, ML-KEM-768
+  "préférable", named curves P-256/384/521 and brainpool — **not 25519** —
+  and RecoPQHachage: digests of at least 384 bits.
+- **ANSSI views on crypto-agility** (2026-01-19): Rec. 1 algorithmic agility,
+  Rec. 3 handle old keys, Rec. 6 no undesired suite.
+- **ECCG ACM v2** (accepted by ANSSI beside PG-083) and **ENISA's 2026-04-30
+  report**: no X25519/Ed25519, combiners CatKDF/CasKDF only; X-Wing's SHA3-256
+  combiner is "not allowed".
+- **ETSI TS 103 744 v1.2.2** and **draft-ietf-lamps-pq-composite-sigs-19**
+  (RFC Editor queue): implemented from the text, pinned to their vectors.
+
+**User decisions (2026-10-14):** KEM `HKDFwSHA384_P384_ML-KEM-768` with CatKDF
+(the first pick, P-256, is not an ETSI parameter set with SHA-384); identity
+`MLDSA65-ECDSA-P384-SHA512`; agility = registries + keys bound to their suite +
+encryption-key rotation with re-wrap; a rotated contact key **stays blocking**
+(K-05 unchanged, the rotation only explains the change); group-name wraps are
+not re-wrapped, they move at the next rename or membership change. The plan is
+`roadmap/LOT-12-ANSSI-2026.md` (untracked, `.git/info/exclude`).
+
+| Sub-lot | Scope | Commit |
+|---|---|---|
+| 12.0 | noble post-quantum 0.7.1, curves/hashes 2.4.0 (security fixes; no wire change) | `506e1c0` |
+| 12a | crypto-core 4.1.0: KEM registry, ETSI CatKDF beside X-Wing (additive) | `6a115b7` |
+| 12b | crypto-core 4.2.0: signature registry, `MLDSA65-ECDSA-P384-SHA512` (additive) | `595b672` |
+| 12c | backend verifies the P-384 composite and checks the new keys (additive) | `f28728f` |
+| 12d | crypto-core 4.3.0: the agility seam, no byte moved | `7107129` |
+| 12e | crypto-core 5.0.0: the ninth cutover — ECCG-agreed suites, key ids | `0df13ef` |
+| 12f | crypto-core 5.1.0: encryption-key rotation with re-wrap (additive) | `9d645e0` |
+| 12g | documentation: conformity matrix, rotation everywhere it is described | the commit adding this section |
+
+Things worth knowing before touching any of it:
+
+- **ECDSA is not strongly unforgeable** (PG-083 says so). Low-S and canonical
+  DER are required when signing AND verifying, in both languages; pyca accepts
+  high-S and BER-ish encodings, so the server's check is ours
+  (`auth._verify_composite_p384`, which never raises). Signatures commit to
+  strings here, so a second valid encoding would be L-12 again.
+- **CatKDF is used with STATIC recipient keys** (TS 103 744 §8.2.2): its
+  output is the AES-256-GCM key directly, its context covers both public keys
+  and both ciphertexts. That is why forward secrecy is still unmet — rotation
+  bounds it, it does not provide it. THREAT_MODEL.md's matrix says so.
+- **Every envelope carries `kid`** (128 bits of a labelled SHA-384 of the
+  recipient key), in the associated data with `v` and `alg`; decryption picks
+  the seed with `encryptionSeedFor`. That is what lets retired keys coexist.
+- **The vault blob's `v` and KDF descriptor are its associated data since
+  5.0.0** — the 4.0.0 changelog claimed it and the vault was not covered.
+- **The users table's CHECK constraints never reached the metadata before
+  12e.** `models.User` assigned `__table_args__` twice; the second silently
+  replaced the first, so the constraints existed only in migrated databases
+  and the test database had none. Look for this in any model that grows a
+  second constraint list.
+- **Rotation's three rules** live in `security/key_rotation.py`: accepted only
+  FROM the kid the server holds (no replay to roll back), the new key enters as
+  at login (attested), and a wrap is listed or replaced only by whoever can
+  read it today — live grants, signer rows, recipient rows of RELEASED
+  workflows (re-wrapping must not hand a recipient their key before the
+  threshold, nor revive an expired grant). Both held shapes are accepted:
+  `encKey` session-key wraps and `content` envelopes around a file key.
+- **The client keeps a rotation the server may have taken.** Rotate on the
+  device and save first; revert only on a 4xx; a 5xx or network error keeps
+  the new key ("sign in again to publish it"). Revert RETIRES the new key, never
+  drops it, so a wrong-moment undo destroys nothing. TrustKeys narrows undo to
+  the asking origin, the kid just made, five minutes — and its own check is
+  what stops a mistaken undo from spending the real one (crypto-core would
+  refuse the wrong kid anyway).
+- **Contacts stop wrapping to the retired key** because DM sessions are bound
+  to the keys they were wrapped for and the group session set includes each
+  member's key; `KEY_ROTATED` makes their clients refetch the record.
+- **Measured** (Intel Mac, Node 24): client composite sign ~12 ms, verify
+  ~9.5 ms, wrap/unwrap ~11 ms — noble's pure-JS P-384 is the cost (X-Wing
+  unwrapped in 2.6 ms); server 1 000 verifications 0.69 s. WebCrypto's native
+  P-384 ECDH is the lever if it ever shows; the registry is where it goes.
+- **Argon2 tests near the timeout.** `byte-compat`'s "different vault key" test
+  runs five 46 MiB derivations (~1.8 s alone) and timed out under parallel load;
+  it carries an explicit 30 s timeout now, as `fileChunks.test.js` does.
+
+**Running the backend and e2e on this Intel Mac** (no host venv:
+cryptography 50 has no x86_64 macOS wheel, see the pyca section). Everything
+backend ran in `python:3.12-slim` containers on a docker network with a
+Postgres 16 and a Redis container, the venv in a named volume, the repo
+mounted at `/app`. For e2e, a temporary Playwright config (never committed)
+replaced `serve-backend.sh` by a container that recreates `kryptolog_e2e`,
+flushes Redis db 7, runs `alembic upgrade head` and uvicorn on
+`127.0.0.1:8002` with `ALLOWED_ORIGINS=http://localhost:5174`; vite and
+Chromium ran on the host. Remove a leftover backend container before a run,
+or port 8002 is taken and the run fails before the first test.
+
+Counts at `9d645e0`: backend **735** (+1 environmental,
+`test_unresolvable_host_is_rejected`: this network's DNS answers `.invalid`),
+frontend **298**, crypto-core **116**, extension **138**, e2e **1** (now with
+the rotation chapter). ruff, format, `alembic check`, every eslint gate, both
+builds and gitleaks green. Every new gate of 12f mutation-tested (23 mutants,
+all killed; two only after a test was added).
+
+**Not done, and needed before relying on it:**
+- **Not merged, not pushed.** No CI run has seen lots 1–12.
+- **Deploy 5.0.0 on an empty database**, SPA, extension and server together
+  (`c5d6e7f8a9b0` refuses otherwise); 5.1.0 then deploys over it.
+- **The TrustKeys approval windows on 5.x** (login, rotation) have not been
+  looked at in a browser by a person, and `E2E-RECIPE.md` §8b's TrustKeys half
+  (rotation through the extension, destroying a retired key from its
+  Dashboard) is manual.
+- **Nothing re-wraps message sessions.** They live inside signed payloads;
+  destroying a retired key loses the history sealed to it, by design and with
+  a warning. Re-wrap escrow would be a feature, and is out of scope.
+- The composite draft may still change before its RFC; that would be a
+  further cutover.

@@ -1,6 +1,6 @@
 """ETSI TS 103 744 V1.2.2 CatKDF, parameter set HKDFwSHA384_P384_ML-KEM-768,
 static recipient keys (§8.2.2) — written from the standard for the test suite
-only, like xwing_ref.py.
+only (it replaced xwing_ref.py, crypto-core 5.0.0).
 
 The server never runs a KEM: every encapsulation and decapsulation is a
 client's, in @noble/post-quantum and @noble/curves. This exists so the

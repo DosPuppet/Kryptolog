@@ -30,21 +30,26 @@ public keys and metadata.
 
 ## Identity and custody
 
-An identity is a **composite ML-DSA-65 + Ed25519 key pair**
-(`id-MLDSA65-Ed25519-SHA512`): a signature is valid only if both halves verify.
-Its **address** is the SHA-384 of the identity key — 96 lowercase hex
-characters — and every verifier, client and server, checks that the key it is
-given is the one the address names. Each identity also has an **X-Wing**
-(ML-KEM-768 + X25519) encryption key, which it **attests** — signs with its
-identity key, naming its address — so a client can check that the directory is
-serving the key the identity chose. A login submitting a key without its
-attestation is refused. Every primitive is NIST category 3, the level ANSSI
-asks for, and holds while either of its halves does (crypto-core 4.0.0, audit
-2026-10-12 K-10).
+An identity is a **composite ML-DSA-65 + ECDSA P-384 key pair**
+(`MLDSA65-ECDSA-P384-SHA512`, draft-ietf-lamps-pq-composite-sigs-19): a
+signature is valid only if both halves verify, and the ECDSA half must be
+low-S, canonical DER. Its **address** is the SHA-384 of the identity key under
+a label naming the suite — 96 lowercase hex characters — and every verifier,
+client and server, checks that the key it is given is the one the address
+names. Each identity also has an **encryption key**, ML-KEM-768 + ECDH P-384
+combined by ETSI TS 103 744 CatKDF (`HKDFwSHA384_P384_ML-KEM-768_CatKDF`),
+which it **attests** — signs with its identity key, naming its address and the
+key's suite — so a client can check that the directory is serving the key the
+identity chose. A login submitting a key without its attestation is refused.
+Every primitive is NIST category 3 on an ECCG-agreed curve, and holds while
+either of its halves does (crypto-core 5.0.0; THREAT_MODEL.md has the
+conformity matrix against ANSSI's 2026 guidance).
 
-An account is stored as its two **seeds** (64 bytes for the composite key, 32
-for X-Wing), with the address as its id in both custodians; everything public
-is re-derived from the seeds on load.
+An account is stored as **seeds** (80 bytes for the composite key, 112 for the
+encryption key), with the address as its id in both custodians; everything
+public is re-derived from the seeds on load. Besides its current encryption key
+an account keeps up to 32 **retired** ones (crypto-core 5.1.0): they decrypt
+what was sealed to them, found by key id, and are never encrypted to.
 
 Keys live in one of two custodians:
 
@@ -57,19 +62,25 @@ Keys live in one of two custodians:
   itself, with the origin Chrome reports, and shows what each one does. Only
   chat-message signatures may be silent, and only for a site granted it.
 
-## Formats (crypto-core 4.0.0)
+## Formats (crypto-core 5.x)
 
 - **Signed bodies** are domain-separated: `Kryptolog Signed Message v1`, a
   `context=` line (`login`, `message`, `account-deletion`,
-  `conversation-erase`, `multisig-approval`, `key-attestation`, `content`),
+  `conversation-erase`, `multisig-approval`, `key-attestation`,
+  `key-rotation`, `content`),
   then `key=value` lines whose interpolated identifiers are checked against
   their alphabet on both sides, so a body has exactly one meaning. Login and
   deletion bodies name the SPA **origin** and the server **deployment**. Every
   digest in a body is SHA-384.
-- **Envelopes** carry `v: 4` and an algorithm id, which are also their AES-GCM
-  associated data; decoders refuse anything else by name.
-- **Session keys**: AES-256-GCM, wrapped per recipient with X-Wing and
-  HKDF-SHA-384 (`XWING-HKDF384-A256GCM`).
+- **Envelopes** carry `v: 5`, an algorithm id and the recipient key's id
+  (`kid`, 128 bits of a labelled SHA-384 of the key), all three in the AES-GCM
+  associated data; decoders refuse another version or suite by name, and pick
+  the decryption key by `kid`.
+- **Session keys**: AES-256-GCM, wrapped per recipient: CatKDF's output is the
+  AES key directly (`HKDFwSHA384_P384_ML-KEM-768_CatKDF-A256GCM`).
+- **Suites are registries** (`KEM_SUITES`, `SIGNATURE_SUITES`) with exactly one
+  active entry each. Moving to another suite is a new entry plus a key
+  rotation; nothing ever falls back to an older one for writing.
 - **Opaque payloads are base64, identifiers are hex.**
 
 The backend mirrors exactly the bodies it verifies (`backend/auth.py`), pinned
@@ -105,6 +116,18 @@ secret and index.
 able to read what they approve) and for each recipient; the server withholds
 the recipients' keys until `threshold` signers have signed the SHA-384 of the
 stored ciphertext.
+
+**Replacing an encryption key.** The custodian makes a new key current and
+keeps the old one retired, saves, and signs a `key-rotation` record (address,
+old and new key id, suite, time); `POST /account/encryption-key/rotate` accepts
+it only from the key id the server holds, so a recorded rotation cannot be
+replayed to roll a key back. The client then re-wraps, page by page, every key
+the account can read that is still sealed to an older key (grants, multisig
+keys); message sessions, inside signed payloads, stay readable with the
+retired key. Contacts are told over the WebSocket; their clients refetch the
+record, stop sending until the new safety number is confirmed — the rotation is
+named, with its date, but signed by the same identity key, so it explains the
+change without vouching for it — and from then on wrap to the new key only.
 
 **Deletion.** An account can *leave* (reversible) or *erase* (final); a
 conversation can be *hidden* for one user and the user's own messages in it

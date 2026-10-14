@@ -3,7 +3,8 @@
 > **Partly automated since 2026-10-12** (`e2e/`, CI job `e2e`): §1 with both
 > custody modes (TrustKeys and a local vault), §2 both directions, and §4's
 > live WebSocket delivery run on every push in real Chromium with the real
-> extension, plus a secret shared and opened. Everything else here — chunked
+> extension, plus a secret shared and opened, and §8b's key rotation for a
+> local vault (Bob rotates, Alice is stopped and told). Everything else here — chunked
 > files, sign-out across tabs, extension lock, biometrics, nginx, deletion as
 > the OTHER account sees it — is still a manual pass, and still the gate.
 
@@ -59,14 +60,14 @@ codes for the accounts below (`cd backend && python generate_invites.py 6`) or
 set `KRYPTOLOG_REQUIRE_INVITE=false` for the pass.
 
 **Browser state survives `down -v`.** Local vaults (`localStorage`), `.kvault`
-backups and TrustKeys vaults made before crypto-core 4.0.0 do not open any more,
+backups and TrustKeys vaults made before crypto-core 5.0.0 do not open any more,
 and refuse with "older Kryptolog version". The SPA's login screen offers to
 remove an old local vault ("Remove the old vault and start fresh"); clear
 TrustKeys' storage (or use fresh browser profiles) and recreate. Proof files
-exported before 4.0.0 are refused by Proof Audit the same way.
+exported before 5.0.0 are refused by Proof Audit the same way.
 
-**A database that held 3.x identities refuses the 4.0.0 migration** — on
-purpose: the new keys exist only in browsers, so there is nothing to migrate
+**A database that held 4.x identities refuses the 5.0.0 migration**
+(`c5d6e7f8a9b0`, as 3.x data refused 4.0.0's) — on purpose: the new keys exist only in browsers, so there is nothing to migrate
 to. `down -v` above is the way through; on a database worth keeping, back it
 up first (`scripts/backup.sh`).
 
@@ -398,9 +399,8 @@ belongs to a different identity and is none of this deletion's business.
 
 ## 8. A contact's key changes
 
-Nothing in the app rotates an encryption key, so a real change comes from
-outside it — which is the point: a directory serving a different key is the
-attack. Simulate what the client reacts to, A's pinned key for B no longer
+This is the change nobody announced — a directory serving a different key is
+the attack — so it comes from outside the app (a signed rotation is §8b). Simulate what the client reacts to, A's pinned key for B no longer
 matching B's: as A, in devtools → Application → Local Storage, edit
 `kryptolog_trusted_keys`, change the `key` recorded under B's address to any
 other string, and reopen the conversation with B.
@@ -415,6 +415,41 @@ other string, and reopen the conversation with B.
 **Proves:** the audit 2026-10-12 K-05 fix as a user meets it.
 `frontend/src/test/keyChange.test.jsx` covers the gate itself; what a browser
 adds is whether a person understands the banner and what to do.
+
+## 8b. A contact replaces their key (crypto-core 5.1.0)
+
+A and B with history: a DM both ways, and a secret A shared with B. **Do the
+TrustKeys side by hand** — the automated suite rotates a local vault only.
+
+As **B**: your name (upper right) → *Encryption key* → "Replace my encryption
+key" → "Replace the key". With TrustKeys an approval window says a new key is
+created and the current one kept retired; a local vault asks for its password.
+
+- A toast says the key was replaced and how many keys moved to it (here, 1:
+  the grant on A's secret). The section shows a new key id and one retired key.
+- Sign out and back in as B (a fresh session, so nothing is cached): A's
+  secret still opens, and the DM history still decrypts — the older messages
+  with the retired key.
+
+As **A**, without reloading: open the conversation with B.
+
+- The red banner now says **B replaced their encryption key on <date>**, that
+  a signed rotation leads from the key A confirmed, and that it cannot rule
+  out B's identity key being stolen. **Sending is still refused** until "I
+  verified it" — compare the safety number with B's.
+- After confirming, a message to B arrives and decrypts on B's side.
+
+Then as **B**, the retired key → "Destroy": in the profile section with a
+local vault, in the extension's own Dashboard with TrustKeys (a site cannot
+ask for it). Older messages from before the rotation now fail to decrypt
+— which is what the warning said. A's secret still opens: it was re-wrapped.
+
+**Proves:** that the re-wrap reached the server under the new key, that the
+retired key is what keeps history readable, and that a rotation is explained to
+the other side without being trusted by it (K-05 unchanged).
+`backend/tests/test_key_rotation.py`, `frontend/src/test/keyRotation*.test.jsx`
+and `trustkeys/test/keyRotation.test.js` cover the rules; what a browser adds is
+the two approval windows and whether A understands the banner.
 
 ## 9. Deleting a conversation, both ways
 

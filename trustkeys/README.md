@@ -3,7 +3,7 @@
 TrustKeys is a quantum-resistant browser extension designed to secure interactions against future quantum computing threats. Every key it holds is **hybrid**: a post-quantum algorithm paired with a classical one, so each holds while either half does.
 
 > **Status**: Beta (Production Functional)
-> **Algorithms**: composite ML-DSA-65 + Ed25519 signatures, X-Wing (ML-KEM-768 + X25519) encryption — crypto-core 4.0.0
+> **Algorithms**: composite ML-DSA-65 + ECDSA P-384 signatures, ML-KEM-768 + ECDH P-384 encryption under ETSI CatKDF — crypto-core 5.1.0
 > **Role**: Primary PQC Authentication Provider for Kryptolog.
 
 ---
@@ -11,16 +11,18 @@ TrustKeys is a quantum-resistant browser extension designed to secure interactio
 ## Architecture & Security
 
 ### 1. Hybrid Post-Quantum Algorithms
-NIST category 3 throughout, the level ANSSI asks for:
-- **Encryption**: X-Wing (ML-KEM-768 + X25519, draft-connolly-cfrg-xwing-kem) via
-  `@noble/post-quantum`
-  - The shared secret stays secret while either ML-KEM-768 or X25519 holds.
-  - It is run through **HKDF-SHA-384** (with a fixed context label) to derive the
-    **AES-256-GCM** key that encrypts the message/session payload; the envelope's
-    version and algorithm id are its associated data.
-- **Signing**: composite ML-DSA-65 + Ed25519 (`id-MLDSA65-Ed25519-SHA512`,
-  draft-ietf-lamps-pq-composite-sigs) via `@noble/post-quantum` and `@noble/curves`
-  - A signature is valid only if both halves verify.
+NIST category 3 throughout, on the mechanisms ANSSI's 2026 guidance and the ECCG
+Agreed Cryptographic Mechanisms accept (the matrix is in `../THREAT_MODEL.md`):
+- **Encryption**: ML-KEM-768 + ECDH P-384 combined by ETSI TS 103 744 **CatKDF**
+  (`HKDFwSHA384_P384_ML-KEM-768`) via `@noble/post-quantum` and `@noble/curves`
+  - The shared secret stays secret while either ML-KEM-768 or ECDH P-384 holds.
+  - CatKDF's output is the **AES-256-GCM** key that encrypts the message/session
+    payload; the envelope's version, algorithm id and recipient key id (`kid`) are
+    its associated data.
+- **Signing**: composite ML-DSA-65 + ECDSA P-384 (`MLDSA65-ECDSA-P384-SHA512`,
+  draft-ietf-lamps-pq-composite-sigs-19) via `@noble/post-quantum` and `@noble/curves`
+  - A signature is valid only if both halves verify; the ECDSA half must be low-S,
+    canonical DER, so a signature has exactly one encoding.
 - **Address**: the SHA-384 of the identity key, 96 hex characters — the account's id.
 
 These primitives are not implemented in the extension directly: they live in the
@@ -28,7 +30,7 @@ shared **`@kryptolog/crypto-core`** package (see below), which the extension and
 Kryptolog web app both consume so their wire/storage formats stay byte-identical.
 
 ### Shared crypto core (`@kryptolog/crypto-core`)
-All client-side crypto (composite signatures, X-Wing, session-key wrapping, the
+All client-side crypto (composite signatures, the CatKDF KEM, session-key wrapping, the
 AES-GCM vault, domain separation) lives in **one** versioned package at
 [`../packages/crypto-core`](../packages/crypto-core), consumed by both this extension
 and the web app via a `file:` dependency. This replaced the two formerly duplicated
@@ -46,7 +48,7 @@ by a comment.
 - **Zero-Knowledge Architecture**: Your private keys never leave the extension.
 - **Encryption**: The vault is encrypted at rest using **AES-GCM (256-bit)**.
 - **Key Derivation**: Your password derives the encryption key using **Argon2id** (46 MiB, one pass — the parameters travel in the vault, so they can be raised without a format change). The password must be at least 12 characters and not a sequence or a well-known password; the same rule applies to backup passphrases.
-- **Format**: crypto-core 4.x — accounts stored as their seeds, every public value re-derived and checked on unlock. A vault or backup made before 4.0.0 is refused by name ("older Kryptolog version", on the unlock screen too); recreate it.
+- **Format**: crypto-core 5.x — accounts stored as their seeds, every public value re-derived and checked on unlock. An account keeps up to 32 **retired** encryption keys after a rotation, to read what was sealed to them; the Dashboard lists them and can destroy one. A vault or backup made before 5.0.0 is refused by name ("older Kryptolog version", on the unlock screen too); recreate it.
 - **Memory-Only Decryption**: Private keys are decrypted into memory *only* when the vault is unlocked.
 - **Session Persistence**: The vault remains unlocked for **1 Hour** of inactivity, via a session secret in `chrome.storage.session` (in-memory), which is **automatically wiped** when the browser is closed.
 
@@ -168,12 +170,12 @@ const account = await window.trustkeys.getAccount();
 // Returns {
 //   name: "My PQC Key",
 //   address: "hex...",              // the Kryptolog address: SHA-384 of the identity key
-//   identityPublicKey: "hex...",    // composite ML-DSA-65 + Ed25519 key
-//   encryptionPublicKey: "hex..."   // X-Wing key
+//   identityPublicKey: "hex...",    // composite ML-DSA-65 + ECDSA P-384 key
+//   encryptionPublicKey: "hex..."   // ML-KEM-768 + P-384 (CatKDF) key
 // }
 ```
 
-### Digital Signatures (composite ML-DSA-65 + Ed25519)
+### Digital Signatures (composite ML-DSA-65 + ECDSA P-384)
 
 #### `sign(message)`
 Sign a document with the active account's identity key. Accepts a
@@ -226,7 +228,24 @@ const signature = await window.trustkeys.signMessage(messageDomainPayload);
 // Returns a base64 signature. (Used by the messenger to authenticate messages.)
 ```
 
-### Encryption (X-Wing + AES)
+### Replacing the encryption key (crypto-core 5.1.0)
+
+#### `rotateEncryptionKey({ ts })`
+Make a new encryption key current and keep the old one retired. The approval
+window says so; on approval the extension rotates, **saves the vault**, and only
+then returns what the page publishes — `{ encryptionPublicKey, oldKid, newKid,
+attestation, signature }`, the last a signed `key-rotation` record. `ts` must be
+within ten minutes of the extension's clock.
+
+#### `revertEncryptionKeyRotation({ newKid })`
+Undo the rotation just made, when the server refused it: only from the page that
+asked, only for that `newKid`, within five minutes. The unpublished key is kept
+retired, never dropped, so a mistaken call destroys nothing.
+
+Destroying a retired key is not offered to pages: it is the user's decision, from
+the Dashboard.
+
+### Encryption (ML-KEM-768 + P-384 + AES)
 
 #### `encrypt(message, [publicKey])`
 Encrypt data. If `publicKey` is omitted, encrypts for the active account (self).
@@ -279,7 +298,7 @@ const keys = await window.trustkeys.unwrapManySessionKeys([blob1, blob2, blob3])
 - **Export / Back up Keys**: Settings > Export / Back up Keys. Requires the vault password and exports the **active account**. Two formats:
   - **Encrypted `.kvault`** (recommended): a passphrase-protected backup, importable on another device or by the Kryptolog web app (Receive → Backup file). Uses the shared `encryptVault` format (both apps call the same `@kryptolog/crypto-core` implementation, so the blob is byte-compatible with the SPA).
   - **Plain JSON**: unencrypted private keys — **store securely**.
-  (Export is scoped to the active account: extension account ids are random UUIDs, so a multi-account export would lose the active selection on import.)
+  (Export is scoped to the active account.)
 - **Import Keys**: Settings > Import Keys (JSON). Restores accounts from a plaintext JSON backup. Merges new accounts into the existing vault.
 - **Manage Trusted Sites**: Settings > Manage Trusted Sites. View/add/remove authorized origins and toggle each site's "Allow silent message signing" capability. In a development build (`npm run build:dev`) localhost and 127.0.0.1 are trusted by default; a production build injects into no page until you add it here.
 
@@ -292,8 +311,8 @@ const keys = await window.trustkeys.unwrapManySessionKeys([blob1, blob2, blob3])
 | UI | React 18, Manifest V3 |
 | Build | Vite + @crxjs/vite-plugin |
 | Crypto core | `@kryptolog/crypto-core` (shared with the web app, `file:` dep) |
-| PQC Encryption | @noble/post-quantum — X-Wing (ML-KEM-768 + X25519) |
-| PQC Signatures | @noble/post-quantum + @noble/curves — composite ML-DSA-65 + Ed25519 |
+| PQC Encryption | @noble/post-quantum + @noble/curves — ML-KEM-768 + ECDH P-384, ETSI CatKDF |
+| PQC Signatures | @noble/post-quantum + @noble/curves — composite ML-DSA-65 + ECDSA P-384 |
 | Vault | AES-256-GCM under Argon2id |
 | Dynamic Scripts | chrome.scripting API |
 

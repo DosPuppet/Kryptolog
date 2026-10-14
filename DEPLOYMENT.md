@@ -139,6 +139,21 @@ A malformed `KRYPTOLOG_MESSAGE_RETENTION_DAYS` refuses to start in every mode.
   `users.encryption_key_id`), which is what lets the next change of KEM be a
   rotation of keys instead of another wipe. Deploy the SPA, the extension and
   the server together.
+- **crypto-core 5.1.0 is additive**: encryption-key rotation. It runs one
+  migration (`d6e7f8a9b0c1`, the `encryption_key_rotations` table) and changes
+  no stored format, so it deploys over 5.0.0 data. Users replace their key from
+  the profile modal (their name, upper right) or, with TrustKeys, approve it in
+  the extension; retired keys are listed there too, and destroying one is final
+  for whatever was sealed to it and not re-wrapped — chiefly older messages.
+  The endpoint is limited to 5 rotations per hour per client; every rotation
+  and re-wrap is in the audit trail (`key.rotate`, `key.rewrap`).
+- **What a future change of KEM looks like now**: ship a release whose registry
+  has the new suite as the active one, then have users rotate. Content sealed to
+  the old suite is re-wrapped where it can be and readable with the retired key
+  where it cannot; the old suite stays in the registry, decapsulation only,
+  until no account can hold a key under it. That is a deliberate, scheduled
+  removal — never a fallback for writing. A change of **signature** suite is
+  still a cutover: an address is the hash of the identity key.
 - **TrustKeys production build** injects into no site by default: each user adds
   the SPA's HTTPS origin under Settings → Manage Trusted Sites. The `build:dev`
   variant (localhost trusted, silent chat signing) is for development only.
@@ -154,8 +169,8 @@ account can do, not what all of them can.
 ### Native dependencies
 
 None to build. Python packages come from the hashed lock:
-`pip install --require-hashes -r backend/requirements.txt`. ML-DSA-65 and Ed25519
-come from the `cryptography` wheel and the OpenSSL it bundles; the backend refuses
+`pip install --require-hashes -r backend/requirements.txt`. ML-DSA-65 and ECDSA
+P-384 come from the `cryptography` wheel and the OpenSSL it bundles; the backend refuses
 to import on a `cryptography` without them (older than 48, or a source build
 against OpenSSL < 3.5), rather than failing every login later. Wheels exist for Linux
 x86_64/aarch64; on another platform the lock falls back to a source build.

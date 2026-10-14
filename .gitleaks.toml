@@ -70,7 +70,8 @@ regexes = [
   # noble_xwing_shared_secret / openssl_xwing_shared_secret — what the X-Wing
   # ciphertexts in the same file decapsulate to under its xwing_secret_key
   # (40..5f, another patterned test seed). Anyone can recompute them from the
-  # file with backend/tests/xwing_ref.decapsulate, which is what the suites do.
+  # file with backend/tests/xwing_ref.decapsulate, which is what the suites did.
+  # Both are gone since crypto-core 5.0.0 (lot 12e); history still holds them.
   # `+` is escaped: these are regexes.
   '''qxSMynTH/LrQNh5GOR4IqVdu5AHovjtToduqdvOhdjs=''',
   '''NT2g7HheWcXmCaX6meos3fHCt5SkP3jS\+PF/KQMvmO8=''',

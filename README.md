@@ -1,6 +1,6 @@
 # Kryptolog
 
-A secure secret management and document signing platform built on **hybrid post-quantum cryptography** — composite ML-DSA-65 + Ed25519 signatures and X-Wing (ML-KEM-768 + X25519) key encapsulation, at the security level ANSSI asks for (NIST category 3).
+A secure secret management and document signing platform built on **hybrid post-quantum cryptography** — composite ML-DSA-65 + ECDSA P-384 signatures and ML-KEM-768 + ECDH P-384 key encapsulation combined by ETSI CatKDF — NIST category 3, on the mechanisms ANSSI's 2026 guidance and the ECCG Agreed Cryptographic Mechanisms accept (see [THREAT_MODEL.md](THREAT_MODEL.md)).
 
 For how the pieces fit together read [ARCHITECTURE.md](ARCHITECTURE.md); for what is and is not protected, [THREAT_MODEL.md](THREAT_MODEL.md); before exposing it to anyone, [DEPLOYMENT.md](DEPLOYMENT.md).
 
@@ -54,15 +54,15 @@ Two app processes run locally — the FastAPI API and the Vite dev server — on
 
 | Feature | Description |
 |---------|-------------|
-| **Post-Quantum Authentication** | TrustKeys / local-vault composite (ML-DSA-65 + Ed25519) login-challenge signatures, bound to this server's origin and deployment id; the server then issues a 30-minute HS256 session JWT, revocable (sign-out ends every session and hangs up their sockets) |
-| **Hybrid Post-Quantum Cryptography** | Composite ML-DSA-65 + Ed25519 signatures (IETF `id-MLDSA65-Ed25519-SHA512`) and X-Wing (ML-KEM-768 + X25519) — each holds while either half does — via `@noble/post-quantum` and `@noble/curves` (clients) and `pyca/cryptography` on OpenSSL (server). An address is the SHA-384 of the identity key |
-| **Secret Vault** | E2EE secrets with hybrid encryption (X-Wing KEM + AES-GCM) — **including entry titles** (the server stores only ciphertext names) |
+| **Post-Quantum Authentication** | TrustKeys / local-vault composite (ML-DSA-65 + ECDSA P-384) login-challenge signatures, bound to this server's origin and deployment id; the server then issues a 30-minute HS256 session JWT, revocable (sign-out ends every session and hangs up their sockets) |
+| **Hybrid Post-Quantum Cryptography** | Composite ML-DSA-65 + ECDSA P-384 signatures (IETF `MLDSA65-ECDSA-P384-SHA512`) and ML-KEM-768 + ECDH P-384 under ETSI TS 103 744 CatKDF — each holds while either half does — via `@noble/post-quantum` and `@noble/curves` (clients) and `pyca/cryptography` on OpenSSL (server). An address is the SHA-384 of the identity key. Encryption keys can be **rotated**: what the account holds is re-wrapped to the new key, older history stays readable with the retired one |
+| **Secret Vault** | E2EE secrets with hybrid encryption (CatKDF KEM + AES-GCM) — **including entry titles** (the server stores only ciphertext names) |
 | **File Vault** | Chunked encrypted file upload/download (up to 50 MB) |
-| **Secure Sharing** | Re-wrap session keys for any recipient (X-Wing) |
+| **Secure Sharing** | Re-wrap session keys for any recipient (ML-KEM-768 + P-384) |
 | **Timebomb Access** | Share secrets with self-destruct timers (ephemeral grants); one grant per person, re-sharing replaces it |
 | **Signed Documents** | Create, share, and verify digitally signed documents (sign-then-encrypt) |
 | **Multisig Workflows** | Configurable **N-of-M approval quorum** — an approval workflow, not a cryptographic threshold: every listed signer holds the secret (each needs a wrapped key, so nobody approves blind), and the **server** withholds it from the recipients until any N of the M signers have signed the hash of the stored ciphertext (N = M gives classic N-of-N). Recipients' keys are stored withheld at creation or supplied by the completing signer; any signer can **reject** to block the workflow, after which the owner can **delete** it. |
-| **E2EE Messenger** | Post-quantum end-to-end encryption: each sender's AES-256-GCM session key, encapsulated with X-Wing for every recipient and **rotated after 100 messages or 24 h** (and on group membership changes); **per-message composite signatures over the content, its position and its time, verified client-side** — authorship, replays, gaps and reordering are detected, and an unverifiable message is hidden until the reader chooses to see it. Content-blind relay. |
+| **E2EE Messenger** | Post-quantum end-to-end encryption: each sender's AES-256-GCM session key, encapsulated with ML-KEM-768 + P-384 for every recipient and **rotated after 100 messages or 24 h** (and on group membership changes); **per-message composite signatures over the content, its position and its time, verified client-side** — authorship, replays, gaps and reordering are detected, and an unverifiable message is hidden until the reader chooses to see it. Content-blind relay. |
 | **Group Channels** | Multi-user encrypted group chat with owner/admin/member roles; **session key rotates on membership change** (removed members can't read future messages). |
 | **Peer Key Verification** | Every encryption key carries a **mandatory self-signed attestation** (signed by the identity key), verified client-side before anything is encrypted to it — a substituted key fails. Each conversation shows a **safety number**, and a contact's key that changed since you last confirmed it **stops sending** until you verify and accept it. The trusted keys travel with your backups. |
 | **Push Notifications** | Web Push API (VAPID) for real-time alerts; sent off the request path, at most ten subscriptions per account |
@@ -74,7 +74,7 @@ Two app processes run locally — the FastAPI API and the Vite dev server — on
 
 ### A note on the messenger's security properties
 
-The messenger uses **hybrid encryption** (an X-Wing encapsulation per session, used to
+The messenger uses **hybrid encryption** (an ML-KEM-768 + P-384 encapsulation per session, used to
 wrap a fresh AES-256-GCM session key), a **content-blind server** that only ever sees
 ciphertext, and **per-message composite signatures**: every DM and group message is signed by
 the sender and **verified client-side** against the identity key the sender's address names,
@@ -157,7 +157,7 @@ source ../.venv/bin/activate
 pip install --require-hashes -r requirements.txt   # hashed lock, compiled from requirements.in
 ```
 
-> ML-DSA-65 and Ed25519 come from the `cryptography` wheel, which bundles its own
+> ML-DSA-65 and ECDSA P-384 come from the `cryptography` wheel, which bundles its own
 > OpenSSL, so nothing is compiled. The backend refuses to import on a
 > `cryptography` without them (older than 48, or built against OpenSSL < 3.5).
 
@@ -334,12 +334,11 @@ body, and the PQC gate — with real composite signatures on every signature-gat
 path (`@pytest.mark.real_signatures`). `alembic check`, `ruff check` and
 `ruff format --check` are blocking gates too.
 
-The hybrid gate (`backend/tests/test_hybrid_primitives.py`) runs the IETF drafts' own
-test vectors for the composite signature and X-Wing through OpenSSL, and checks
-OpenSSL against the clients' noble in both directions through
-`tests/fixtures/hybrid_interop.json` — signatures, decapsulation, the same composite key
-from the same seed, a golden address, and the Ed25519 edge cases where the two libraries
-would otherwise disagree. crypto-core's `test/hybrid.test.js` runs the same files under
+The hybrid gate (`backend/tests/test_hybrid_primitives.py`) runs the composite draft's
+own test vectors and ETSI TS 103 744's CatKDF vectors through OpenSSL, refuses high-S and
+non-canonical DER ECDSA halves and off-curve points, and checks OpenSSL against the
+clients' noble in both directions through `tests/fixtures/hybrid_interop.json` —
+signatures, decapsulation, the same keys from the same seeds, and a golden address. crypto-core's `test/hybrid.test.js` runs the same files under
 noble. `backend/tests/test_pqc.py` covers the login verifier and the (classical HS256)
 JWT issue/verify/tamper/expiry paths.
 
@@ -419,7 +418,7 @@ alembic downgrade -1 # step back one revision
 | Validation | Pydantic 2.14 |
 | ASGI server | uvicorn (standard) |
 | Rate limiting | slowapi 0.1.10 — in-memory by default; Redis-backed when `REDIS_URL` is set |
-| Post-quantum crypto | pyca/cryptography 50 on its bundled OpenSSL (ML-DSA-65 + Ed25519, composite) — verifies every signature the server relies on |
+| Post-quantum crypto | pyca/cryptography 50 on its bundled OpenSSL (ML-DSA-65 + ECDSA P-384, composite) — verifies every signature the server relies on |
 | JWT | PyJWT 2.15 — HS256 (server-issued, server-verified) |
 
 Exact versions, with hashes, are in `backend/requirements.txt`, compiled from `backend/requirements.in`.
@@ -433,7 +432,7 @@ Exact versions, with hashes, are in `backend/requirements.txt`, compiled from `b
 | Routing | react-router-dom 7 |
 | Styling | TailwindCSS 4 |
 | Icons | lucide-react |
-| PQC crypto | @kryptolog/crypto-core (@noble/post-quantum + @noble/curves: composite ML-DSA-65 + Ed25519, X-Wing) |
+| PQC crypto | @kryptolog/crypto-core (@noble/post-quantum + @noble/curves: composite ML-DSA-65 + ECDSA P-384, ML-KEM-768 + P-384 CatKDF) |
 | QR (key transfer) | qrcode |
 
 ### TrustKeys Extension
@@ -442,7 +441,7 @@ Exact versions, with hashes, are in `backend/requirements.txt`, compiled from `b
 |-----------|------------|
 | UI | React 18, Manifest V3 |
 | Build | Vite + @crxjs/vite-plugin |
-| PQC | @kryptolog/crypto-core (@noble/post-quantum + @noble/curves: composite ML-DSA-65 + Ed25519, X-Wing) |
+| PQC | @kryptolog/crypto-core (@noble/post-quantum + @noble/curves: composite ML-DSA-65 + ECDSA P-384, ML-KEM-768 + P-384 CatKDF) |
 | Vault | AES-256-GCM under Argon2id |
 
 ---
@@ -561,4 +560,4 @@ up for background message alerts to work.
 > - **Always back up your keys regularly** (Manage Vault → Transfer / Back up → encrypted `.kvault` file)
 > - To move to a new device, use Manage Vault → Transfer / Back up → Send to another device (QR / one-time code)
 > - For maximum security, use the TrustKeys Extension
-> - Vaults and backups made before crypto-core 4.0.0 (October 2026) no longer open, and say so: recreate them
+> - Vaults and backups made before crypto-core 5.0.0 (October 2026) no longer open, and say so: recreate them
