@@ -22,6 +22,15 @@ export const usePartnerDirectory = ({ token }) => {
     const cache = useRef({});
     const inFlight = useRef({});
 
+    /**
+     * Drop what this session cached for `address` (crypto-core 5.1.0): a
+     * contact who replaced their encryption key is the one case where the
+     * cached record is no longer the truth, and the next resolve must ask.
+     */
+    const forgetPartner = (address) => {
+        delete cache.current[String(address || '').toLowerCase()];
+    };
+
     /** The directory record for `address`, or null if it can't be fetched. */
     const resolvePartner = (address) => {
         const addr = String(address || '').toLowerCase();
@@ -44,5 +53,5 @@ export const usePartnerDirectory = ({ token }) => {
         return pending;
     };
 
-    return { resolvePartner };
+    return { resolvePartner, forgetPartner };
 };

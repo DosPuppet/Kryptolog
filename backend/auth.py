@@ -11,7 +11,7 @@ import jwt
 from cryptography.exceptions import InvalidSignature, UnsupportedAlgorithm
 
 import config
-from security.crypto_validation import KEM_ALG, SIGNATURE_ALG, is_valid_address
+from security.crypto_validation import KEM_ALG, SIGNATURE_ALG, is_valid_address, is_valid_key_id
 
 logger = logging.getLogger("kryptolog.auth")
 
@@ -196,6 +196,29 @@ def encryption_key_attestation_message(address: str, encryption_public_key: str)
     return _domain_separate(
         _CTX_KEY_ATTESTATION,
         f"address={address}\nencryption-alg={KEM_ALG}\nencryption={encryption_public_key}",
+    )
+
+
+_CTX_KEY_ROTATION = "key-rotation"
+
+
+def key_rotation_message(address: str, old_kid: str, new_kid: str, ts: int) -> str:
+    """The bytes an identity signs to replace its encryption key (crypto-core
+    5.1.0 `keyRotationBody`): the key with id `old_kid` is replaced by the
+    `KEM_ALG` key with id `new_kid`, as of the client's `ts` (ms).
+
+    Its own context, so the extension never signs it silently. Kids rather than
+    keys, so the body stays short; the new key itself is attested separately.
+    Must be byte-identical to the clients'."""
+    if not is_valid_address(address):
+        raise NonCanonicalSignedBody("key rotation: invalid address")
+    if not (is_valid_key_id(old_kid) and is_valid_key_id(new_kid)) or old_kid == new_kid:
+        raise NonCanonicalSignedBody("key rotation: invalid key ids")
+    if not isinstance(ts, int) or isinstance(ts, bool) or not 0 <= ts < 2**53:
+        raise NonCanonicalSignedBody("key rotation: invalid timestamp")
+    return _domain_separate(
+        _CTX_KEY_ROTATION,
+        f"address={address}\nold-kid={old_kid}\nnew-kid={new_kid}\nnew-alg={KEM_ALG}\nts={ts}",
     )
 
 

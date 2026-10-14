@@ -94,6 +94,17 @@ const Dashboard = () => {
     }
   };
 
+  // Destroying a key a rotation retired (crypto-core 5.1.0): the user's call,
+  // made here and nowhere else. What was sealed to it and never re-wrapped —
+  // older message history — becomes unreadable for good.
+  const destroyRetiredKey = (kid) => {
+    if (!window.confirm('Destroy this retired key? Anything still sealed to it, older message history above all, becomes unreadable for good.')) return;
+    chrome.runtime.sendMessage({ type: 'DESTROY_RETIRED_ENCRYPTION_KEY', kid }, (res) => {
+      if (res && res.success) fetchActiveAccount();
+      else alert(`Destroy failed: ${res?.error}`);
+    });
+  };
+
   const lockVault = () => {
     chrome.runtime.sendMessage({ type: 'LOCK' }, () => {
       window.location.reload();
@@ -257,6 +268,18 @@ const Dashboard = () => {
             </div>
             <div className="key-box">{activeAccount.identityPublicKey}</div>
           </div>
+
+          {activeAccount.retiredEncryption?.length > 0 && (
+            <div className="key-section">
+              <div className="key-header"><span>Retired encryption keys (kept to read older history)</span></div>
+              {activeAccount.retiredEncryption.map((key) => (
+                <div key={key.kid} className="key-header">
+                  <span className="key-box">{key.kid.slice(0, 12)}…{key.retiredAt ? ` · ${new Date(key.retiredAt).toLocaleDateString()}` : ''}</span>
+                  <button onClick={() => destroyRetiredKey(key.kid)}>DESTROY</button>
+                </div>
+              ))}
+            </div>
+          )}
         </div>
       ) : (
         <div className="empty-state">No Active Account</div>

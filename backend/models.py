@@ -1,4 +1,5 @@
 from sqlalchemy import (
+    BigInteger,
     Boolean,
     CheckConstraint,
     Column,
@@ -175,6 +176,24 @@ class User(Base):
 
     secrets = relationship("Secret", back_populates="owner")
     access_grants = relationship("AccessGrant", back_populates="grantee")
+    # Newest first; "selectin" so a directory page loads every listed user's
+    # records in one more query, not one per user.
+    key_rotations = relationship(
+        "EncryptionKeyRotation",
+        order_by="desc(EncryptionKeyRotation.id)",
+        lazy="selectin",
+        viewonly=True,
+    )
+
+    # How many rotation records the directory serves with an identity: enough
+    # to chain a contact's pinned key forward across a few rotations, bounded
+    # so the record stays small. A longer gap reads as a plain key change.
+    DIRECTORY_ROTATIONS = 8
+
+    @property
+    def recent_key_rotations(self):
+        """What `schemas.UserResponse.encryption_key_rotations` serves."""
+        return self.key_rotations[: self.DIRECTORY_ROTATIONS]
 
 
 class Secret(Base):
@@ -475,3 +494,34 @@ class ConversationClear(Base):
     conversation = Column(String, nullable=False)
     cleared_through_id = Column(Integer, nullable=False)
     cleared_at = Column(DateTime, default=utcnow_naive, nullable=False)
+
+
+class EncryptionKeyRotation(Base):
+    """One signed "my encryption key K1 is replaced by K2" (crypto-core 5.1.0).
+
+    Written by POST /account/encryption-key/rotate, which accepts a rotation
+    only FROM the key the server holds, so a record cannot be replayed to roll
+    a key back. Served with the identity in the directory so contacts can say
+    why a key changed — a rotation, dated and signed, rather than a bare
+    "changed" — while still stopping a send until the new safety number is
+    checked (K-05: the record is signed by the identity key, like the
+    attestation, so it adds nothing against a thief of that key).
+
+    Kept on a "leave" with everything else, removed by an "erase".
+    """
+
+    __tablename__ = "encryption_key_rotations"
+    __table_args__ = (
+        CheckConstraint("old_kid ~ '^[0-9a-f]{32}$'", name="ck_key_rotations_old_kid"),
+        CheckConstraint("new_kid ~ '^[0-9a-f]{32}$'", name="ck_key_rotations_new_kid"),
+    )
+
+    id = Column(Integer, primary_key=True)
+    user_address = Column(String, ForeignKey("users.address"), nullable=False, index=True)
+    old_kid = Column(String(32), nullable=False)
+    new_kid = Column(String(32), nullable=False)
+    alg = Column(String(64), nullable=False)
+    # The CLIENT's clock in ms, as signed — part of the statement, not ours.
+    ts = Column(BigInteger, nullable=False)
+    signature = Column(Text, nullable=False)
+    created_at = Column(DateTime, default=utcnow_naive, nullable=False)

@@ -7,7 +7,7 @@
 import { sha384Hex, canonicalJson } from './encoding.js';
 // The attestation helpers below sign and verify, so this module leans on pqc.js.
 // One-directional: pqc.js does not import signing.js, so there is no cycle.
-import { signMessage, KEM_ALG } from './pqc.js';
+import { signMessage, KEM_ALG, isEncryptionKeyId } from './pqc.js';
 import { verifyIdentitySignature, isAddress } from './identity.js';
 
 // --- Domain separation (audit H1) ---
@@ -26,6 +26,7 @@ export const SIGNING_CONTEXT = Object.freeze({
     KEY_ATTESTATION: 'key-attestation',
     ACCOUNT_DELETION: 'account-deletion',
     CONVERSATION_ERASE: 'conversation-erase',
+    KEY_ROTATION: 'key-rotation',
 });
 const DS_HEADER = 'Kryptolog Signed Message v1';
 export const domainSeparate = (context, body) => `${DS_HEADER}\ncontext=${context}\n${body}`;
@@ -287,6 +288,67 @@ export const verifyEncryptionKeyAttestation = async ({
         return false;
     }
     return verifyIdentitySignature({ address, identityPublicKey, message, signature: attestation });
+};
+
+// --- Encryption-key rotation (crypto-core 5.1.0, lot 12f) ---
+// An identity replacing its encryption key says so, signed: "the key with id
+// <old-kid> is replaced by the key with id <new-kid>, a <new-alg> key, as of
+// <ts>". The server takes a rotation only from the current key (old-kid must
+// be the key it holds), so a recorded rotation cannot be replayed to roll a
+// key back; contacts read the record to say WHY a key changed.
+//
+// What it is NOT: proof that the owner, rather than a thief of the identity
+// key, made the change — it is signed by the same key as the attestation, so
+// it adds no assurance against that. That is why a rotated key still stops a
+// sender until its new safety number is checked (K-05 unchanged, decided
+// 2026-10-14); the record only replaces "this key changed" by "X rotated
+// their key on <date>".
+//
+// Its own context, outside `message`, so the extension never signs it
+// silently, and kids rather than keys so the body stays short.
+export const keyRotationBody = ({ address, oldKid, newKid, ts }) => {
+    need(isAddress(address), 'address');
+    need(isEncryptionKeyId(oldKid), 'old key id');
+    need(isEncryptionKeyId(newKid), 'new key id');
+    need(oldKid !== newKid, 'rotation (the same key twice)');
+    need(isCount(ts), 'timestamp');
+    return domainSeparate(SIGNING_CONTEXT.KEY_ROTATION,
+        `address=${address}\nold-kid=${oldKid}\nnew-kid=${newKid}\nnew-alg=${KEM_ALG}\nts=${ts}`);
+};
+
+export const signKeyRotation = async (rotation, identitySeedHex) =>
+    signMessage(keyRotationBody(rotation), identitySeedHex);
+
+// A rotation record as the directory serves it ({ old_kid, new_kid, alg, ts,
+// signature }), verified as the identity `address` with the key it names.
+// False for anything malformed, a foreign suite included.
+export const verifyKeyRotation = async ({ address, identityPublicKey, rotation }) => {
+    if (!rotation || rotation.alg !== KEM_ALG) return false;
+    let message;
+    try {
+        message = keyRotationBody({ address, oldKid: rotation.old_kid, newKid: rotation.new_kid, ts: rotation.ts });
+    } catch {
+        return false;
+    }
+    return verifyIdentitySignature({ address, identityPublicKey, message, signature: rotation.signature });
+};
+
+/**
+ * Walk verified rotations from `fromKid` to `toKid`: the list of records that
+ * chain one key into the next, or null if they do not reach. Every record is
+ * verified; one that fails ends the walk. Bounded by the number of records.
+ */
+export const rotationChain = async ({ address, identityPublicKey, rotations, fromKid, toKid }) => {
+    const byOld = new Map((rotations ?? []).map((r) => [r.old_kid, r]));
+    const chain = [];
+    for (let kid = fromKid; kid !== toKid; ) {
+        const next = byOld.get(kid);
+        if (!next || chain.includes(next)) return null;
+        if (!(await verifyKeyRotation({ address, identityPublicKey, rotation: next }))) return null;
+        chain.push(next);
+        kid = next.new_kid;
+    }
+    return chain;
 };
 
 // Safety-number fingerprint of an identity + its encryption key, for manual

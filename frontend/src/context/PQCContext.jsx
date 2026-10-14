@@ -32,7 +32,7 @@ export const usePQC = () => {
 };
 
 export const PQCProvider = ({ children }) => {
-    const { login: authLogin, logout: authLogout, token } = useAuth();
+    const { login: authLogin, logout: authLogout, token, updateUser } = useAuth();
     const [pqcAccount, setPqcAccount] = useState(null); // this identity's ADDRESS
     // The key that address names (crypto-core 3.3.0): the same string until
     // 4.0.0 makes the address a hash of it. Set only through adoptIdentity.
@@ -470,6 +470,144 @@ export const PQCProvider = ({ children }) => {
         { forcePrompt: true }
     );
 
+    // --- Replacing the encryption key (crypto-core 5.1.0) ---
+    //
+    // The rotation is made and SAVED on the device before anything is
+    // published — the server must never serve a key this device could lose —
+    // then sent. The extension does both halves in its own approval window;
+    // the vault asks for the password every time, as for a deletion, because
+    // here the prompt is the authorization.
+    const rotateKeyLocally = withCustody(
+        ({ ts }) => window.trustkeys.rotateEncryptionKey({ ts }),
+        (password, { ts }) => vaultService.rotateEncryptionKey(password, { ts }),
+        "Enter your vault password to replace your encryption key:",
+        { forcePrompt: true }
+    );
+
+    // Only for a rotation the server REFUSED: the new key was published to
+    // nobody, and left current it would be what the next rotation is signed
+    // from. Never after a network failure — the server may have taken it.
+    const revertKeyLocally = withCustody(
+        ({ newKid }) => window.trustkeys.revertEncryptionKeyRotation({ newKid }),
+        (password, { newKid }) => vaultService.revertEncryptionKeyRotation(password, newKid),
+        "Enter your vault password to undo the key replacement:",
+    );
+
+    /**
+     * Move every key the account holds onto the current encryption key, a page
+     * at a time: open each stale envelope with whichever key its kid names,
+     * reseal the same plaintext to `publicKey`, hand the batch back. An envelope
+     * this device cannot open (sealed to a key it destroyed) is stepped past
+     * and counted, never resealed as something else.
+     */
+    const rewrapStaleKeys = async (publicKey) => {
+        const PAGE = 100;
+        const FILE_KEY = /^[0-9a-f]{64}$/;
+        let unreadable = 0;
+        let rewrapped = 0;
+        for (;;) {
+            const page = await apiFetch(API_ENDPOINTS.ACCOUNT.STALE_WRAPS(unreadable, PAGE), token);
+            if (page.length === 0) break;
+            const envelopes = page.map((w) => { try { return JSON.parse(w.encrypted_key); } catch { return null; } });
+            // Two shapes are held (security/key_rotation.py): a wrapped session
+            // key (`encKey`) and a message envelope around a content key. Each
+            // batch call gets only its own kind — the extension's approval
+            // window says how many it is opening.
+            const opened = new Array(page.length).fill(null);
+            const batch = async (has, open) => {
+                const at = envelopes.flatMap((e, i) => (e && has in e ? [i] : []));
+                if (at.length === 0) return;
+                const results = await open(at.map((i) => envelopes[i]));
+                at.forEach((i, n) => { opened[i] = { has, value: results[n] }; });
+            };
+            await batch('encKey', unwrapManySessionKeys);
+            await batch('content', decryptMany);
+            const items = [];
+            for (let i = 0; i < page.length; i += 1) {
+                let resealed = null;
+                const { has, value } = opened[i] ?? {};
+                if (FILE_KEY.test(value ?? '')) {
+                    resealed = has === 'encKey'
+                        ? await wrapSessionKey(value, publicKey)
+                        : await encrypt(value, publicKey);
+                }
+                if (resealed) {
+                    items.push({ kind: page[i].kind, id: page[i].id, encrypted_key: JSON.stringify(resealed) });
+                } else {
+                    unreadable += 1;
+                }
+            }
+            if (items.length) {
+                await apiFetch(API_ENDPOINTS.ACCOUNT.REWRAP, token, { method: 'PUT', body: { items } });
+                rewrapped += items.length;
+            }
+            if (page.length < PAGE && items.length === 0) break;
+        }
+        return { rewrapped, unreadable };
+    };
+
+    /**
+     * Replace this identity's encryption key, publish it with a signed
+     * rotation, then move everything the account holds onto it. Contacts see a
+     * changed key, explained as a rotation, and must check the new safety
+     * number before they write again (K-05 holds: the rotation is signed by the
+     * identity key, so it proves nothing a thief of that key could not forge).
+     */
+    const rotateEncryptionKey = async () => {
+        const ts = Date.now();
+        const published = await rotateKeyLocally({ ts });
+        const res = await apiFetch(API_ENDPOINTS.ACCOUNT.ROTATE_KEY, token, {
+            method: 'POST',
+            raw: true,
+            body: {
+                encryption_public_key: published.encryptionPublicKey,
+                encryption_key_attestation: published.attestation,
+                ts,
+                signature: published.signature,
+            },
+        }).catch((networkError) => {
+            // The request may have landed: keep the new key (the next sign-in
+            // publishes it either way) rather than risk dropping one the
+            // server now serves.
+            throw new Error(
+                "The new key is on this device, but the server did not confirm it " +
+                `(${networkError.message}). Sign in again to publish it.`
+            );
+        });
+        if (!res.ok) {
+            const detail = (await res.json().catch(() => ({}))).detail || `HTTP ${res.status}`;
+            if (res.status >= 400 && res.status < 500) {
+                await revertKeyLocally({ newKid: published.newKid });
+                throw new Error(`The server refused the new key: ${detail}`);
+            }
+            throw new Error(
+                `The new key is on this device, but the server failed (${detail}). Sign in again to publish it.`
+            );
+        }
+        updateUser(await res.json());
+        setOwnEncryptionKey(published.encryptionPublicKey);
+        return { ...published, ...(await rewrapStaleKeys(published.encryptionPublicKey)) };
+    };
+
+    // What the UI may show of the active identity's retired keys (kid and
+    // dates, never a seed) — vault only, since the extension keeps its own.
+    const listRetiredEncryptionKeys = () =>
+        (!isExtensionAvailable && vaultService.getActiveAccount()?.retiredEncryption) || [];
+
+    // Destroying a RETIRED key, vault only: the extension manages its own keys
+    // in its own window. Whatever was sealed to it and never re-wrapped (old
+    // message history) becomes unreadable for good — the point, when the key
+    // is suspected.
+    const destroyRetiredEncryptionKey = async (kid) => {
+        if (isExtensionAvailable && window.trustkeys) {
+            throw new Error("Manage the extension's keys from TrustKeys itself.");
+        }
+        const password = await requestPassword(
+            "Enter your vault password to destroy this key for good:", { forcePrompt: true }
+        );
+        await vaultService.destroyRetiredEncryptionKey(password, kid);
+    };
+
     // Approving a multisig workflow: the extension builds the approval body and
     // names the workflow in its window rather than showing a hash in context
     // (K-03); the vault signs the same bytes here.
@@ -880,6 +1018,9 @@ export const PQCProvider = ({ children }) => {
             encrypt,
             decrypt,
             decryptMany,
+            rotateEncryptionKey,
+            destroyRetiredEncryptionKey,
+            listRetiredEncryptionKeys,
             sign,
             signApproval,
             signMessage,

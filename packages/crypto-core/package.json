@@ -1,6 +1,6 @@
 {
   "name": "@kryptolog/crypto-core",
-  "version": "5.0.0",
+  "version": "5.1.0",
   "private": true,
   "type": "module",
   "description": "Single source of truth for Kryptolog client-side hybrid crypto (composite ML-DSA-65 + ECDSA-P384, ETSI CatKDF P-384 + ML-KEM-768), shared by the SPA and the TrustKeys extension.",

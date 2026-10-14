@@ -13,6 +13,12 @@ export const API_ENDPOINTS = {
         // a session key other people's messages depend on. Paged (audit O-3).
         REDACTABLE: `${API_BASE_URL}/account/redactable-messages`,
         DELETE: `${API_BASE_URL}/account/delete`,
+        // Replacing the encryption key (crypto-core 5.1.0), and moving what the
+        // account holds onto the new one.
+        ROTATE_KEY: `${API_BASE_URL}/account/encryption-key/rotate`,
+        STALE_WRAPS: (offset, limit) =>
+            `${API_BASE_URL}/account/encryption-key/stale-wraps?offset=${offset}&limit=${limit}`,
+        REWRAP: `${API_BASE_URL}/account/encryption-key/wraps`,
     },
     // Deleting a conversation (audit 2026-09-11 M-6): hide it for me, and/or
     // erase my own messages in it. `kind` is 'dm' (conversation = partner

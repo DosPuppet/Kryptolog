@@ -121,6 +121,60 @@ test('two people, two custody modes, one conversation', async ({ alice, bob }) =
         await bob.page.getByText('Click to Decrypt').first().click();
         await expect(bob.page.getByText(SECRET)).toBeVisible();
         await shot(bob.page, 'bob-secret');
+    });
+
+    // ── Replacing an encryption key (crypto-core 5.1.0) ──
+    // Bob rotates; what he holds moves to the new key, his history stays
+    // readable with the retired one, and Alice — who has his old key pinned
+    // and a session wrapped to it — is stopped, told it was a rotation, and
+    // writes again only once she confirms.
+    const AFTER = 'Written after the rotation.';
+
+    await test.step('Bob replaces his encryption key', async () => {
+        await bob.page.getByRole('button', { name: /Bobby/ }).first().click();
+        const section = bob.page.getByTestId('encryption-key-section');
+        const before = await section.getByTestId('current-kid').innerText();
+        await section.getByRole('button', { name: 'Replace my encryption key' }).click();
+        await bob.page.getByRole('button', { name: 'Replace the key' }).click();
+        // The grant on Alice's secret is the one key Bob holds: moved to the new key.
+        await expect(bob.page.getByText(/Encryption key replaced\. 1 key\(s\) moved to it\./)).toBeVisible({ timeout: 60_000 });
+        await expect(section.getByTestId('current-kid')).not.toHaveText(before);
+        await expect(section.getByTestId('retired-key')).toHaveCount(1);
+        await shot(bob.page, 'bob-rotated');
+        await bob.page.getByRole('button', { name: 'Close' }).click();
+    });
+
+    await test.step('Bob signs in again and opens the shared secret, now sealed to his new key', async () => {
+        // A fresh session, not the open page: the card still shows the plaintext
+        // from before, and the list still holds the old wrap with its file key
+        // cached. Signing in again reopens the vault as it was SAVED and fetches
+        // the grant as the server now holds it — re-wrapped to the new key.
+        await bob.page.getByTitle('Logout').click();
+        await bob.page.getByRole('button', { name: /Unlock Local Vault/ }).click();
+        await bob.page.getByPlaceholder('Enter secure password').fill(PASSWORD);
+        await bob.page.getByRole('button', { name: /Unlock & Connect/ }).click();
+        await expect(bob.page.getByText('Active Secrets')).toBeVisible({ timeout: 60_000 });
+        await expect(bob.page.getByText('Shared with me')).toBeVisible();
+        await bob.page.getByText('Click to Decrypt').first().click();
+        await expect(bob.page.getByText(SECRET)).toBeVisible();
+    });
+
+    await test.step('Alice is stopped, told it was a rotation, confirms, and writes again', async () => {
+        await openMessenger(alice.page);
+        await alice.page.getByText('Bobby').first().click();
+        await expect(alice.page.getByTestId('key-rotated')).toBeVisible();
+        await expect(alice.page.getByTestId('key-changed')).toContainText('replaced their encryption key');
+        await shot(alice.page, 'alice-rotation-banner');
+        await alice.page.getByRole('button', { name: /I verified it/ }).click();
+        await send(alice.page, AFTER);
+    });
+
+    await test.step('Bob reads it under his new key, and his history under the retired one', async () => {
+        await openMessenger(bob.page);
+        await bob.page.getByText('Alice').first().click();
+        await expect(bob.page.getByText(AFTER)).toBeVisible();
+        await expect(bob.page.getByText('Hello Bob, this is post-quantum.')).toBeVisible();
+        await shot(bob.page, 'bob-after-rotation');
         test.info().annotations.push({ type: 'bob vault prompts', description: String(bobPrompts) });
     });
 });

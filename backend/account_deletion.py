@@ -709,6 +709,11 @@ def delete_account(db: Session, user: models.User, mode: str) -> list[dict]:
         db.query(models.ConversationClear).filter(
             models.ConversationClear.user_address == address
         ).delete(synchronize_session=False)
+        # The identity's key-rotation records (crypto-core 5.1.0): directory
+        # history of an identity that is not coming back. A leave keeps them.
+        db.query(models.EncryptionKeyRotation).filter(
+            models.EncryptionKeyRotation.user_address == address
+        ).delete(synchronize_session=False)
 
     db.query(models.PushSubscription).filter(
         models.PushSubscription.user_address == address

@@ -32,6 +32,7 @@ describe('golden constants (wire/storage format contract)', () => {
             KEY_ATTESTATION: 'key-attestation',
             ACCOUNT_DELETION: 'account-deletion',
             CONVERSATION_ERASE: 'conversation-erase', // 3.1.0, additive
+            KEY_ROTATION: 'key-rotation', // 5.1.0, additive
         });
     });
 
@@ -428,7 +429,9 @@ describe('randomized envelope round-trips', () => {
         const otherSalt = { ...GOLDEN_KDF, salt: core.toB64(core.fromHex('0f0e0d0c0b0a09080706050403020100')) };
         expect(core.toHex(await core.deriveVaultKeyBits('pw', otherSalt))).not.toBe(base);
         expect(core.toHex(await core.deriveVaultKeyBits('pw', { ...GOLDEN_KDF, t: 2 }))).not.toBe(base);
-    });
+        // Five real Argon2id derivations at 46 MiB: ~1.8 s alone here, past the
+        // 5 s default once the machine is busy — and runners are slower still.
+    }, 30_000);
 
     it('KDF parameters from a blob are bounded before anything is derived', async () => {
         // An imported backup chooses its own parameters; an absurd `m` would be
@@ -686,6 +689,99 @@ describe('accounts (5.0.0): seeds, the address as id, keys by id, and nothing ol
     });
 });
 
+describe('encryption-key rotation (5.1.0)', () => {
+    const KID_A = 'aa'.repeat(16);
+    const KID_B = 'bb'.repeat(16);
+    const ADDRESS = 'ab'.repeat(48);
+
+    it('the rotation body is byte-exact and names both keys and the suite', () => {
+        expect(core.keyRotationBody({ address: ADDRESS, oldKid: KID_A, newKid: KID_B, ts: 1700000000000 }))
+            .toBe('Kryptolog Signed Message v1\ncontext=key-rotation\n' +
+                `address=${ADDRESS}\nold-kid=${KID_A}\nnew-kid=${KID_B}` +
+                '\nnew-alg=HKDFwSHA384_P384_ML-KEM-768_CatKDF\nts=1700000000000');
+        expect(core.SIGNING_CONTEXT.KEY_ROTATION).toBe('key-rotation');
+    });
+
+    it('refuses a body that would not say one thing', () => {
+        const ok = { address: ADDRESS, oldKid: KID_A, newKid: KID_B, ts: 1 };
+        for (const bad of [{ oldKid: KID_B }, { oldKid: 'AA'.repeat(16) }, { newKid: `${KID_B}\nts=0` },
+            { address: 'ab' }, { ts: -1 }, { ts: 1.5 }]) {
+            expect(() => core.keyRotationBody({ ...ok, ...bad })).toThrow(core.SignedBodyError);
+        }
+    });
+
+    it('a signed rotation verifies as its identity only, and chains key to key', async () => {
+        const me = core.generateAccount('me');
+        const other = core.generateAccount('other');
+        const record = async (oldKid, newKid, ts, seed = me.identity.seed) => ({
+            old_kid: oldKid, new_kid: newKid, alg: core.KEM_ALG, ts,
+            signature: await core.signKeyRotation({ address: me.id, oldKid, newKid, ts }, seed),
+        });
+        const KID_C = 'cc'.repeat(16);
+        const r1 = await record(KID_A, KID_B, 10);
+        const r2 = await record(KID_B, KID_C, 20);
+        const verify = (rotation, address = me.id, identityPublicKey = me.identity.publicKey) =>
+            core.verifyKeyRotation({ address, identityPublicKey, rotation });
+        expect(await verify(r1)).toBe(true);
+        expect(await verify({ ...r1, ts: 11 })).toBe(false);
+        expect(await verify({ ...r1, new_kid: KID_C })).toBe(false);
+        expect(await verify({ ...r1, alg: 'XWING-HKDF384' })).toBe(false);
+        expect(await verify(r1, other.id, other.identity.publicKey)).toBe(false);
+        expect(await verify(await record(KID_A, KID_B, 10, other.identity.seed))).toBe(false);
+
+        const chain = (rotations, fromKid, toKid) => core.rotationChain({
+            address: me.id, identityPublicKey: me.identity.publicKey, rotations, fromKid, toKid,
+        });
+        expect(await chain([r2, r1], KID_A, KID_C)).toEqual([r1, r2]);
+        expect(await chain([r1, r2], KID_B, KID_C)).toEqual([r2]);
+        expect(await chain([r1], KID_A, KID_C)).toBeNull();
+        expect(await chain([r1, { ...r2, ts: 21 }], KID_A, KID_C)).toBeNull(); // a forged link ends the walk
+        expect(await chain([], KID_A, KID_A)).toEqual([]);
+    });
+
+    it('rotating keeps the old key, retired, to read with; destroying it is explicit', async () => {
+        const account = core.generateAccount('Alice');
+        const before = await core.encryptMessage('sealed to the first key', account.encryption.publicKey);
+        const rotated = core.rotateAccountEncryptionKey(account, 1234);
+        expect(rotated.encryption.kid).not.toBe(account.encryption.kid);
+        expect(rotated.encryption.createdAt).toBe(1234);
+        expect(rotated.retiredEncryption).toEqual([{ ...account.encryption, retiredAt: 1234 }]);
+        expect(core.parseAccount(rotated)).toEqual(rotated);
+        // What was sealed to the old key still opens, with the key its kid names.
+        expect(await core.decryptMessage(before, core.encryptionSeedFor(rotated, before))).toBe('sealed to the first key');
+        const after = await core.encryptMessage('sealed to the new key', rotated.encryption.publicKey);
+        expect(await core.decryptMessage(after, core.encryptionSeedFor(rotated, after))).toBe('sealed to the new key');
+
+        const destroyed = core.destroyRetiredEncryptionKey(rotated, account.encryption.kid);
+        expect(destroyed.retiredEncryption).toEqual([]);
+        expect(() => core.encryptionSeedFor(destroyed, before)).toThrow(core.MissingKeyError);
+        expect(() => core.destroyRetiredEncryptionKey(rotated, rotated.encryption.kid)).toThrow(/current/);
+        expect(() => core.destroyRetiredEncryptionKey(rotated, 'ab'.repeat(16))).toThrow(/No retired/);
+    });
+
+    it('a rotation the server refused can be undone, losing nothing, and only that one', () => {
+        const account = core.generateAccount('Alice');
+        const rotated = core.rotateAccountEncryptionKey(account, 5);
+        const undone = core.revertAccountEncryptionKeyRotation(rotated, rotated.encryption.kid, 6);
+        expect(undone.encryption).toEqual(core.parseAccount(account).encryption);
+        // The unpublished key is kept, retired — undoing at the wrong moment
+        // must not be a way to destroy a key somebody already seals to.
+        expect(undone.retiredEncryption).toEqual([{ ...rotated.encryption, retiredAt: 6 }]);
+        expect(() => core.revertAccountEncryptionKeyRotation(rotated, account.encryption.kid)).toThrow(/no rotation/);
+        expect(() => core.revertAccountEncryptionKeyRotation(account, account.encryption.kid)).toThrow(/no rotation/);
+    });
+
+    it('refuses to rotate past the cap rather than dropping a key nobody chose to drop', () => {
+        let account = core.generateAccount('Alice');
+        const spare = core.generateAccount('spare').encryption;
+        account = { ...account, retiredEncryption: Array.from({ length: core.MAX_RETIRED_ENCRYPTION_KEYS }, (_, i) => ({
+            ...core.generateAccount(`k${i}`).encryption, retiredAt: i,
+        })) };
+        expect(spare).toBeTruthy();
+        expect(() => core.rotateAccountEncryptionKey(account)).toThrow(/destroy one/);
+    }, 60_000);
+});
+
 describe('encryption-key attestation (audit M-1, v1.3.0)', () => {
     it('attestation body is byte-exact and names the address (4.0.0) and the suite (5.0.0)', () => {
         const address = 'ab'.repeat(48);
@@ -742,7 +838,7 @@ describe('encryption-key attestation (audit M-1, v1.3.0)', () => {
 
 describe('single-source / version guard', () => {
     it('exports a version both app builds can assert against', () => {
-        expect(core.CRYPTO_CORE_VERSION).toBe('5.0.0');
+        expect(core.CRYPTO_CORE_VERSION).toBe('5.1.0');
     });
 });
 
@@ -813,6 +909,13 @@ describe('signed bodies match the server, byte for byte', () => {
                 origin: vectors.origin, deployment: vectors.deployment,
             })).toBe(vectors.bodies[`conversation_erase_${kind}`]);
         });
+
+    it('key rotation (5.1.0)', () => {
+        expect(core.keyRotationBody({
+            address: vectors.address, oldKid: vectors.rotation_old_kid,
+            newKid: vectors.rotation_new_kid, ts: vectors.rotation_ts,
+        })).toBe(vectors.bodies.key_rotation);
+    });
 
     it('the fixture is what we think it is, not just what both sides produce', () => {
         // Guards the vectors themselves: agreement with a file both sides could

@@ -21,6 +21,7 @@ from routers import (
     account,
     auth,
     conversations,
+    encryption_keys,
     groups,
     health,
     messenger,
@@ -185,6 +186,7 @@ config.check_production_settings()
 app.include_router(health.router)
 app.include_router(auth.router)
 app.include_router(account.router)
+app.include_router(encryption_keys.router)
 app.include_router(conversations.router)
 app.include_router(users.router)
 app.include_router(secrets.router)

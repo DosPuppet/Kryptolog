@@ -35,7 +35,7 @@ const fromB64Local = (b) => new Uint8Array(Buffer.from(b, 'base64'));
 
 describe('the shim hands out crypto-core 5', () => {
   it('is the 5.0.0 package, not a stale copy', () => {
-    expect(CRYPTO_CORE_VERSION).toBe('5.0.0');
+    expect(CRYPTO_CORE_VERSION).toBe('5.1.0');
   });
 
   it('composite identity keys: 2049-byte public key, 80-byte seed, 96-hex address', () => {

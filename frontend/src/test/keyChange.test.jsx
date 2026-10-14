@@ -12,7 +12,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, act } from '@testing-library/react';
 import {
     generateEncryptionKeyPair, attestEncryptionKey,
-    generateSessionKey, wrapSessionKey,
+    generateSessionKey, wrapSessionKey, encryptionKeyId,
 } from '../utils/crypto';
 import { makeSigner } from './identities';
 import { toast } from '../utils/toast';
@@ -129,6 +129,23 @@ describe('DM to a contact whose key changed', () => {
         await dm('after checking', swapped);
         expect(dmPosts()).toHaveLength(2);
     });
+
+    it('mints a new session for the new key instead of reusing one wrapped to the old (5.1.0)', async () => {
+        // The session minted for the old key is still young; without the
+        // binding it would carry on, and its key — wrapped to the retired
+        // encryption key — would protect what is sent next.
+        await dm('hello', partner.current);
+        await dm('again', partner.current);
+        const [first, second] = dmPosts();
+        expect(second.keys).toBeNull(); // same session, as long as the key is the same
+        const swapped = await partner.rekey();
+        trustContactKey(swapped.address, swapped.encryption_public_key);
+
+        await dm('after the rotation', swapped);
+        const third = dmPosts()[2];
+        expect(third.sid).not.toBe(first.sid);
+        expect(third.keys.recip.kid).toBe(encryptionKeyId(swapped.encryption_public_key));
+    });
 });
 
 describe('group with a member whose key changed', () => {
@@ -154,6 +171,16 @@ describe('group with a member whose key changed', () => {
         expect(Object.keys(second.keys)).toContain(carol.current.address);
         expect(Object.keys(second.keys)).toContain(me.current.address);
         expect(toast.error).toHaveBeenCalledWith(expect.stringMatching(/key changed/));
+    });
+
+    it("rotates the session when a member's key changes, once the new key is confirmed (5.1.0)", async () => {
+        await sendGroup('first');
+        const swapped = await partner.rekey();
+        trustContactKey(swapped.address, swapped.encryption_public_key);
+        await sendGroup('second');
+        const [first, second] = groupPosts();
+        expect(second.sid).not.toBe(first.sid); // same members, a different key: a new session
+        expect(second.keys[partner.current.address].kid).toBe(encryptionKeyId(swapped.encryption_public_key));
     });
 
     it('never excludes the sender\'s own row', async () => {

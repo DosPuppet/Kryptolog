@@ -3,6 +3,7 @@ import * as auth from './handlers/auth.js';
 import * as conn from './handlers/connection.js';
 import * as acct from './handlers/accounts.js';
 import * as crypto from './handlers/crypto.js';
+import * as rotation from './handlers/rotation.js';
 import { isInternalSender, getSenderOrigin } from './utils.js';
 import { settleApproval, peekApproval, handleWindowClosed } from './approvals.js';
 import {
@@ -94,6 +95,10 @@ const HANDLERS = {
             if (success) await conn.syncDynamicScripts();
             return { success };
         },
+    },
+    DESTROY_RETIRED_ENCRYPTION_KEY: {
+        internal: true,
+        fn: (ctx) => rotation.handleDestroyRetiredEncryptionKey(ctx),
     },
     LOCK: {
         internal: true,
@@ -255,6 +260,19 @@ const HANDLERS = {
         raw: true,
         fn: ({ request, sender, sendResponse }) =>
             crypto.handleSignMultisigApprovalAsync(request, sender, sendResponse),
+    },
+    // Replacing the encryption key (crypto-core 5.1.0): a page asks, the
+    // window approves, the extension rotates and saves before answering.
+    ROTATE_ENCRYPTION_KEY: {
+        raw: true,
+        fn: ({ request, sender, sendResponse }) =>
+            rotation.handleRotateEncryptionKeyAsync(request, sender, sendResponse),
+    },
+    // Only the rotation just made, by the page that asked, for a few minutes —
+    // and it destroys nothing even then (see handlers/rotation.js).
+    REVERT_ENCRYPTION_KEY_ROTATION: {
+        origin: 'required',
+        fn: (ctx) => rotation.handleRevertEncryptionKeyRotation(ctx),
     },
     SIGN_MESSAGE: {
         raw: true,

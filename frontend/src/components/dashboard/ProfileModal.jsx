@@ -7,6 +7,7 @@ import DisplayField from '../common/DisplayField';
 import { safetyNumber } from '../../utils/fingerprint';
 import { apiFetch } from '../../services/api';
 import DeleteAccountSection from './DeleteAccountSection';
+import EncryptionKeySection from './EncryptionKeySection';
 
 const ProfileModal = ({ isOpen, onClose }) => {
     const { user, setUser, token } = useAuth();
@@ -113,6 +114,8 @@ const ProfileModal = ({ isOpen, onClose }) => {
                                 </div>
                             )}
                         </div>
+
+                        <EncryptionKeySection />
 
                         <DeleteAccountSection />
                     </div>

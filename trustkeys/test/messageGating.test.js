@@ -28,6 +28,9 @@ const INTERNAL_ONLY = [
     { type: 'EXPORT_KEYS', password: 'guess' },
     { type: 'EXPORT_KEYS_ENCRYPTED', password: 'guess', passphrase: 'p' },
     { type: 'IMPORT_KEYS', accounts: [] },
+    // Destroying a retired encryption key (crypto-core 5.1.0) is the user's
+    // decision in TrustKeys, never a site's.
+    { type: 'DESTROY_RETIRED_ENCRYPTION_KEY', kid: 'ab'.repeat(16) },
     // Vault control (audit 2026-09-23 F-4): from a page, UNLOCK was a password
     // oracle that also unlocked, and LOCK a denial of service.
     { type: 'GET_STATUS' },
@@ -141,16 +144,19 @@ describe('the authoritative-origin gate (audit M4)', () => {
         const res = await h.send({ type: 'GET_ACTIVE_ACCOUNT' }, internalSender());
         expect(res.success).toBe(true);
         // Public fields only, each under its own name (crypto-core 3.3.0): the
-        // page reads the identity KEY and is told the address it names.
+        // page reads the identity KEY and is told the address it names. The
+        // dashboard also gets the retired keys' ids and dates (5.1.0).
         expect(Object.keys(res.account).sort())
-            .toEqual(['address', 'encryptionPublicKey', 'identityPublicKey', 'name']);
+            .toEqual(['address', 'encryptionPublicKey', 'identityPublicKey', 'name', 'retiredEncryption']);
         expect(res.account.address).toBe(addressOf(res.account.identityPublicKey));
     });
 
-    it('serves a connected page', async () => {
+    it('serves a connected page the same four public fields, and nothing about retired keys', async () => {
         const h = await bootWithVault({ connect: ['https://app.example'] });
         const res = await h.send({ type: 'GET_ACTIVE_ACCOUNT' }, pageSender('https://app.example'));
         expect(res.success).toBe(true);
+        expect(Object.keys(res.account).sort())
+            .toEqual(['address', 'encryptionPublicKey', 'identityPublicKey', 'name']);
     });
 
     it('refuses a page that is not connected', async () => {

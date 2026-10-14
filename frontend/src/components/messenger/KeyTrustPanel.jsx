@@ -1,7 +1,8 @@
 import { useEffect, useState } from 'react';
 import { ShieldAlert, Fingerprint } from 'lucide-react';
-import { checkContactKey, trustContactKey } from '../../services/trustedKeys';
+import { checkContactKey, trustContactKey, pinnedKeyOf } from '../../services/trustedKeys';
 import { safetyNumber } from '../../utils/fingerprint';
+import { encryptionKeyId, rotationChain } from '../../utils/crypto';
 import { displayName } from '../../utils/format';
 
 // A contact's key, as the messenger shows it (audit 2026-10-12 K-05).
@@ -14,6 +15,11 @@ import { displayName } from '../../utils/format';
 //   • a CHANGED key raises a banner, and nothing is sent to that contact until
 //     the reader confirms it (MessengerContext refuses the send, so this is
 //     not a UI-only gate).
+//   • a change the contact made by a SIGNED ROTATION (crypto-core 5.1.0) is
+//     named as one, with its date — and blocks all the same. The rotation is
+//     signed by the identity key, like the attestation, so it cannot vouch for
+//     itself if that key was stolen; it tells the reader why, not that it is
+//     safe (decided 2026-10-14, K-05 unchanged).
 export default function KeyTrustPanel({ user, compact = false, onTrusted }) {
     const address = user?.address;
     const key = user?.encryption_public_key;
@@ -22,6 +28,24 @@ export default function KeyTrustPanel({ user, compact = false, onTrusted }) {
     const [open, setOpen] = useState(false);
 
     useEffect(() => { setState(checkContactKey(address, key)); }, [address, key]);
+    // The verified rotations from the pinned key to this one, or null.
+    const [rotated, setRotated] = useState(null);
+    useEffect(() => {
+        let live = true;
+        setRotated(null);
+        const pinned = state === 'changed' ? pinnedKeyOf(address) : null;
+        if (pinned && key && user?.encryption_key_rotations?.length) {
+            // Whatever goes wrong here only costs the explanation, never the stop.
+            (async () => rotationChain({
+                address,
+                identityPublicKey: user.identity_public_key,
+                rotations: user.encryption_key_rotations,
+                fromKid: encryptionKeyId(pinned),
+                toKid: encryptionKeyId(key),
+            }))().then((chain) => { if (live && chain?.length) setRotated(chain); }).catch(() => {});
+        }
+        return () => { live = false; };
+    }, [state, address, key, user?.identity_public_key, user?.encryption_key_rotations]);
     useEffect(() => {
         let live = true;
         if ((open || state === 'changed') && address && key) {
@@ -40,11 +64,22 @@ export default function KeyTrustPanel({ user, compact = false, onTrusted }) {
 
     if (state === 'changed') {
         const when = user.key_changed_at ? ` on ${new Date(user.key_changed_at).toLocaleDateString()}` : '';
+        const last = rotated?.[rotated.length - 1];
         return (
-            <div className="m-2 p-3 rounded-lg border border-red-300 bg-red-50 dark:bg-red-950/40 dark:border-red-800 text-sm">
+            <div className="m-2 p-3 rounded-lg border border-red-300 bg-red-50 dark:bg-red-950/40 dark:border-red-800 text-sm" data-testid="key-changed">
                 <p className="flex items-center gap-1 font-semibold text-red-600 dark:text-red-400">
-                    <ShieldAlert className="w-4 h-4" /> {displayName(user)}&apos;s encryption key changed{when}
+                    <ShieldAlert className="w-4 h-4" />
+                    {last
+                        ? <>{displayName(user)} replaced their encryption key on {new Date(last.ts).toLocaleDateString()}</>
+                        : <>{displayName(user)}&apos;s encryption key changed{when}</>}
                 </p>
+                {last && (
+                    <p className="mt-1 text-red-700 dark:text-red-300" data-testid="key-rotated">
+                        A signed rotation leads from the key you had confirmed to this one
+                        {rotated.length > 1 ? ` (${rotated.length} rotations)` : ''}. It is signed with their
+                        identity key, so it cannot rule out that key being stolen.
+                    </p>
+                )}
                 <p className="mt-1 text-red-700 dark:text-red-300">
                     Nothing will be sent to them until you confirm. Compare this safety number with them
                     in person or by phone — a different number means someone else is holding the key.

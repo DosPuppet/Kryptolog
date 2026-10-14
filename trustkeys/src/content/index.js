@@ -78,6 +78,16 @@ window.addEventListener('message', async (event) => {
                 result = res.signature;
                 break;
             }
+            case 'TRUSTKEYS_ROTATE_ENCRYPTION_KEY': {
+                const res = await callBackground('ROTATE_ENCRYPTION_KEY', { ts: payload.ts });
+                result = res.result;
+                break;
+            }
+            case 'TRUSTKEYS_REVERT_ENCRYPTION_KEY_ROTATION': {
+                await callBackground('REVERT_ENCRYPTION_KEY_ROTATION', { newKid: payload.newKid });
+                result = true;
+                break;
+            }
             case 'TRUSTKEYS_SIGN_MESSAGE': {
                 const signMsgRes = await callBackground('SIGN_MESSAGE', { message: payload.message });
                 result = signMsgRes.signature;

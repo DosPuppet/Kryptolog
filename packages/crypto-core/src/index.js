@@ -41,7 +41,7 @@
 
 // Bumped whenever a wire/storage format or shared primitive changes; the
 // per-version history is in CHANGELOG.md next to this file.
-export const CRYPTO_CORE_VERSION = '5.0.0';
+export const CRYPTO_CORE_VERSION = '5.1.0';
 
 export * from './encoding.js';
 export * from './signing.js';

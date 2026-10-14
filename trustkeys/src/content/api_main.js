@@ -57,6 +57,14 @@
                 type: 'TRUSTKEYS_SIGN_MULTISIG_APPROVAL', workflowId, secretId, ciphertextSha384,
             });
         },
+        // Replacing the encryption key (crypto-core 5.1.0): the extension asks
+        // the user, rotates, saves, and returns what the page publishes.
+        rotateEncryptionKey: async ({ ts }) => {
+            return postMessagePromise({ type: 'TRUSTKEYS_ROTATE_ENCRYPTION_KEY', ts });
+        },
+        revertEncryptionKeyRotation: async ({ newKid }) => {
+            return postMessagePromise({ type: 'TRUSTKEYS_REVERT_ENCRYPTION_KEY_ROTATION', newKid });
+        },
         // Self-signed binding of the active account's encryption key to its identity
         // (audit M-1). Popup-free: the signed message is fixed and self-referential —
         // the page supplies nothing.

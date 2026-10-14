@@ -44,6 +44,15 @@ const describeSignature = ({ kind, details = {}, origin }) => {
           `${details.redactions} message(s) will be redacted.`,
         ],
       };
+    case 'key-rotation':
+      return {
+        title: 'Replace encryption key',
+        lines: [
+          `${origin} asks to replace the encryption key of ${details.address}.`,
+          'A new key is created here; the current one is kept, retired, so older history stays readable.',
+          'Your contacts will have to check your new safety number before writing to you again.',
+        ],
+      };
     case 'multisig-approval':
       return {
         title: 'Approve workflow',

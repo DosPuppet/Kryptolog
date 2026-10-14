@@ -20,6 +20,12 @@ export const state = {
 
     pendingRequests: new Map(), // ID -> { type, origin, data, resolve, reject }
 
+    // The encryption-key rotation just made for a page, which that page may
+    // undo for a few minutes if the server refuses it: { origin, newKid, at }.
+    // In memory only, on purpose — a worker restart forgets it, and the undo
+    // it allows is a convenience the user can do by hand.
+    pendingRotation: null,
+
     // Background-opened windows, tracked so a looping site focuses an existing
     // one instead of stacking an OS window per call (audit M-6).
     //

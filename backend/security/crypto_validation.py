@@ -35,6 +35,7 @@ address).
 
 import base64
 import hashlib
+import json
 import re
 
 from cryptography.hazmat.primitives.asymmetric import ec, mlkem
@@ -45,6 +46,9 @@ from cryptography.hazmat.primitives.asymmetric import ec, mlkem
 FORMAT_VERSION = 5
 SIGNATURE_ALG = "MLDSA65-ECDSA-P384-SHA512"
 KEM_ALG = "HKDFwSHA384_P384_ML-KEM-768_CatKDF"
+# What a KEM envelope's `alg` says: the suite, then the AEAD (crypto-core's
+# KEM_ENVELOPE_ALG).
+KEM_ENVELOPE_ALG = f"{KEM_ALG}-A256GCM"
 
 # Byte lengths.
 _ML_DSA_65_PUBLIC_KEY_BYTES = 1952
@@ -244,3 +248,55 @@ def is_valid_identity_key(value: str | None) -> bool:
     if not isinstance(value, str) or not _IDENTITY_KEY_RE.match(value):
         return False
     return is_valid_p384_point(bytes.fromhex(value)[_ML_DSA_65_PUBLIC_KEY_BYTES:])
+
+
+# A key held for someone, sealed by crypto-core's kemSeal, in either of the two
+# shapes the clients store: a wrapped session key {v, alg, kid, kem, iv,
+# encKey} — 32 key bytes plus the 16-byte tag — or a KEM message envelope
+# {v, alg, kid, kem, iv, content} around a content key (what a secret's grant
+# and a workflow's signer and recipient rows hold). The CatKDF ciphertext and
+# the IV have exact sizes either way.
+_KEM_ENVELOPE_FIELDS = {"v", "alg", "kid", "kem", "iv"}
+_KEM_ENVELOPE_SIZES = {"kem": 97 + 1088, "iv": 12}
+_WRAPPED_SESSION_KEY_BYTES = 32 + 16
+
+
+def is_wrapped_key_for(value: str | None, kid: str | None) -> bool:
+    """True if `value` is a current-format KEM envelope sealed to the key `kid`.
+
+    The server cannot open one — that is the point — so this is the whole of
+    what it can check: the shape, the format, and that the envelope NAMES the
+    key it should. One that lies about its kid fails its AES-GCM tag for the
+    holder, who is the only one it hurts.
+    """
+    if not isinstance(value, str) or not is_valid_key_id(kid):
+        return False
+    try:
+        wrap = json.loads(value)
+    except ValueError:
+        return False
+    if not isinstance(wrap, dict):
+        return False
+    extra = set(wrap) - _KEM_ENVELOPE_FIELDS
+    if not _KEM_ENVELOPE_FIELDS <= set(wrap) or extra not in ({"encKey"}, {"content"}):
+        return False
+    if wrap["v"] != FORMAT_VERSION or wrap["alg"] != KEM_ENVELOPE_ALG or wrap["kid"] != kid:
+        return False
+    for field, size in _KEM_ENVELOPE_SIZES.items():
+        if not is_b64(wrap[field]) or len(base64.b64decode(wrap[field])) != size:
+            return False
+    (field,) = extra
+    if not is_b64(wrap[field]):
+        return False
+    sealed = len(base64.b64decode(wrap[field]))
+    return sealed == _WRAPPED_SESSION_KEY_BYTES if field == "encKey" else sealed > 16
+
+
+def wrapped_key_id(value: str | None) -> str | None:
+    """The kid a stored wrapped key names, or None for anything unreadable."""
+    try:
+        wrap = json.loads(value) if isinstance(value, str) else None
+    except ValueError:
+        return None
+    kid = wrap.get("kid") if isinstance(wrap, dict) else None
+    return kid if is_valid_key_id(kid) else None

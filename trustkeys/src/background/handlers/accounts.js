@@ -43,12 +43,21 @@ export const getActiveAccount = (checkOrigin) => {
     // The address, the identity key it names, and the encryption key, each
     // under its own name (crypto-core 3.3.0). An account's id IS its address
     // since 4.0.0, so the address is not recomputed here.
-    return {
+    const view = {
         name: account.name,
         address: account.id,
         identityPublicKey: account.identity.publicKey,
         encryptionPublicKey: account.encryption.publicKey,
     };
+    // Which keys a rotation retired, and when (crypto-core 5.1.0) — ids and
+    // dates only, and for the dashboard only: a page has no use for them, and
+    // what a page can read stays the four fields it always was.
+    if (!checkOrigin) {
+        view.retiredEncryption = (account.retiredEncryption ?? []).map(
+            ({ kid, createdAt, retiredAt }) => ({ kid, createdAt, retiredAt })
+        );
+    }
+    return view;
 };
 
 // The currently-active account (with key material), or throws. Export is scoped

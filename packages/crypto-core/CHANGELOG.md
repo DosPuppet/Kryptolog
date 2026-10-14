@@ -402,3 +402,35 @@ than its X25519); the server verifies 1 000 composite signatures — a full
 erase round — in 0.69 s (0.17 s for the Ed25519 composite). WebCrypto's
 native P-384 ECDH is the lever if unwrap cost ever shows; the registry is
 where it would go.
+
+## 5.1.0
+
+ADDITIVE — no wire or storage format change for anything that exists. Every
+5.0.0 golden envelope and signed-body vector is unchanged, which is the proof;
+the fixture only GAINS a `key_rotation` body. An identity can now replace its
+encryption key without becoming someone else, which is what makes 5.0.0's
+registry an agility mechanism rather than a list of one (ANSSI's crypto-agility
+note, Rec. 1 and 3: change the algorithm, and handle the old keys).
+
+- **`rotateAccountEncryptionKey(account, now)`** makes a fresh key current and
+  moves the old one to `retiredEncryption`, newest first, at most
+  `MAX_RETIRED_ENCRYPTION_KEYS` (32). A retired key only ever DEcrypts:
+  `encryptionSeedFor` finds it by the envelope's kid; nothing encrypts to it.
+- **`revertAccountEncryptionKeyRotation(account, newKid, now)`** undoes a
+  rotation the server refused — and RETIRES the unpublished key rather than
+  dropping it, so an undo run at the wrong moment (the server took the key
+  after all) destroys nothing.
+- **`destroyRetiredEncryptionKey(account, kid)`**: whatever was sealed to that
+  key and never re-wrapped becomes unreadable for good. The user's decision,
+  and the only coarse forward secrecy a static-key design has.
+- **A signed rotation**, context `key-rotation`:
+  `address=…\nold-kid=…\nnew-kid=…\nnew-alg=…\nts=…` (`keyRotationBody`,
+  `signKeyRotation`, `verifyKeyRotation`). Its own context so the extension
+  never signs it silently; kids rather than keys so it stays short. The server
+  builds the body from the kid it HOLDS, so a recorded rotation cannot be
+  replayed to roll a key back.
+- **`rotationChain`** walks verified records from a pinned kid to a current
+  one. Clients use it to say "X replaced their key on <date>" instead of "X's
+  key changed" — and still stop the send until the new safety number is
+  confirmed: the rotation is signed by the identity key, like the
+  attestation, so it explains a change but cannot vouch for one.

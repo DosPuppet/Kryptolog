@@ -71,6 +71,15 @@ class TestSignedBodiesMatchTheSharedFixture:
             == v["bodies"]["key_attestation"]
         )
 
+    def test_key_rotation(self):
+        v = _vectors()
+        assert (
+            auth.key_rotation_message(
+                v["address"], v["rotation_old_kid"], v["rotation_new_kid"], v["rotation_ts"]
+            )
+            == v["bodies"]["key_rotation"]
+        )
+
     def test_multisig_approval(self):
         v = _vectors()
         assert (
@@ -227,6 +236,7 @@ class TestTheVectorsAreWhatWeThinkTheyAre:
             "context=message",
             "context=account-deletion",
             "context=conversation-erase",
+            "context=key-rotation",
         }
 
     def test_a_redaction_differs_from_the_live_message_in_its_last_line_only(self):

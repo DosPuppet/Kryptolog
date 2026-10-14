@@ -46,6 +46,10 @@ export const checkContactKey = (address, encryptionPublicKey) => {
     return rec.key === encryptionPublicKey ? 'unchanged' : 'changed';
 };
 
+// The key this device pinned for `address`, or null — what a key change is
+// measured FROM, e.g. to tell a signed rotation from a bare change.
+export const pinnedKeyOf = (address) => load(STORE_KEY)[norm(address)]?.key ?? null;
+
 // Record / accept a contact's current key (first use, or after the user
 // confirms a change). Preserves the original firstSeen timestamp.
 export const trustContactKey = (address, encryptionPublicKey) => {

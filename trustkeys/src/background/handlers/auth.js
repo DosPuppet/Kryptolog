@@ -69,6 +69,7 @@ export const unlock = async (password) => {
 
 export const lock = () => {
     state.vault = null;
+    state.pendingRotation = null;
     state.isLocked = true;
     state.vaultKey = null;
     state.vaultKeyBytes = null;

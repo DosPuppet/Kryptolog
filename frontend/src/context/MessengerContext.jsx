@@ -83,6 +83,11 @@ export const MessengerProvider = ({ children }) => {
     // Lets sendGroupMessage tell "the attestation gate still agrees" from "the
     // gate's verdict changed, rotate" without re-wrapping on every send.
     const groupSessionMembersRef = useRef({});
+    // Which encryption keys each DM session was wrapped for (crypto-core
+    // 5.1.0): the partner's and our own. A session wrapped to a key its owner
+    // has since rotated away from must not be reused — the rotation may be
+    // because that key leaked — so a change of either mints a new session.
+    const dmSessionKeysRef = useRef({});
 
     // Encrypted group names, audit M-3 (messenger/useGroupNames.js)
     const { resolveChannelName, resolveGroupNames, buildGroupNameBlob } =
@@ -95,7 +100,7 @@ export const MessengerProvider = ({ children }) => {
     const { fetchClears, clearConversation, isHidden, visible } = useConversationClears(api);
 
     // Names for partners the sidebar has never seen (messenger/usePartnerDirectory.js)
-    const { resolvePartner } = usePartnerDirectory({ token });
+    const { resolvePartner, forgetPartner } = usePartnerDirectory({ token });
 
     /**
      * Merge a directory record into the sidebar row and the open chat.
@@ -109,17 +114,21 @@ export const MessengerProvider = ({ children }) => {
         if (!partner?.address) return;
         const addr = partner.address.toLowerCase();
         const merge = (prevUser) => ({ ...prevUser, ...partner });
+        // A name, or since crypto-core 5.1.0 a KEY: a contact who rotated must
+        // reach both panels, or the open chat keeps wrapping to the old one.
+        const same = (prevUser) => prevUser.username === partner.username
+            && prevUser.encryption_public_key === partner.encryption_public_key;
 
         setConversations(prev => {
             const i = prev.findIndex(c => c.user.address.toLowerCase() === addr);
-            if (i === -1 || prev[i].user.username === partner.username) return prev;
+            if (i === -1 || same(prev[i].user)) return prev;
             const next = [...prev];
             next[i] = { ...next[i], user: merge(next[i].user) };
             return next;
         });
         setActiveConversation(prev => {
             if (!prev || prev.user.address.toLowerCase() !== addr) return prev;
-            if (prev.user.username === partner.username) return prev;
+            if (same(prev.user)) return prev;
             return { ...prev, user: merge(prev.user) };
         });
     };
@@ -229,6 +238,19 @@ export const MessengerProvider = ({ children }) => {
             NEW_MESSAGE: (data) => handleIncomingMessage(data.message),
             NEW_GROUP_MESSAGE: (data) => handleIncomingGroupMessage(data.message),
             SECRET_SHARED: (data) => setLastEvent({ type: 'SECRET_SHARED', timestamp: Date.now(), data: data }),
+            // A contact replaced their encryption key (crypto-core 5.1.0). The
+            // record this tab holds names the retired key: refetch it, so the
+            // conversation stops on the change (K-05) instead of sealing new
+            // sessions to a key its owner may have rotated away from for a
+            // reason — and refetch the groups they are in, for the same reason.
+            KEY_ROTATED: (data) => {
+                const addr = String(data.address || '').toLowerCase();
+                forgetPartner(addr);
+                resolvePartner(addr).then(applyPartner);
+                if (groupConversations.some(
+                    (g) => (g.members || []).some((m) => m.user_address === addr)
+                )) fetchGroupConversations();
+            },
             ...createGroupEventHandlers({
                 user,
                 fetchGroupConversations: () => fetchGroupConversations(),
@@ -387,18 +409,21 @@ export const MessengerProvider = ({ children }) => {
             // (audit 2026-10-12 K-05) — the conversation offers the check.
             assertKeyUnchanged(partnerUser);
 
+            const myKey = user?.encryption_public_key || ownEncryptionKey;
+            const wrappedFor = `${recipientKey}|${myKey ?? ''}`;
             let sid = activeSessionIds[theirAddr];
             let sKey = sid ? sessionKeys[sessionKeyId(theirAddr, sid)] : null;
             let keyPayload = null;
             if (sKey && !sessionUsable(sessionKeyId(theirAddr, sid))) sKey = null;
+            if (sKey && dmSessionKeysRef.current[sessionKeyId(theirAddr, sid)] !== wrappedFor) sKey = null;
 
             if (!sKey) {
                 sid = crypto.randomUUID();
                 sKey = await generateSessionKey();
                 const wRecip = await wrapSessionKey(sKey, recipientKey);
-                const myKey = user?.encryption_public_key || ownEncryptionKey;
                 const wSender = myKey ? await wrapSessionKey(sKey, myKey) : null;
                 keyPayload = { recip: wRecip, sender: wSender };
+                dmSessionKeysRef.current[sessionKeyId(theirAddr, sid)] = wrappedFor;
                 setSessionKeys(prev => ({ ...prev, [sessionKeyId(theirAddr, sid)]: sKey }));
                 setActiveSessionIds(prev => ({ ...prev, [theirAddr]: sid }));
                 startSession(sessionKeyId(theirAddr, sid));
@@ -661,7 +686,12 @@ export const MessengerProvider = ({ children }) => {
             // passes stays locked out. Compared against the recorded set rather
             // than `excluded.length`, so a permanently-invalid member costs one
             // rotation, not a fresh session per message.
-            const safeSet = safe.map(m => m.user_address).sort().join(',');
+            // Each member WITH the key it was wrapped to (crypto-core 5.1.0): a
+            // member who rotated their key changes the set as surely as one
+            // who left, and must not keep receiving under the retired key.
+            const safeSet = safe
+                .map(m => `${m.user_address}:${m.user.encryption_public_key}`)
+                .sort().join(',');
             if (sKey && groupSessionMembersRef.current[sessionKeyId(conv, sid)] !== safeSet) {
                 sKey = null;
             }

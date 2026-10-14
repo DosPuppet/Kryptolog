@@ -158,3 +158,69 @@ export const encryptionSeedFor = (account, envelope) => {
     if (!key) throw new MissingKeyError(envelope?.kid ?? '(none)');
     return key.seed;
 };
+
+// --- Rotation (5.1.0) ---
+
+/**
+ * The account with a NEW current encryption key and the old one retired —
+ * kept to open what was sealed to it, never written to again. Pure: the
+ * caller persists the result, then publishes the new key. Refuses past the
+ * cap rather than dropping the oldest key, which would make history
+ * unreadable without anybody having asked for it.
+ */
+export const rotateAccountEncryptionKey = (account, now = Date.now()) => {
+    const current = parseAccount(account);
+    if (current.retiredEncryption.length >= MAX_RETIRED_ENCRYPTION_KEYS) {
+        throw new FormatError(
+            `This identity already keeps ${MAX_RETIRED_ENCRYPTION_KEYS} retired encryption keys; ` +
+            'destroy one before rotating again.'
+        );
+    }
+    return {
+        ...current,
+        encryption: encryptionRecord(generateEncryptionKeyPair(), now),
+        retiredEncryption: [{ ...current.encryption, retiredAt: now }, ...current.retiredEncryption],
+    };
+};
+
+/**
+ * The account without one of its RETIRED keys. Whatever was sealed to it and
+ * not re-wrapped becomes unreadable for good — the point, when the key is
+ * suspected, and the reason the UI asks first. The current key cannot be
+ * destroyed this way: rotate, then destroy.
+ */
+export const destroyRetiredEncryptionKey = (account, kid) => {
+    const current = parseAccount(account);
+    if (current.encryption.kid === kid) throw new FormatError('The current encryption key cannot be destroyed.');
+    if (!current.retiredEncryption.some((key) => key.kid === kid)) {
+        throw new FormatError(`No retired encryption key ${kid} on this identity.`);
+    }
+    return { ...current, retiredEncryption: current.retiredEncryption.filter((key) => key.kid !== kid) };
+};
+
+/**
+ * Undo a rotation the server did not take: the key it retired becomes current
+ * again. The clients persist a rotation BEFORE publishing it (a key the server
+ * serves must never be one the device could lose), so a refused publication
+ * leaves a current key that matches nothing; left in place, the next rotation
+ * would be signed from a key the server does not hold.
+ *
+ * The unpublished key is RETIRED, not dropped. Undoing must never be able to
+ * destroy anything: called at the wrong moment — after the server did take
+ * the key, by a page that should not have — it would otherwise delete a key
+ * people are already sealing to. Retired, it still opens what was sealed to
+ * it, and its owner can destroy it deliberately.
+ */
+export const revertAccountEncryptionKeyRotation = (account, newKid, now = Date.now()) => {
+    const current = parseAccount(account);
+    const [previous, ...older] = current.retiredEncryption;
+    if (current.encryption.kid !== newKid || !previous) {
+        throw new FormatError('There is no rotation to undo for this key.');
+    }
+    const { retiredAt: _retiredAt, ...restored } = previous;
+    return {
+        ...current,
+        encryption: restored,
+        retiredEncryption: [{ ...current.encryption, retiredAt: now }, ...older],
+    };
+};

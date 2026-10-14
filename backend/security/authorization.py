@@ -117,6 +117,16 @@ def find_live_grant(db: Session, secret_id: int, user_address: str) -> models.Ac
     )
 
 
+def live_grants_of(db: Session, user_address: str):
+    """Query over this address's non-expired grants — the SQL form of
+    `find_live_grant` across every secret, for the paths that need them all
+    (re-wrapping after a key rotation)."""
+    return db.query(models.AccessGrant).filter(
+        models.AccessGrant.grantee_address == normalize_address(user_address),
+        _live_grant_filter(utcnow_naive()),
+    )
+
+
 def purge_expired_grants(
     db: Session, *, secret_id: int | None = None, grantee: str | None = None
 ) -> int:

@@ -155,6 +155,20 @@ class UserUpdate(BaseModel):
     username: str | None = Field(None, max_length=200)
 
 
+class KeyRotationResponse(BaseModel):
+    """One signed rotation record, as contacts verify it (crypto-core 5.1.0
+    `verifyKeyRotation`): kids, the suite, the client's ms timestamp, and the
+    identity's signature over them."""
+
+    old_kid: str
+    new_kid: str
+    alg: str
+    ts: int
+    signature: str
+
+    model_config = ConfigDict(from_attributes=True)
+
+
 class UserResponse(UserBase):
     # The key `address` names (crypto-core 3.3.0). Embedded wherever a user is,
     # so a reader verifying a message has it without a lookup of its own — the
@@ -170,6 +184,13 @@ class UserResponse(UserBase):
     # Self-signed encryption-key attestation (audit M-1) — peers verify it with
     # the identity key before encrypting to encryption_public_key.
     encryption_key_attestation: str | None = None
+    # The newest signed rotations of this identity's encryption key (crypto-core
+    # 5.1.0), newest first — so a contact whose pinned key was rotated away can
+    # be told it was a rotation, and when. Informative only: a changed key still
+    # stops a send until its safety number is checked (K-05).
+    encryption_key_rotations: list[KeyRotationResponse] = Field(
+        default_factory=list, validation_alias="recent_key_rotations"
+    )
     # True once the identity has been deleted. The row is kept, stripped, so
     # that messages and workflows which still name the address can render as
     # "user removed" rather than as an unknown stranger — a deleted account is
@@ -745,3 +766,39 @@ class RedactableMessageResponse(BaseModel):
     ts: int
     seq: int
     keys: dict
+
+
+# --- Encryption-key rotation (crypto-core 5.1.0) ---
+
+
+class KeyRotationRequest(BaseModel):
+    """Replace the caller's encryption key: the new key, its attestation, and
+    the identity's signature over the rotation (`auth.key_rotation_message`,
+    built by the server from the CURRENT key's id)."""
+
+    encryption_public_key: str = Field(..., max_length=ENCRYPTION_KEY_CHARS)
+    encryption_key_attestation: str = Field(..., max_length=SIGNATURE_CHARS)
+    ts: int = Field(..., ge=0, lt=2**53)
+    signature: str = Field(..., max_length=SIGNATURE_CHARS)
+
+
+class StaleWrapResponse(BaseModel):
+    kind: Literal["grant", "signer", "recipient"]
+    id: int
+    encrypted_key: str
+
+
+class RewrapItem(BaseModel):
+    kind: Literal["grant", "signer", "recipient"]
+    id: int = Field(..., ge=1)
+    # The bound every route that stores an `encrypted_key` uses: a grant holds
+    # a KEM message envelope around a content key, not a bare session-key wrap.
+    encrypted_key: WrappedKey
+
+
+# A page of re-wrapping, both ways: what one GET hands out and one PUT takes.
+REWRAP_PAGE_MAX = 100
+
+
+class RewrapRequest(BaseModel):
+    items: list[RewrapItem] = Field(..., min_length=1, max_length=REWRAP_PAGE_MAX)

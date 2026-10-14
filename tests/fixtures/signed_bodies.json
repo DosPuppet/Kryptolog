@@ -53,6 +53,10 @@
     "message_redacted": "Kryptolog Signed Message v1\ncontext=message\nfrom=0a1b2c3d0a1b2c3d0a1b2c3d0a1b2c3d0a1b2c3d0a1b2c3d0a1b2c3d0a1b2c3d0a1b2c3d0a1b2c3d0a1b2c3d0a1b2c3d\nconv=4e5f6a7b4e5f6a7b4e5f6a7b4e5f6a7b4e5f6a7b4e5f6a7b4e5f6a7b4e5f6a7b4e5f6a7b4e5f6a7b4e5f6a7b4e5f6a7b\ngid=\nsid=9c8d7e6f-1a2b-3c4d-5e6f-708192a3b4c5\nts=1760264400123\nseq=17\nkeysh=6b0dd33b8d1e3c2b1e3489f0561f83694907ed815a1c51be2a3d1596199eafb6fa833610e3b31ae327f6024d7deb79cc\nredacted=1",
     "account_deletion": "Kryptolog Signed Message v1\ncontext=account-deletion\norigin=https://kryptolog.example\ndeployment=dep-7Hq_x2\nnonce=0f1e2d3c4b5a69788796a5b4c3d2e1f0\nmode=erase\nredactions=05b9bcd66959db4ce841d73fffd9a86047c4c1023ff5c239618e8f9515ac6d4596ae4f85b1c5b04480699b752bd4c8fe",
     "conversation_erase_dm": "Kryptolog Signed Message v1\ncontext=conversation-erase\norigin=https://kryptolog.example\ndeployment=dep-7Hq_x2\nnonce=0f1e2d3c4b5a69788796a5b4c3d2e1f0\nconversation=dm:4e5f6a7b4e5f6a7b4e5f6a7b4e5f6a7b4e5f6a7b4e5f6a7b4e5f6a7b4e5f6a7b4e5f6a7b4e5f6a7b4e5f6a7b4e5f6a7b\nredactions=05b9bcd66959db4ce841d73fffd9a86047c4c1023ff5c239618e8f9515ac6d4596ae4f85b1c5b04480699b752bd4c8fe",
-    "conversation_erase_group": "Kryptolog Signed Message v1\ncontext=conversation-erase\norigin=https://kryptolog.example\ndeployment=dep-7Hq_x2\nnonce=0f1e2d3c4b5a69788796a5b4c3d2e1f0\nconversation=group:6f1c2a90-3b4d-4e5f-8a7b-9c0d1e2f3a4b\nredactions=05b9bcd66959db4ce841d73fffd9a86047c4c1023ff5c239618e8f9515ac6d4596ae4f85b1c5b04480699b752bd4c8fe"
-  }
+    "conversation_erase_group": "Kryptolog Signed Message v1\ncontext=conversation-erase\norigin=https://kryptolog.example\ndeployment=dep-7Hq_x2\nnonce=0f1e2d3c4b5a69788796a5b4c3d2e1f0\nconversation=group:6f1c2a90-3b4d-4e5f-8a7b-9c0d1e2f3a4b\nredactions=05b9bcd66959db4ce841d73fffd9a86047c4c1023ff5c239618e8f9515ac6d4596ae4f85b1c5b04480699b752bd4c8fe",
+    "key_rotation": "Kryptolog Signed Message v1\ncontext=key-rotation\naddress=0a1b2c3d0a1b2c3d0a1b2c3d0a1b2c3d0a1b2c3d0a1b2c3d0a1b2c3d0a1b2c3d0a1b2c3d0a1b2c3d0a1b2c3d0a1b2c3d\nold-kid=0f1e2d3c0f1e2d3c0f1e2d3c0f1e2d3c\nnew-kid=4b5a69784b5a69784b5a69784b5a6978\nnew-alg=HKDFwSHA384_P384_ML-KEM-768_CatKDF\nts=1760264400456"
+  },
+  "rotation_old_kid": "0f1e2d3c0f1e2d3c0f1e2d3c0f1e2d3c",
+  "rotation_new_kid": "4b5a69784b5a69784b5a69784b5a6978",
+  "rotation_ts": 1760264400456
 }

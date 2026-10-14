@@ -1,5 +1,6 @@
 import { encryptVault, decryptVaultWithKey, encryptVaultWithKey, deriveKey, vaultKdfOf, vaultPasswordProblem, generateAccount, signMessagePQC, decryptMessagePQC, unwrapSessionKey, generateSessionKey, wrapSessionKey, parseAccount, FormatError, encryptionSeedFor } from '../utils/crypto';
 import { backupMethods } from './vaultBackup';
+import { rotationMethods } from './vaultRotation';
 import { biometricMethods } from './vaultBiometrics';
 
 // Core key-custody service: encrypted-vault storage, derived-key session cache,
@@ -82,7 +83,11 @@ class VaultService {
             name: account.name,
             createdAt: account.createdAt,
             identity: { publicKey: account.identity.publicKey },
-            encryption: { publicKey: account.encryption.publicKey },
+            encryption: { publicKey: account.encryption.publicKey, kid: account.encryption.kid },
+            // What the UI may show of a retired key: which one, and when.
+            retiredEncryption: (account.retiredEncryption ?? []).map(
+                ({ kid, createdAt, retiredAt }) => ({ kid, createdAt, retiredAt })
+            ),
         };
     }
 
@@ -465,6 +470,6 @@ class VaultService {
     }
 }
 
-Object.assign(VaultService.prototype, backupMethods, biometricMethods);
+Object.assign(VaultService.prototype, backupMethods, biometricMethods, rotationMethods);
 
 export const vaultService = new VaultService();
