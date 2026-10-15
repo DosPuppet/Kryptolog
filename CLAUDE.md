@@ -2134,3 +2134,31 @@ Every new gate mutation-tested. Counts: backend 735 → **756**, frontend
 300 → **317**, crypto-core 116 → **117**, extension **138**, e2e **1**; ruff,
 format, `alembic check` (on a fresh database migrated from empty), every eslint
 gate and both builds green.
+
+## TrustKeys "Authorize" did not authorize — 2026-10-15
+
+Reported from production with a screenshot: clicking **Authorize** in the
+popup on a site's first visit left it untrusted, and the button kept appearing
+even for a site added from Settings. Two causes, both in `Dashboard.jsx`.
+
+- **The status check asked the wrong question.** The popup sent
+  `CHECK_CONNECTION` with the tab's origin. Since lot 5 that handler answers for
+  the SENDER's origin, which is correct for pages, and from the popup the
+  sender is the extension, so every site read "unauthorized". The popup now
+  reads `GET_TRUSTED_SITES`.
+- **The popup could not finish what it started.** `chrome.permissions.request`
+  opens Chrome's dialog and the popup closes, losing the code that was to send
+  `AUTHORIZE_CURRENT_TAB`. The host permission was granted, and the vault never
+  recorded the site. A `window.confirm` in front of it could also outlast the
+  user activation. Now the popup sends `EXPECT_SITE_GRANT` and asks Chrome in
+  the same tick, after an in-popup warning in place of `window.confirm`. The
+  worker records the announced origin in `chrome.storage.session` for two
+  minutes, and completes the authorization on `chrome.permissions.onAdded`.
+  The completion is idempotent (one tab reload), and it trusts only the
+  announced origin: a host permission granted through Chrome's own
+  site-access menu is not a decision to hand that site the keys.
+
+`test/siteAuthorization.test.js` (8 tests, including a worker restart while
+Chrome's dialog is open); five mutants, each caught. Extension 138 → **148**.
+**Not seen in a browser**: the popup's inline confirmation and the real
+dialog-closes-popup sequence want a manual check with the production build.

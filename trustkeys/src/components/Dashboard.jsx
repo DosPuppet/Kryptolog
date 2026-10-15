@@ -13,6 +13,7 @@ const Dashboard = () => {
   const [showSettings, setShowSettings] = useState(false);
   const [currentTabOrigin, setCurrentTabOrigin] = useState(null);
   const [authStatus, setAuthStatus] = useState(null); // null, 'authorized', 'unauthorized'
+  const [confirmingAuth, setConfirmingAuth] = useState(false);
 
   // Declared above the mount effect that calls them: a `const` arrow function is
   // in its temporal dead zone until its own line, so declaring these below the
@@ -44,8 +45,12 @@ const Dashboard = () => {
             return;
           }
           setCurrentTabOrigin(origin);
-          chrome.runtime.sendMessage({ type: 'CHECK_CONNECTION', origin }, (res) => {
-            setAuthStatus(res?.connected ? 'authorized' : 'unauthorized');
+          // Not CHECK_CONNECTION: that answers for the SENDER's origin (a page
+          // may only ask about itself), which from the popup is the extension —
+          // so every site, trusted or not, came back "unauthorized".
+          chrome.runtime.sendMessage({ type: 'GET_TRUSTED_SITES' }, (res) => {
+            const trusted = !!res?.success && res.sites.some((site) => site.origin === origin);
+            setAuthStatus(trusted ? 'authorized' : 'unauthorized');
           });
         } catch { setCurrentTabOrigin(null); }
       }
@@ -111,37 +116,50 @@ const Dashboard = () => {
     });
   };
 
-  const authorizeCurrentTab = async () => {
+  const finishAuthorize = () => {
+    chrome.runtime.sendMessage({ type: 'AUTHORIZE_CURRENT_TAB' }, (res) => {
+      setLoading(false);
+      setConfirmingAuth(false);
+      if (res && res.success) {
+        setAuthStatus('authorized');
+      } else {
+        alert('Failed to authorize: ' + (res?.error || 'Unknown error'));
+      }
+    });
+  };
+
+  // The warning is shown in the popup rather than by window.confirm, so that
+  // the click asking Chrome for the host permission is the user's own click:
+  // chrome.permissions.request needs the user activation, and a dialog read
+  // slowly can outlast it.
+  const authorizeCurrentTab = () => {
     const origin = currentTabOrigin;
     // Same rule the background enforces — imported, not restated.
     if (!isAllowedTrustedOrigin(origin)) {
       alert('Only HTTPS sites can be authorized (this site uses an insecure connection).');
       return;
     }
-    if (!window.confirm(
-      `Authorize ${origin}?\n\nThis site will be able to request signatures and decryptions ` +
-      `with your keys. Only continue if you trust it.`
-    )) return;
-
     setLoading(true);
-    try {
-      // Request the per-site host permission under this user gesture.
-      if (!isDevOrigin(origin)) {
-        const granted = await chrome.permissions.request({ origins: [`${origin}/*`] });
-        if (!granted) { setLoading(false); alert('Permission denied — site not authorized.'); return; }
-      }
-    } catch (e) {
-      setLoading(false);
-      alert('Permission request failed: ' + e.message);
+    if (isDevOrigin(origin)) {
+      finishAuthorize();
       return;
     }
-    chrome.runtime.sendMessage({ type: 'AUTHORIZE_CURRENT_TAB' }, (res) => {
-      setLoading(false);
-      if (res && res.success) {
-        setAuthStatus('authorized');
-      } else {
-        alert('Failed to authorize: ' + (res?.error || 'Unknown error'));
+    // Announce the site to the worker, then ask Chrome in the same tick. If
+    // Chrome's dialog closes this popup, the worker completes the authorization
+    // when the grant arrives (permissions.onAdded); if the popup survives, it
+    // completes it below, and the second completion is a no-op.
+    chrome.runtime.sendMessage({ type: 'EXPECT_SITE_GRANT' }, () => void chrome.runtime.lastError);
+    chrome.permissions.request({ origins: [`${origin}/*`] }).then((granted) => {
+      if (!granted) {
+        setLoading(false);
+        setConfirmingAuth(false);
+        alert('Permission denied — site not authorized.');
+        return;
       }
+      finishAuthorize();
+    }, (e) => {
+      setLoading(false);
+      alert('Permission request failed: ' + e.message);
     });
   };
 
@@ -212,17 +230,44 @@ const Dashboard = () => {
       )}
 
       {currentTabOrigin && authStatus === 'unauthorized' && (
-        <div style={{ background: '#1a1a2e', border: '1px solid #333', borderRadius: '6px', padding: '10px 12px', marginBottom: '12px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '8px' }}>
-          <div style={{ fontSize: '0.8em', color: '#ccc', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-            {currentTabOrigin}
+        <div style={{ background: '#1a1a2e', border: '1px solid #333', borderRadius: '6px', padding: '10px 12px', marginBottom: '12px' }}>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '8px' }}>
+            <div style={{ fontSize: '0.8em', color: '#ccc', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+              {currentTabOrigin}
+            </div>
+            {!confirmingAuth && (
+              <button
+                onClick={() => setConfirmingAuth(true)}
+                style={{ background: '#16a34a', color: 'white', border: 'none', borderRadius: '4px', padding: '6px 12px', cursor: 'pointer', fontSize: '0.8em', whiteSpace: 'nowrap', flexShrink: 0 }}
+              >
+                Authorize
+              </button>
+            )}
           </div>
-          <button
-            onClick={authorizeCurrentTab}
-            disabled={loading}
-            style={{ background: '#16a34a', color: 'white', border: 'none', borderRadius: '4px', padding: '6px 12px', cursor: 'pointer', fontSize: '0.8em', whiteSpace: 'nowrap', flexShrink: 0 }}
-          >
-            {loading ? '...' : 'Authorize'}
-          </button>
+          {confirmingAuth && (
+            <div style={{ marginTop: '8px' }}>
+              <div style={{ fontSize: '0.75em', color: '#fbbf24', marginBottom: '8px' }}>
+                This site will be able to request signatures and decryptions with
+                your keys. Only continue if you trust it.
+              </div>
+              <div style={{ display: 'flex', gap: '8px', justifyContent: 'flex-end' }}>
+                <button
+                  onClick={() => setConfirmingAuth(false)}
+                  disabled={loading}
+                  style={{ background: 'transparent', color: '#ccc', border: '1px solid #444', borderRadius: '4px', padding: '6px 12px', cursor: 'pointer', fontSize: '0.8em' }}
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={authorizeCurrentTab}
+                  disabled={loading}
+                  style={{ background: '#16a34a', color: 'white', border: 'none', borderRadius: '4px', padding: '6px 12px', cursor: 'pointer', fontSize: '0.8em' }}
+                >
+                  {loading ? '...' : 'I trust this site'}
+                </button>
+              </div>
+            </div>
+          )}
         </div>
       )}
 

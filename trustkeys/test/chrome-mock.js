@@ -44,7 +44,7 @@ const makeStorageArea = (seed = {}) => {
 };
 
 export const installChrome = ({ local: localSeed = {}, session: sessionSeed = {} } = {}) => {
-    const listeners = { message: [], external: [], alarm: [], windowRemoved: [] };
+    const listeners = { message: [], external: [], alarm: [], windowRemoved: [], permissionsAdded: [] };
     const local = makeStorageArea(localSeed);
     const session = makeStorageArea(sessionSeed);
     const windows = new Map();
@@ -97,6 +97,7 @@ export const installChrome = ({ local: localSeed = {}, session: sessionSeed = {}
         permissions: {
             contains: vi.fn(async () => true),
             remove: vi.fn(async () => true),
+            onAdded: { addListener: (fn) => listeners.permissionsAdded.push(fn) },
         },
         scripting: {
             getRegisteredContentScripts: vi.fn(async () => []),
@@ -120,6 +121,11 @@ export const installChrome = ({ local: localSeed = {}, session: sessionSeed = {}
                 const sendResponse = (r) => { if (!done) { done = true; resolve(r); } };
                 for (const fn of listeners.message) fn(request, sender, sendResponse);
             });
+        },
+
+        /** Chrome reporting a granted permission, e.g. from its own dialog. */
+        grantPermissions(permissions) {
+            for (const fn of listeners.permissionsAdded) fn(permissions);
         },
 
         fireAlarm(name) {

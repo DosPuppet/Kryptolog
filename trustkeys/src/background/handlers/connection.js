@@ -203,6 +203,78 @@ export const handleAddTrustedSite = async (origin, tabId) => {
     return { success: true };
 };
 
+// ─── Authorizing the current tab from the popup ──────────────
+//
+// The popup cannot be relied on to FINISH an authorization. The host permission
+// has to be asked for with chrome.permissions.request, which opens Chrome's own
+// dialog; the popup loses focus and closes, and the code that was waiting for
+// the answer goes with it. Chrome granted the permission, the vault never
+// recorded the site, and the popup offered "Authorize" again next time (found
+// in production, 2026-10-15). So the popup first tells the worker which site it
+// is about to ask for, and the worker completes the authorization when Chrome
+// reports the grant (permissions.onAdded), whether the popup survived or not.
+//
+// Kept in chrome.storage.session, not memory: the worker can be stopped while
+// the user reads Chrome's dialog, and onAdded then wakes a fresh one.
+
+const PENDING_GRANT_KEY = 'tk_pending_site_grant';
+const PENDING_GRANT_TTL_MS = 2 * 60 * 1000;
+
+const activeTabOrigin = async () => {
+    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+    if (!tab?.url) return null;
+    try {
+        return { origin: new URL(tab.url).origin, tabId: tab.id };
+    } catch {
+        return null;
+    }
+};
+
+// Trust an origin from the popup's flow. Idempotent: the popup and onAdded can
+// both get here for one click, and the second must not reload the tab again.
+const trustTabOrigin = async (origin, tabId) => {
+    if (!state.isLocked && state.vault?.permissions?.[origin]) {
+        return { success: true, origin };
+    }
+    return { ...(await handleAddTrustedSite(origin, tabId)), origin };
+};
+
+export const handleExpectSiteGrant = async () => {
+    if (state.isLocked) return { success: false, error: "Vault is locked" };
+    const tab = await activeTabOrigin();
+    if (!tab) return { success: false, error: 'No active tab or URL not accessible' };
+    if (!isAllowedTrustedOrigin(tab.origin)) {
+        return { success: false, error: "Only HTTPS sites can be trusted" };
+    }
+    await chrome.storage.session.set({
+        [PENDING_GRANT_KEY]: { ...tab, expires: Date.now() + PENDING_GRANT_TTL_MS },
+    });
+    return { success: true, origin: tab.origin };
+};
+
+// The popup's own completion, when it is still open to send it.
+export const handleAuthorizeCurrentTab = async () => {
+    const tab = await activeTabOrigin();
+    if (!tab) return { success: false, error: 'No active tab or URL not accessible' };
+    await chrome.storage.session.remove(PENDING_GRANT_KEY);
+    return trustTabOrigin(tab.origin, tab.tabId);
+};
+
+// chrome.permissions.onAdded. Only completes what the popup announced: a host
+// permission granted any other way (Chrome's own site-access menu) is not a
+// decision to let that site use the user's keys.
+export const handlePermissionsAdded = async (permissions) => {
+    const { [PENDING_GRANT_KEY]: pending } = await chrome.storage.session.get(PENDING_GRANT_KEY);
+    if (!pending) return null;
+    if (pending.expires < Date.now()) {
+        await chrome.storage.session.remove(PENDING_GRANT_KEY);
+        return null;
+    }
+    if (!(permissions?.origins || []).includes(`${pending.origin}/*`)) return null;
+    await chrome.storage.session.remove(PENDING_GRANT_KEY);
+    return trustTabOrigin(pending.origin, pending.tabId);
+};
+
 export const handleRemoveTrustedSite = async (origin) => {
     if (!origin) return { success: false, error: "Origin required" };
     if (state.isLocked) return { success: false, error: "Vault is locked" };

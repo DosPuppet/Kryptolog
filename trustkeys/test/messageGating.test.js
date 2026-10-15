@@ -21,6 +21,9 @@ const INTERNAL_ONLY = [
     { type: 'REMOVE_TRUSTED_SITE', origin: 'https://app.example' },
     { type: 'SET_SITE_AUTOSIGN', origin: 'https://app.example', enabled: true },
     { type: 'AUTHORIZE_CURRENT_TAB' },
+    // A page announcing itself would turn the next host-permission grant for
+    // it into trust, without the user's click in the popup.
+    { type: 'EXPECT_SITE_GRANT' },
     { type: 'CREATE_ACCOUNT', name: 'evil' },
     { type: 'GET_ACCOUNTS' },
     { type: 'SET_ACTIVE_ACCOUNT', id: 'x' },

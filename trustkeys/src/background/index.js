@@ -42,6 +42,15 @@ chrome.alarms.onAlarm.addListener((alarm) => {
 // entries were never removed.
 chrome.windows.onRemoved.addListener(handleWindowClosed);
 
+// Completes a popup "Authorize" whose popup closed under Chrome's permission
+// dialog. Registered at top level so the event can wake a stopped worker.
+chrome.permissions.onAdded.addListener((permissions) => {
+    (async () => {
+        await initPromise;
+        await conn.handlePermissionsAdded(permissions);
+    })().catch((e) => console.error('TrustKeys: completing a site authorization failed:', e));
+});
+
 // The message dispatch table.
 //
 // Each entry is `{ [flags], fn }`. `fn` receives one context object and returns
@@ -161,17 +170,17 @@ const HANDLERS = {
         internal: true,
         fn: ({ request }) => conn.handleSetSiteAutoSign(request.origin, request.enabled),
     },
+    // The popup's two halves of "Authorize" (see connection.js): announce the
+    // site before asking Chrome for the host permission, then complete — which
+    // permissions.onAdded (registered above) also does, for when the popup
+    // closed first.
+    EXPECT_SITE_GRANT: {
+        internal: true,
+        fn: () => conn.handleExpectSiteGrant(),
+    },
     AUTHORIZE_CURRENT_TAB: {
         internal: true,
-        fn: async () => {
-            const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-            if (!tab?.url) {
-                return { success: false, error: 'No active tab or URL not accessible' };
-            }
-            const tabOrigin = new URL(tab.url).origin;
-            const res = await conn.handleAddTrustedSite(tabOrigin, tab.id);
-            return { ...res, origin: tabOrigin };
-        },
+        fn: () => conn.handleAuthorizeCurrentTab(),
     },
 
     // --- Accounts ---
