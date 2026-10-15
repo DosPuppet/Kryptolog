@@ -840,6 +840,18 @@ describe('single-source / version guard', () => {
     it('exports a version both app builds can assert against', () => {
         expect(core.CRYPTO_CORE_VERSION).toBe('5.1.0');
     });
+
+    // Lot 12e bumped the version and left both consumers' lockfiles recording
+    // 4.0.0, which a real install (2026-10-15) took for the cause of its
+    // failed `npm ci`. A bump regenerates them too: npm install --package-lock-only.
+    it('is the version package.json and both consumers\' lockfiles record', () => {
+        const json = (rel) => JSON.parse(readFileSync(new URL(rel, import.meta.url), 'utf8'));
+        expect(json('../package.json').version).toBe(core.CRYPTO_CORE_VERSION);
+        for (const app of ['frontend', 'trustkeys']) {
+            const lock = json(`../../../${app}/package-lock.json`);
+            expect(lock.packages['../packages/crypto-core'].version, app).toBe(core.CRYPTO_CORE_VERSION);
+        }
+    });
 });
 
 // The other half of backend/tests/test_signed_bodies.py: the SAME fixture file,

@@ -23,10 +23,18 @@
 #     message instead of falling back to a well-known default.
 #     POSTGRES_PASSWORD only applies when the volume is first created — to
 #     rotate it on an existing volume, ALTER ROLE as well (see DEPLOYMENT.md).
+#
+# `restart: unless-stopped` brings both back after a reboot, provided the
+# Docker daemon itself starts at boot (`systemctl enable docker`). Without it
+# they stayed down while PM2 resurrected the backend, which failed its
+# migration five times and gave up — an install that looked fine until its
+# first reboot (found 2026-10-15). serve.sh also waits for the database now,
+# which covers the race between the two at boot.
 
 services:
   postgres:
     image: postgres:16
+    restart: unless-stopped
     environment:
       POSTGRES_USER: kryptolog
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in backend/.env and run compose with --env-file backend/.env}
@@ -44,6 +52,7 @@ services:
 
   redis:
     image: redis:7
+    restart: unless-stopped
     environment:
       # Read by redis-cli in the healthcheck (REDISCLI_AUTH), so the password
       # is not also spelled out on that command line.

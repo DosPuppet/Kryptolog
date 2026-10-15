@@ -47,6 +47,15 @@ done
 # (audit M-3) — and a hard gate: serving new code against an old schema is the
 # failure this script exists to prevent, so a failure here must not degrade
 # into "start anyway".
+# Wait for the database first, and name an update that needs an empty one
+# before anything runs (see migration_preflight.py). The wait is what carries
+# a boot where PM2 resurrects this before Docker has Postgres healthy: PM2 only
+# retries five times, about thirty seconds, then leaves the backend down.
+if ! "$PY" migration_preflight.py --wait "${KRYPTOLOG_DB_WAIT_SECONDS:-120}"; then
+    echo "ERROR: pre-migration check failed — refusing to start."
+    exit 1
+fi
+
 echo "Applying database migrations..."
 if ! "$PY" -m alembic upgrade head; then
     echo "ERROR: database migration failed — refusing to start."

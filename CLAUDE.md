@@ -15,7 +15,7 @@ Monorepo, four parts:
 | `trustkeys/` | MV3 browser extension — the key custodian. Service worker under `src/background/`. |
 | `packages/crypto-core/` | `@kryptolog/crypto-core`: one copy of every crypto primitive, consumed by **both** clients via a `file:` dependency. Split into `encoding`/`signing`/`pqc`/`identity`/`account`/`composite`/`kem`/`aead`/`vault`/`webauthn`, all re-exported from `src/index.js` — import the package root, never a submodule. |
 | `e2e/` | Playwright suite: the real SPA, backend and TrustKeys (unpacked) in Chromium, on its own database. |
-| `scripts/` | `init_env.sh` (generates `backend/.env`), `backup.sh` / `restore.sh`, `load_env.sh`. |
+| `scripts/` | `init_env.sh` (generates `backend/.env` and `frontend/.env`), `deploy_frontend.sh` (production SPA build + publish), `backup.sh` / `restore.sh`, `load_env.sh`. |
 
 Reader-facing documentation: `README.md`, `ARCHITECTURE.md`, `THREAT_MODEL.md`,
 `DEPLOYMENT.md`, `E2E-RECIPE.md` (the manual pass), `trustkeys/README.md`. This file
@@ -2085,3 +2085,52 @@ name, and the download is `application/octet-stream` so it keeps `.kvault`.
 `frontend/src/test/kvaultLoginImport.test.jsx` drives a real blob through the
 real screen and vault service, and fails with the old routing restored.
 Frontend 298 → **300**. No format change, no `CRYPTO_CORE_VERSION` bump.
+
+## Deployment, from a real install — 2026-10-15
+
+Another agent installed the stack on a host and reported twelve problems.
+Each was checked against the code first. Eleven held, and all are fixed;
+**DEPLOYMENT.md's "Single-host install"** is the numbered runbook that uses the
+fixes (clone to the checks after a reboot). README no longer claims SQLite works.
+
+**Point 1 did not reproduce as reported.** `npm ci` passed on a fresh copy with
+both npm 10 and npm 11. But both consumers' locks did record crypto-core
+`4.0.0`, so they are regenerated (with npm 10, which CI uses), and
+`byte-compat.test.js` now pins the package version and both locks to
+`CRYPTO_CORE_VERSION`. **A crypto-core bump regenerates the consumers'
+locks** (`npm install --package-lock-only` in `frontend/` and `trustkeys/`).
+
+| Point | Fix |
+|---|---|
+| SQLite claimed to work | `database.py` refuses a non-PostgreSQL URL at import; `alembic/env.py` lost its SQLite batch mode |
+| No restart policy | `restart: unless-stopped` on both compose services |
+| PM2 gives up at boot | `serve.sh` runs `migration_preflight.py --wait 120` (`KRYPTOLOG_DB_WAIT_SECONDS`) first |
+| Cutover refused mid-upgrade | The same preflight names pending `REQUIRES_EMPTY_DATABASE` revisions (exit 2) before anything runs; `start_all.sh` too |
+| No frontend deploy step | `scripts/deploy_frontend.sh`: values derived from `backend/.env`, strict build, rsync to `KRYPTOLOG_WEB_ROOT` |
+| VAPID typed twice | `init_env.sh` generates the pair and writes `frontend/.env`; `--vapid` fills an empty pair later |
+| Silent broken builds | `frontend/deploymentGuard.js`: every build warns, `KRYPTOLOG_STRICT_BUILD=1` refuses |
+| Old Postgres volume | `init_env.sh` stops on one; `--adopt-volume` sets its role to the new password |
+| `vite preview` in prod | `ecosystem.prod.cjs`, the backend alone, filtered from the dev file |
+| Node unpinned | `engines: ^22.12.0 \|\| >=24.0.0` (the floor the deps set; some exclude 23), `engine-strict` in each `.npmrc`, `.nvmrc` |
+
+Things worth knowing before touching any of it:
+
+- **No backend secret may reach npm.** `deploy_frontend.sh` reads the four
+  values it needs in a subshell instead of exporting `backend/.env`, because
+  npm runs package install scripts with whatever environment it is given.
+  `test_no_backend_secret_reaches_npm` fails if the file is exported again.
+- **Strict mode is opt-in on purpose.** CI, `start_all.sh`'s preview and the
+  tests build for localhost legitimately, so only the deploy script refuses.
+- **A new empty-database migration must set `REQUIRES_EMPTY_DATABASE = True`.**
+  `test_every_revision_that_wants_an_empty_database_says_so` catches a
+  migration that mentions an empty database without the flag.
+- **The preflight does not wait on a wrong password.** No amount of waiting
+  fixes one, and it is the usual sign of an `.env` newer than its volume, so
+  the preflight says `--adopt-volume` instead.
+- **This box's dev database is still 4.x data** (2 identities): the preflight
+  refuses it with exit 2, correctly. `E2E-RECIPE.md` step 0 resets it.
+
+Every new gate mutation-tested. Counts: backend 735 → **756**, frontend
+300 → **317**, crypto-core 116 → **117**, extension **138**, e2e **1**; ruff,
+format, `alembic check` (on a fresh database migrated from empty), every eslint
+gate and both builds green.

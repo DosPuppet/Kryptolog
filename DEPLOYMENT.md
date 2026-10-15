@@ -4,7 +4,8 @@
 `127.0.0.1`. This page is for a deployment other people reach. It lists what the
 application relies on the reverse proxy to do, so that choosing a proxy other than
 the shipped nginx example does not silently drop any of it (audit 2026-10-12 K-16,
-K-17).
+K-17). For a first install, follow [Single-host install](#single-host-install)
+from step 1. The rest of the page is reference.
 
 ## Topology
 
@@ -24,6 +25,138 @@ Postgres 127.0.0.1:5432 · Redis 127.0.0.1:6379  (docker-compose.yml, password-p
   under a domain that hosts other applications. Everything on one origin shares
   `localStorage` — where the encrypted vault and the trusted-key store live — and
   the same script context.
+
+## Single-host install
+
+One Linux host running everything in the topology above. The examples use
+`/opt/kryptolog` for the checkout, `https://kryptolog.example.com` for the
+origin, and `/var/www/kryptolog/frontend/dist` as the web root, which is the
+path both shipped proxy configurations already serve. The sections after this
+one explain each requirement. This section is the order to do them in.
+
+**Do not use `start_all.sh` here.** It is the local development stack: it starts
+a `vite preview` server that production must not run, and installs Python
+packages with whatever `python3` is on `PATH`.
+
+**Prerequisites:** Linux x86_64 or aarch64 (other platforms build
+`cryptography` from source), Python 3.12, Node.js `^22.12 || >=24` (`.nvmrc`
+says 22; every `package.json` declares the range and `.npmrc` enforces it, so a
+wrong Node fails at `npm ci`), Docker with the compose plugin and the daemon
+enabled at boot (`systemctl enable docker`), PM2 (`npm install -g pm2`), rsync,
+and nginx or Caddy. **PostgreSQL is a hard dependency:** the migrations, the
+quota and rotation locks, the retention lock and the share upserts are
+PostgreSQL-only, and the backend refuses any other `DATABASE_URL`.
+
+1. **Clone, and install the backend from the hashed lock.** The venv comes
+   first because `init_env.sh` uses its `cryptography` to generate the VAPID
+   pair. `serve.sh` finds this venv on its own, including at boot when nothing
+   has activated it.
+
+   ```bash
+   git clone https://github.com/DosPuppet/Kryptolog.git /opt/kryptolog
+   cd /opt/kryptolog
+   python3.12 -m venv .venv
+   .venv/bin/pip install --require-hashes -r backend/requirements.txt
+   ```
+
+2. **Generate the configuration.**
+
+   ```bash
+   scripts/init_env.sh
+   ```
+
+   This writes `backend/.env` (random secrets, production mode, invite-only,
+   mode 600) with a VAPID pair, and `frontend/.env` with the same public key.
+   **If it stops on an existing Postgres volume**, a volume from an earlier
+   install survives, and it keeps the password it was created with. Choose
+   between the ways out it prints. `scripts/init_env.sh --adopt-volume` keeps
+   the data and sets the role to the new password. `docker compose
+   --env-file backend/.env down -v` discards the data.
+
+   Then edit `backend/.env`:
+   - `ALLOWED_ORIGINS=https://kryptolog.example.com`. Production refuses to
+     start without it, and the SPA's API URL is derived from it at build time.
+   - `TRUSTED_PROXY_IPS`: the address the proxy connects from. The default,
+     `127.0.0.1`, is right for a proxy on this host.
+   - `KRYPTOLOG_REQUIRE_INVITE`: keep `true` unless signup is meant to be open.
+   - `VAPID_SUBJECT`: a real contact (`mailto:` or URL), required by push services.
+
+3. **Start Postgres and Redis.** Both have `restart: unless-stopped`, so they
+   come back after a reboot as long as the Docker daemon does.
+
+   ```bash
+   docker compose --env-file backend/.env up -d postgres redis
+   docker compose --env-file backend/.env ps          # both "healthy"
+   ```
+
+4. **Apply the migrations and mint the first invite codes.** `serve.sh` also
+   migrates before every start, but running it once here gives you any error
+   in your terminal rather than in the PM2 logs. `generate_invites.py` refuses
+   to run until the schema is at head.
+
+   ```bash
+   cd backend
+   ../.venv/bin/python migration_preflight.py --wait 30
+   ../.venv/bin/python -m alembic upgrade head
+   ../.venv/bin/python generate_invites.py 5
+   cd ..
+   ```
+
+5. **Build and publish the SPA.**
+
+   ```bash
+   scripts/deploy_frontend.sh
+   ```
+
+   It derives the build values from `backend/.env`: the API URL from the first
+   `ALLOWED_ORIGINS` entry plus `/api` (override with
+   `KRYPTOLOG_PUBLIC_API_URL`), and the VAPID public key. No secret from that
+   file reaches npm. The build runs in strict mode
+   (`frontend/deploymentGuard.js`), so a localhost, plain-http or malformed
+   configuration fails here instead of shipping. The result is copied to
+   `KRYPTOLOG_WEB_ROOT` (default `/var/www/kryptolog/frontend/dist`); `sudo`
+   is used only for that copy, and only if the directory needs it. Copying,
+   rather than pointing the proxy into the checkout, avoids two problems:
+   `vite build` empties `dist/` first, so a proxy serving the checkout answers
+   404 for the whole rebuild, and the proxy would need read access to the
+   repository. **Rerun this after every SPA update.**
+
+6. **Configure the proxy.** Start from `nginx.conf.example` or the
+   [Caddy site](#caddy) below. Both serve `/var/www/kryptolog/frontend/dist`
+   and forward `/api/` to `127.0.0.1:8000` with the `/api` prefix stripped.
+   Replace the hostname, then check [What the proxy must do](#what-the-proxy-must-do).
+
+7. **Run the backend under PM2, and persist it.** `ecosystem.prod.cjs` is the
+   backend alone. `ecosystem.config.cjs` also starts `vite preview`, which
+   production must not run.
+
+   ```bash
+   pm2 start ecosystem.prod.cjs
+   pm2 save                    # what `pm2 resurrect` restores at boot
+   pm2 startup                 # prints a command to run once with sudo
+   ```
+
+   `serve.sh` reads `backend/.env` itself on every start, so PM2 needs no
+   environment of its own. Before migrating it waits up to 120 s for the
+   database (`KRYPTOLOG_DB_WAIT_SECONDS`), which carries the boot race where
+   PM2 comes up before Postgres.
+
+8. **Verify.** Each line proves a different part:
+
+   ```bash
+   curl -fsS https://kryptolog.example.com/api/healthz       # 200: database, Redis, fan-out listener
+   curl -fsSI https://kryptolog.example.com/ | grep -i content-security-policy   # SPA + proxy headers
+   curl -fsSI https://kryptolog.example.com/secrets           # 200: the SPA fallback to index.html
+   curl -fsSI "https://kryptolog.example.com/assets/$(ls /var/www/kryptolog/frontend/dist/assets | grep '\.js$' | head -1)"
+   pm2 status                                                 # kryptolog-backend online, no restarts
+   ```
+
+   Then reboot once and check `/api/healthz` again. An install is not finished
+   until it has survived one.
+
+9. **TrustKeys, for users who want it.** Build it with `npm run build` (not
+   `build:dev`) in `trustkeys/`. Each user then adds
+   `https://kryptolog.example.com` under Settings → Manage Trusted Sites.
 
 ## What the proxy must do
 
@@ -84,7 +217,10 @@ kryptolog.example.com {
 }
 ```
 
-Build the SPA with `VITE_API_BASE_URL=https://kryptolog.example.com/api`.
+The SPA must be built with `VITE_API_BASE_URL=https://kryptolog.example.com/api`.
+`scripts/deploy_frontend.sh` derives that from `ALLOWED_ORIGINS`
+([install step 5](#single-host-install)), and its strict build refuses a
+localhost or plain-http value.
 
 ## Backend configuration
 
@@ -107,6 +243,35 @@ A malformed `KRYPTOLOG_MESSAGE_RETENTION_DAYS` refuses to start in every mode.
 `/docs`, `/redoc` and `/openapi.json` are not served in production.
 
 ## Deploying an update
+
+On the single-host layout above:
+
+```bash
+cd /opt/kryptolog
+scripts/backup.sh /srv/backups/kryptolog              # before anything else
+git pull
+
+# Before restarting anything: is the database ready, and can this update
+# apply to it? Exit 2 names a revision that needs an empty database.
+(cd backend && ../.venv/bin/python migration_preflight.py)
+
+.venv/bin/pip install --require-hashes -r backend/requirements.txt
+scripts/deploy_frontend.sh                             # build, check, publish the SPA
+pm2 restart kryptolog-backend                          # serve.sh checks, migrates, serves
+```
+
+Then repeat the checks from step 8 of the install.
+
+**Run the pre-migration check before restarting.** Two revisions refuse to run
+on a database that holds identities: `b4c5d6e7f8a9` (crypto-core 4.0.0) and
+`c5d6e7f8a9b0` (5.0.0). Each declares `REQUIRES_EMPTY_DATABASE`, and
+`migration_preflight.py` names any that are still pending before anything has
+run, together with how many identities the database holds. `serve.sh` and
+`start_all.sh` run the same check, so a restart refuses in the same words,
+rather than with a traceback halfway through `alembic upgrade`, but by then the
+backend is down. If the check names a revision, this update needs an empty
+database. Make sure the backup above exists, then follow the cutover notes
+below. From 5.0.0 onwards no further empty-database revision is planned.
 
 - **Ship the SPA, the extension and the server together.** Signed bodies,
   envelopes and several request shapes change between versions, and an old
@@ -181,10 +346,16 @@ x86_64/aarch64; on another platform the lock falls back to a source build.
 existing volume, change the role as well, then update `backend/.env`
 (`POSTGRES_PASSWORD`, `DATABASE_URL`, `TEST_DATABASE_URL`):
 
+Put the new password in `backend/.env` first, then let the script apply it.
+It connects over the container's local socket, so it needs neither the old
+password nor the new one on a command line:
+
 ```bash
-docker exec kryptolog-postgres-1 psql -U kryptolog -d kryptolog \
-  -c "ALTER ROLE kryptolog PASSWORD '<new password>';"
+scripts/init_env.sh --adopt-volume
 ```
+
+The same command keeps an old volume when `init_env.sh` has just generated a
+fresh `backend/.env` next to it.
 
 ## What is deliberately not done
 
@@ -212,11 +383,34 @@ file instead, and ship that file to your SIEM. Rotate it with logrotate's
 
 ### Health
 
-`GET /healthz` answers 200 when the database answers and, with Redis
+`GET /healthz` (`/api/healthz` through the proxy) answers 200 when the database answers and, with Redis
 configured, when Redis answers and this worker is actually listening on the
 fan-out channel; 503 naming the failed check otherwise. Unauthenticated, and
 says nothing else. Point the load balancer or supervisor at it — not at `/`,
 which answers 200 from a worker whose realtime delivery is dead.
+
+### After a reboot
+
+Three things have to come back, and each now does on its own:
+
+- **Postgres and Redis**: `restart: unless-stopped` in `docker-compose.yml`,
+  provided the Docker daemon starts at boot (`systemctl enable docker`).
+- **The backend**: `pm2 resurrect`, after `pm2 save` and `pm2 startup`.
+- **The order between them**: PM2 often starts the backend before Postgres is
+  healthy. `serve.sh` therefore waits for the database (up to
+  `KRYPTOLOG_DB_WAIT_SECONDS`, default 120) before it migrates. It used to fail
+  at once, and PM2 gave up after five quick restarts (`max_restarts: 5`,
+  about thirty seconds), leaving the backend `errored` with nothing reporting it.
+
+If the backend still shows `errored` in `pm2 status`, `pm2 logs
+kryptolog-backend` has the pre-migration check's reason. Fix that, then:
+
+```bash
+docker compose --env-file backend/.env up -d postgres redis
+pm2 restart kryptolog-backend
+```
+
+After any reboot, check `pm2 status` and `/api/healthz`.
 
 ### Backup and restore
 

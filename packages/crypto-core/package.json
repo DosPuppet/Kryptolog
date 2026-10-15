@@ -3,6 +3,9 @@
   "version": "5.1.0",
   "private": true,
   "type": "module",
+  "engines": {
+    "node": "^22.12.0 || >=24.0.0"
+  },
   "description": "Single source of truth for Kryptolog client-side hybrid crypto (composite ML-DSA-65 + ECDSA-P384, ETSI CatKDF P-384 + ML-KEM-768), shared by the SPA and the TrustKeys extension.",
   "main": "src/index.js",
   "module": "src/index.js",

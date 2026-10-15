@@ -18,9 +18,18 @@ SQLALCHEMY_DATABASE_URL = (
     or "postgresql+psycopg://kryptolog@localhost:5432/kryptolog"
 )
 
-# check_same_thread is SQLite-only; pool_pre_ping recovers dropped connections.
-connect_args = {"check_same_thread": False} if SQLALCHEMY_DATABASE_URL.startswith("sqlite") else {}
-engine = create_engine(SQLALCHEMY_DATABASE_URL, connect_args=connect_args, pool_pre_ping=True)
+# PostgreSQL only, and said here rather than discovered later: the migrations
+# (`DELETE … USING`), the quota and key-rotation row locks, the retention
+# advisory lock and the share upserts have no SQLite equivalent. A SQLite URL
+# used to get as far as the first of them, which the README called working.
+if not SQLALCHEMY_DATABASE_URL.startswith("postgresql"):
+    raise RuntimeError(
+        "DATABASE_URL must point at PostgreSQL (postgresql+psycopg://…); "
+        f"got a {SQLALCHEMY_DATABASE_URL.split(':', 1)[0]!r} URL. SQLite is not supported."
+    )
+
+# pool_pre_ping recovers dropped connections.
+engine = create_engine(SQLALCHEMY_DATABASE_URL, pool_pre_ping=True)
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
 

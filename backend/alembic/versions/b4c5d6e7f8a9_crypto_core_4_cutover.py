@@ -31,6 +31,10 @@ down_revision: str | Sequence[str] | None = "a3b4c5d6e7f8"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
+# Read by migration_preflight.py, which names this revision BEFORE `alembic
+# upgrade` starts instead of leaving the refusal below to interrupt it.
+REQUIRES_EMPTY_DATABASE = True
+
 
 def upgrade() -> None:
     bind = op.get_bind()

@@ -95,6 +95,10 @@ fi
 # create_all + stamp head, which silently stamped a partially-migrated schema as
 # current (audit M-3). Refusing to start is the correct outcome: a drifted schema
 # stamped "up to date" cannot be repaired by a later upgrade.
+if ! (cd backend && python3 migration_preflight.py --wait 30); then
+    echo "ERROR: pre-migration check failed — refusing to start."
+    exit 1
+fi
 echo "Applying database migrations..."
 if ! (cd backend && python3 -m alembic upgrade head); then
     echo "ERROR: database migration failed — refusing to start."
