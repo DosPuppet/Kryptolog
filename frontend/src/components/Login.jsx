@@ -1,13 +1,13 @@
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { usePQC } from '../context/PQCContext';
-import { vaultPasswordProblem } from '../utils/crypto';
+import { vaultPasswordProblem, isEncryptedVaultBlob } from '../utils/crypto';
 import confirmDialog from '../utils/confirm';
 import { useTheme } from '../context/ThemeContext';
 import { Shield, ArrowRight, Loader2, Sun, Moon, Lock, UserPlus, X, Upload, FileJson, Smartphone } from 'lucide-react';
 
 export default function Login() {
-    const { loginTrustKeys, loginLocalVault, createLocalVault, importLocalVault, isExtensionAvailable, hasLocalVault, unlockWithBiometrics, hasBiometrics, forgetLocalIdentity, discardOldVault } = usePQC();
+    const { loginTrustKeys, loginLocalVault, createLocalVault, importLocalVault, receiveVault, isExtensionAvailable, hasLocalVault, unlockWithBiometrics, hasBiometrics, forgetLocalIdentity, discardOldVault } = usePQC();
     const { theme, toggleTheme } = useTheme();
     const navigate = useNavigate();
     const [loading, setLoading] = useState(false);
@@ -21,6 +21,11 @@ export default function Login() {
     const [vaultName, setVaultName] = useState('');
     const [importJson, setImportJson] = useState(null);
     const [importFileName, setImportFileName] = useState('');
+    // An encrypted .kvault backup needs its own passphrase on top of the new
+    // device password. Detected from the content, not the name: browsers save
+    // the download as `.kvault.json`, so the extension says nothing.
+    const [importIsEncrypted, setImportIsEncrypted] = useState(false);
+    const [importPass, setImportPass] = useState('');
     // Access filter (audit §5): only needed when registering a brand-new identity.
     // Sent on create/import; the server ignores it for existing users and only
     // enforces it when invites are required, so leaving it blank is harmless.
@@ -155,8 +160,17 @@ export default function Login() {
         if (!file) return;
         setError(null);
         setImportFileName(file.name);
+        setImportPass('');
         const reader = new FileReader();
-        reader.onload = (ev) => setImportJson(ev.target.result);
+        reader.onload = (ev) => {
+            const text = ev.target.result;
+            setImportJson(text);
+            try {
+                setImportIsEncrypted(isEncryptedVaultBlob(JSON.parse(text)));
+            } catch {
+                setImportIsEncrypted(false);
+            }
+        };
         reader.onerror = () => setError("Could not read the selected file.");
         reader.readAsText(file);
     };
@@ -172,11 +186,17 @@ export default function Login() {
                 { const problem = vaultPasswordProblem(password); if (problem) throw new Error(problem); }
                 await createLocalVault(vaultName, password, inviteCode.trim() || null);
             } else if (vaultMode === 'import') {
-                if (!importJson) throw new Error("Select a vault backup (.json) file first");
+                if (!importJson) throw new Error("Select a vault backup (.kvault or .json) file first");
+                if (importIsEncrypted && !importPass) throw new Error("This is an encrypted .kvault backup — enter its passphrase");
                 if (!password) throw new Error("Choose a password to protect the imported vault");
                 // The one rule both clients share (crypto-core, audit 2026-10-12 K-08).
                 { const problem = vaultPasswordProblem(password); if (problem) throw new Error(problem); }
-                await importLocalVault(importJson, password, inviteCode.trim() || null);
+                if (importIsEncrypted) {
+                    // Same clean-device path as /receive's "Backup file" tab.
+                    await receiveVault(importJson, importPass, password, inviteCode.trim() || null);
+                } else {
+                    await importLocalVault(importJson, password, inviteCode.trim() || null);
+                }
             } else {
                 if (!password) throw new Error("Password required");
                 await loginLocalVault(password, inviteCode.trim() || null);
@@ -313,7 +333,7 @@ export default function Login() {
                         className="w-full mt-4 flex items-center justify-center gap-2 text-sm text-slate-500 dark:text-slate-400 hover:text-emerald-600 dark:hover:text-emerald-400 transition-colors disabled:opacity-50"
                     >
                         <Upload className="w-4 h-4" />
-                        <span>Import existing vault (.json)</span>
+                        <span>Import existing vault (.kvault or .json)</span>
                     </button>
                 )}
 
@@ -352,7 +372,7 @@ export default function Login() {
                                 </h2>
                                 <p className="text-sm text-slate-500 mt-1">
                                     {vaultMode === 'create' ? 'Setup a secure local PQC wallet.'
-                                        : vaultMode === 'import' ? 'Restore from an exported .json backup.'
+                                        : vaultMode === 'import' ? 'Restore from a .kvault or .json backup.'
                                             : 'Enter password to access keys.'}
                                 </p>
                             </div>
@@ -382,9 +402,21 @@ export default function Login() {
                                         <label className="block text-xs font-medium text-slate-500 mb-1">Vault backup file</label>
                                         <label className="w-full flex items-center gap-2 cursor-pointer bg-slate-50 dark:bg-slate-900 border border-dashed border-slate-300 dark:border-slate-700 rounded-lg px-3 py-2 text-sm text-slate-600 dark:text-slate-300 hover:border-emerald-500 transition-colors">
                                             <FileJson className="w-4 h-4 text-emerald-500 shrink-0" />
-                                            <span className="truncate">{importFileName || 'Choose a .json file…'}</span>
-                                            <input type="file" accept="application/json,.json" className="hidden" onChange={handleImportFile} />
+                                            <span className="truncate">{importFileName || 'Choose a .kvault or .json file…'}</span>
+                                            <input type="file" accept=".kvault,application/json,.json" className="hidden" onChange={handleImportFile} />
                                         </label>
+                                    </div>
+                                )}
+                                {vaultMode === 'import' && importIsEncrypted && (
+                                    <div>
+                                        <label className="block text-xs font-medium text-slate-500 mb-1">Backup passphrase</label>
+                                        <input
+                                            type="password"
+                                            value={importPass}
+                                            onChange={e => setImportPass(e.target.value)}
+                                            className="w-full bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-lg px-3 py-2 text-slate-900 dark:text-white outline-none focus:ring-2 focus:ring-emerald-500"
+                                            placeholder="The passphrase chosen when exporting"
+                                        />
                                     </div>
                                 )}
                                 <div>
@@ -473,7 +505,7 @@ export default function Login() {
                                         </button>
                                     ) : (
                                         <button type="button" onClick={() => switchVaultMode('import')} className="text-xs text-slate-500 hover:text-emerald-500 transition-colors">
-                                            Import an existing vault backup (.json)
+                                            Import an existing vault backup (.kvault or .json)
                                         </button>
                                     )}
                                 </div>

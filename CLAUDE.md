@@ -2069,3 +2069,19 @@ all killed; two only after a test was added).
   a warning. Re-wrap escrow would be a feature, and is out of scope.
 - The composite draft may still change before its RFC; that would be a
   further cutover.
+
+## A `.kvault` backup could not be imported at first login — 2026-10-15
+
+Reported as "the app says there's no key". Two causes. The backup downloaded
+as `application/json` under a `.kvault` name, so Chrome saved it as
+`.kvault.json`. The login screen's "Import existing vault" then accepted it and
+handed it to the PLAINTEXT importer, which said "no accounts found". Only
+`/receive`'s "Backup file" tab could open an encrypted backup.
+
+The login import now detects an encrypted blob by its content (never the
+name), asks for its passphrase and goes through `receiveVault`, carrying the
+invite code `/receive` cannot. `importNewVault` refuses an encrypted blob by
+name, and the download is `application/octet-stream` so it keeps `.kvault`.
+`frontend/src/test/kvaultLoginImport.test.jsx` drives a real blob through the
+real screen and vault service, and fails with the old routing restored.
+Frontend 298 → **300**. No format change, no `CRYPTO_CORE_VERSION` bump.

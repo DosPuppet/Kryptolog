@@ -29,6 +29,11 @@ export const backupMethods = {
         } catch {
             throw new Error("Invalid file: not valid JSON");
         }
+        // Said by name: falling through to "no accounts found" sent a user
+        // holding a perfectly good backup looking for a missing key.
+        if (isEncryptedVaultBlob(data)) {
+            throw new Error("This is an encrypted .kvault backup — enter its passphrase");
+        }
         if (!data.accounts || !Array.isArray(data.accounts) || data.accounts.length === 0) {
             throw new Error("Invalid vault file: no accounts found");
         }

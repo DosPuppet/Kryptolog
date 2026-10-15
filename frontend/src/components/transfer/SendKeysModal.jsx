@@ -37,7 +37,10 @@ export default function SendKeysModal({ onClose }) {
         setLoading(true);
         try {
             const blob = await exportEncryptedVault(filePass);
-            const file = new Blob([blob], { type: 'application/json' });
+            // Not application/json: Chrome "fixes" an unknown extension to
+            // match the type and saves `.kvault.json`, which then reads as a
+            // plaintext export.
+            const file = new Blob([blob], { type: 'application/octet-stream' });
             const url = URL.createObjectURL(file);
             const a = document.createElement('a');
             a.href = url;
