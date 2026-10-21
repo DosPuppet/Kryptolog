@@ -17,9 +17,9 @@
 # recognised, so every Dependabot pip PR bumped a floor, left the lock behind,
 # failed the freshness check, and could not land without manual work — which is
 # how the security gate came to stay red on main (audit 2026-10-12 K-11).
-fastapi>=0.141.1
+fastapi>=0.146.0
 uvicorn[standard]>=0.52.4  # [standard] bundles websockets/uvloop — WS endpoints break without it
-sqlalchemy>=2.0.52
+sqlalchemy>=2.1.5
 pyjwt>=2.15.0        # >=2.15.0 for the advisories open on 2.13.0 (audit 2026-10-12 K-11)
 pydantic>=2.13.5
 # ML-DSA-44 (FIPS 204) verification. 48.0.0 is the first release with ML-DSA on
