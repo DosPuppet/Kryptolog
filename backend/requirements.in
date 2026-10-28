@@ -17,9 +17,9 @@
 # recognised, so every Dependabot pip PR bumped a floor, left the lock behind,
 # failed the freshness check, and could not land without manual work — which is
 # how the security gate came to stay red on main (audit 2026-10-12 K-11).
-fastapi>=0.141.1
+fastapi>=0.162.0
 uvicorn[standard]>=0.52.4  # [standard] bundles websockets/uvloop — WS endpoints break without it
-sqlalchemy>=2.0.52
+sqlalchemy>=2.1.6
 pyjwt>=2.15.0        # >=2.15.0 for the advisories open on 2.13.0 (audit 2026-10-12 K-11)
 pydantic>=2.13.5
 # ML-DSA-44 (FIPS 204) verification. 48.0.0 is the first release with ML-DSA on
@@ -31,11 +31,11 @@ python-multipart>=0.0.32
 httpx>=0.28.1
 slowapi==0.1.10
 redis>=8.1.0              # optional shared/persistent rate-limit storage (set REDIS_URL); falls back to in-memory
-alembic>=1.20.0
+alembic>=1.20.1
 psycopg[binary]>=3.3.5  # PostgreSQL driver (SQLAlchemy URL scheme: postgresql+psycopg://)
 pywebpush>=2.5.0
 # Transitive, floored here only because the versions resolved before carried
 # advisories (audit 2026-10-12 K-11). pip-compile would otherwise keep the old
 # pin, since it never upgrades a satisfied requirement on its own.
 urllib3>=2.8.0
-multidict>=6.9.1
+multidict>=7.2.1
